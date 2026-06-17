@@ -1,0 +1,907 @@
+// @ts-nocheck
+
+/* =========================================================
+   NOSSIX / NOSTUR — whatsapp-send-message
+   Envía WhatsApp real:
+   - text
+   - template
+   - image
+   - audio
+   - video
+   - document
+   - reaction
+
+   Soporta:
+   - respuesta contextual con context.message_id
+   - reacciones con emoji
+   - reenvío / forward usando media_url o texto existente
+
+   Requiere secrets:
+   - WHATSAPP_ACCESS_TOKEN
+   - WHATSAPP_PHONE_NUMBER_ID
+   - NOSTUR_SERVICE_ROLE_KEY
+========================================================= */
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+/* =========================================================
+   CORS / RESPONSES
+========================================================= */
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS"
+};
+
+function jsonResponse(body: Record<string, unknown>, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json"
+    }
+  });
+}
+
+/* =========================================================
+   HELPERS GENERALES
+========================================================= */
+
+function cleanText(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function normalizePhone(value: unknown): string {
+  let phone = String(value || "").trim();
+
+  phone = phone.replace(/[^\d+]/g, "");
+
+  if (!phone) return "";
+
+  if (phone.startsWith("+")) {
+    return phone.replace("+", "");
+  }
+
+  if (phone.startsWith("549")) return phone;
+
+  if (phone.startsWith("54")) {
+    const rest = phone.slice(2);
+    return rest.startsWith("9") ? phone : `549${rest}`;
+  }
+
+  if (phone.startsWith("9")) return `54${phone}`;
+
+  return `549${phone}`;
+}
+
+function normalizeError(error: unknown): string {
+  if (!error) return "Error desconocido.";
+
+  if (typeof error === "object" && "message" in error) {
+    return String((error as { message?: unknown }).message || "Error desconocido.");
+  }
+
+  return String(error);
+}
+
+function getFileExtensionFromMime(mimeType?: string | null): string {
+  const mime = cleanText(mimeType).toLowerCase();
+
+  const map: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "application/pdf": "pdf",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.ms-powerpoint": "ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "text/plain": "txt",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/amr": "amr",
+    "video/mp4": "mp4",
+    "video/3gpp": "3gp"
+  };
+
+  return map[mime] || "bin";
+}
+
+function getSafeFilename(value: unknown, fallback = "archivo"): string {
+  const name = cleanText(value) || fallback;
+
+  return name
+    .replace(/[^\w.\-áéíóúÁÉÍÓÚñÑ ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140);
+}
+
+function isUuid(value: unknown): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    cleanText(value)
+  );
+}
+
+function buildContext(payload: any) {
+  const replyToWhatsappMessageId = cleanText(payload.reply_to_whatsapp_message_id);
+
+  if (!replyToWhatsappMessageId) return undefined;
+
+  return {
+    message_id: replyToWhatsappMessageId
+  };
+}
+
+/* =========================================================
+   SUPABASE / META CONFIG
+========================================================= */
+
+function getSupabaseAdmin() {
+  const supabaseUrl =
+    Deno.env.get("SUPABASE_URL") ||
+    "https://vkzgfhdfqyjqwvowtarh.supabase.co";
+
+  const serviceRoleKey =
+    Deno.env.get("NOSTUR_SERVICE_ROLE_KEY") ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!serviceRoleKey) {
+    throw new Error("Falta configurar NOSTUR_SERVICE_ROLE_KEY.");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  });
+}
+
+function getMetaConfig() {
+  const token =
+    Deno.env.get("WHATSAPP_ACCESS_TOKEN") ||
+    Deno.env.get("WHATSAPP_TOKEN");
+
+  const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+
+  const apiVersion = Deno.env.get("WHATSAPP_API_VERSION") || "v25.0";
+
+  if (!token) {
+    throw new Error("Falta configurar WHATSAPP_ACCESS_TOKEN.");
+  }
+
+  if (!phoneNumberId) {
+    throw new Error("Falta configurar WHATSAPP_PHONE_NUMBER_ID.");
+  }
+
+  return {
+    token,
+    phoneNumberId,
+    apiVersion
+  };
+}
+
+/* =========================================================
+   MEDIA HELPERS
+========================================================= */
+
+async function uploadMediaToMeta(params: {
+  token: string;
+  phoneNumberId: string;
+  apiVersion: string;
+  mediaUrl: string;
+  mimeType: string | null;
+  filename: string | null;
+}) {
+  const mediaFetch = await fetch(params.mediaUrl);
+
+  if (!mediaFetch.ok) {
+    throw new Error(`No se pudo descargar el archivo para enviarlo a WhatsApp. HTTP ${mediaFetch.status}`);
+  }
+
+  const blob = await mediaFetch.blob();
+
+  const contentType =
+    cleanText(params.mimeType) ||
+    cleanText(mediaFetch.headers.get("content-type")) ||
+    blob.type ||
+    "application/octet-stream";
+
+  const extension = getFileExtensionFromMime(contentType);
+  const filename = getSafeFilename(params.filename, `archivo.${extension}`);
+
+  const formData = new FormData();
+  formData.append("messaging_product", "whatsapp");
+  formData.append("file", new File([blob], filename, { type: contentType }));
+
+  const url = `https://graph.facebook.com/${params.apiVersion}/${params.phoneNumberId}/media`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.token}`
+    },
+    body: formData
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || data.error) {
+    const message =
+      data?.error?.message ||
+      data?.error?.error_user_msg ||
+      "WhatsApp rechazó la carga del archivo.";
+
+    const code = data?.error?.code ? String(data.error.code) : null;
+
+    return {
+      ok: false,
+      error: message,
+      errorCode: code,
+      data
+    };
+  }
+
+  return {
+    ok: true,
+    mediaId: data.id as string,
+    data
+  };
+}
+
+/* =========================================================
+   BUILD META MESSAGES
+========================================================= */
+
+function buildTextMessage(payload: any, to: string) {
+  const text = cleanText(payload.text || payload.content);
+
+  if (!text) {
+    throw new Error("El mensaje de texto está vacío.");
+  }
+
+  const context = buildContext(payload);
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "text",
+    ...(context ? { context } : {}),
+    text: {
+      preview_url: true,
+      body: text
+    }
+  };
+}
+
+function buildTemplateMessage(payload: any, to: string) {
+  const templateName = cleanText(payload.template_name);
+  const language = cleanText(payload.template_language) || "es_AR";
+
+  const variables = Array.isArray(payload.template_variables)
+    ? payload.template_variables
+    : [];
+
+  if (!templateName) {
+    throw new Error("Para enviar plantilla falta template_name.");
+  }
+
+  const components =
+    variables.length > 0
+      ? [
+          {
+            type: "body",
+            parameters: variables.map((value: unknown) => ({
+              type: "text",
+              text: String(value ?? "")
+            }))
+          }
+        ]
+      : undefined;
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "template",
+    template: {
+      name: templateName,
+      language: {
+        code: language
+      },
+      components
+    }
+  };
+}
+
+function buildReactionMessage(payload: any, to: string) {
+  const emoji = cleanText(payload.reaction_emoji || payload.emoji);
+  const messageId = cleanText(
+    payload.reaction_to_whatsapp_message_id ||
+      payload.react_to_whatsapp_message_id ||
+      payload.reply_to_whatsapp_message_id
+  );
+
+  if (!emoji) {
+    throw new Error("Para reaccionar falta reaction_emoji.");
+  }
+
+  if (!messageId) {
+    throw new Error("Para reaccionar falta reaction_to_whatsapp_message_id.");
+  }
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "reaction",
+    reaction: {
+      message_id: messageId,
+      emoji
+    }
+  };
+}
+
+function buildImageMessage(payload: any, to: string, mediaId: string) {
+  const caption = cleanText(payload.content || payload.text);
+  const context = buildContext(payload);
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "image",
+    ...(context ? { context } : {}),
+    image: {
+      id: mediaId,
+      caption: caption || undefined
+    }
+  };
+}
+
+function buildAudioMessage(payload: any, to: string, mediaId: string) {
+  const context = buildContext(payload);
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "audio",
+    ...(context ? { context } : {}),
+    audio: {
+      id: mediaId
+    }
+  };
+}
+
+function buildVideoMessage(payload: any, to: string, mediaId: string) {
+  const caption = cleanText(payload.content || payload.text);
+  const context = buildContext(payload);
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "video",
+    ...(context ? { context } : {}),
+    video: {
+      id: mediaId,
+      caption: caption || undefined
+    }
+  };
+}
+
+function buildDocumentMessage(payload: any, to: string, mediaId: string) {
+  const caption = cleanText(payload.content || payload.text);
+  const filename = getSafeFilename(payload.media_filename, "archivo");
+  const context = buildContext(payload);
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "document",
+    ...(context ? { context } : {}),
+    document: {
+      id: mediaId,
+      filename,
+      caption: caption || undefined
+    }
+  };
+}
+
+async function buildMetaMessage(params: {
+  payload: any;
+  to: string;
+  token: string;
+  phoneNumberId: string;
+  apiVersion: string;
+}) {
+  const type = cleanText(params.payload.message_type || "text");
+
+  if (type === "reaction" || params.payload.reaction_emoji) {
+    return {
+      ok: true,
+      metaMessage: buildReactionMessage(params.payload, params.to),
+      uploadedMediaId: null,
+      uploadResponse: null
+    };
+  }
+
+  if (type === "template" || params.payload.template_name) {
+    return {
+      ok: true,
+      metaMessage: buildTemplateMessage(params.payload, params.to),
+      uploadedMediaId: null,
+      uploadResponse: null
+    };
+  }
+
+  if (["image", "audio", "video", "document"].includes(type)) {
+    const mediaUrl = cleanText(params.payload.media_url);
+
+    if (!mediaUrl) {
+      throw new Error("El mensaje con archivo necesita media_url pública.");
+    }
+
+    const upload = await uploadMediaToMeta({
+      token: params.token,
+      phoneNumberId: params.phoneNumberId,
+      apiVersion: params.apiVersion,
+      mediaUrl,
+      mimeType: params.payload.media_mime_type || null,
+      filename: params.payload.media_filename || null
+    });
+
+    if (!upload.ok) {
+      return {
+        ok: false,
+        error: upload.error,
+        errorCode: upload.errorCode,
+        metaResponse: upload.data,
+        metaMessage: null,
+        uploadedMediaId: null,
+        uploadResponse: upload.data
+      };
+    }
+
+    let metaMessage: Record<string, unknown>;
+
+    if (type === "image") {
+      metaMessage = buildImageMessage(params.payload, params.to, upload.mediaId);
+    } else if (type === "audio") {
+      metaMessage = buildAudioMessage(params.payload, params.to, upload.mediaId);
+    } else if (type === "video") {
+      metaMessage = buildVideoMessage(params.payload, params.to, upload.mediaId);
+    } else {
+      metaMessage = buildDocumentMessage(params.payload, params.to, upload.mediaId);
+    }
+
+    return {
+      ok: true,
+      metaMessage,
+      uploadedMediaId: upload.mediaId,
+      uploadResponse: upload.data
+    };
+  }
+
+  return {
+    ok: true,
+    metaMessage: buildTextMessage(params.payload, params.to),
+    uploadedMediaId: null,
+    uploadResponse: null
+  };
+}
+
+/* =========================================================
+   SUPABASE LOOKUPS
+========================================================= */
+
+async function getLocalMessage(params: {
+  supabase: any;
+  messageId?: string | null;
+}) {
+  if (!params.messageId || !isUuid(params.messageId)) return null;
+
+  const result = await params.supabase
+    .from("messages")
+    .select("*")
+    .eq("id", params.messageId)
+    .maybeSingle();
+
+  if (result.error) return null;
+
+  return result.data || null;
+}
+
+/* =========================================================
+   SUPABASE UPDATES
+========================================================= */
+
+async function updateLocalMessage(params: {
+  supabase: any;
+  localMessageId?: string | null;
+  status: string;
+  whatsappMessageId?: string | null;
+  mediaWhatsappId?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  metaResponse?: unknown;
+  uploadResponse?: unknown;
+  reactionEmoji?: string | null;
+  reactionToWhatsappMessageId?: string | null;
+}) {
+  if (!params.localMessageId) return;
+
+  const patch: Record<string, unknown> = {
+    status: params.status,
+    whatsapp_message_id: params.whatsappMessageId || null,
+    media_whatsapp_id: params.mediaWhatsappId || null,
+    wa_error_code: params.errorCode || null,
+    wa_error_message: params.errorMessage || null,
+    metadata: {
+      whatsapp_edge_updated: true,
+      whatsapp_response: params.metaResponse || null,
+      whatsapp_media_upload: params.uploadResponse || null
+    }
+  };
+
+  if (params.reactionEmoji) {
+    patch.reaction_emoji = params.reactionEmoji;
+  }
+
+  if (params.reactionToWhatsappMessageId) {
+    patch.reaction_to_whatsapp_message_id = params.reactionToWhatsappMessageId;
+  }
+
+  await params.supabase
+    .from("messages")
+    .update(patch)
+    .eq("id", params.localMessageId);
+}
+
+async function insertReaction(params: {
+  supabase: any;
+  conversationId?: string | null;
+  localMessageId?: string | null;
+  whatsappMessageId?: string | null;
+  reactedToWhatsappMessageId?: string | null;
+  emoji?: string | null;
+  senderName?: string | null;
+  senderId?: string | null;
+  metaResponse?: unknown;
+}) {
+  if (!params.conversationId || !params.emoji || !params.reactedToWhatsappMessageId) return;
+
+  await params.supabase
+    .from("message_reactions")
+    .insert({
+      message_id: params.localMessageId || null,
+      conversation_id: params.conversationId,
+      whatsapp_message_id: params.whatsappMessageId || null,
+      reacted_to_whatsapp_message_id: params.reactedToWhatsappMessageId,
+      direction: "outbound",
+      emoji: params.emoji,
+      sender_type: "agent",
+      sender_name: params.senderName || "NOSSIX",
+      sender_id: params.senderId || null,
+      metadata: {
+        whatsapp_response: params.metaResponse || null
+      }
+    });
+}
+
+async function touchConversation(params: {
+  supabase: any;
+  conversationId?: string | null;
+  lastMessage: string | null;
+  payload?: any;
+}) {
+  if (!params.conversationId) return;
+
+  const now = new Date().toISOString();
+  const source = cleanText(params.payload?.source).toLowerCase();
+
+  const isCustomerAiHandoffMessage =
+    source.includes("customer-assistant-reply-early-handoff") ||
+    source.includes("customer-assistant-reply-handoff") ||
+    source.includes("handoff");
+
+  const updatePayload: Record<string, unknown> = {
+    last_message: params.lastMessage,
+    last_message_time: now,
+    last_outbound_message_at: now,
+    updated_at: now
+  };
+
+  /*
+    IMPORTANTE:
+    La tabla conversations NO acepta PENDIENTE_VENDEDOR.
+    El valor válido para la bandeja "Derivado nuevo" es DERIVADA_A_BANDEJA.
+  */
+  if (isCustomerAiHandoffMessage) {
+    updatePayload.assigned_to = null;
+    updatePayload.estado_gestion = "DERIVADO_NUEVO";
+    updatePayload.customer_ai_status = "DERIVADA";
+    updatePayload.customer_ai_handoff_status = "DERIVADA_A_BANDEJA";
+    updatePayload.customer_ai_handoff_at = now;
+  }
+
+  await params.supabase
+    .from("conversations")
+    .update(updatePayload)
+    .eq("id", params.conversationId);
+}
+
+function getLastMessagePreview(payload: any): string {
+  const type = cleanText(payload.message_type || "text");
+
+  if (type === "reaction" || payload.reaction_emoji) return `Reacción ${payload.reaction_emoji || ""}`;
+  if (payload.template_name) return `[Plantilla] ${payload.template_name}`;
+  if (payload.is_forwarded) return cleanText(payload.content) || "Mensaje reenviado";
+  if (type === "image") return cleanText(payload.content) || "Imagen enviada";
+  if (type === "audio") return "Audio enviado";
+  if (type === "video") return cleanText(payload.content) || "Video enviado";
+  if (type === "document") return cleanText(payload.media_filename) || "Documento enviado";
+
+  return cleanText(payload.content || payload.text) || "Mensaje enviado";
+}
+
+/* =========================================================
+   SERVER
+========================================================= */
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", {
+      headers: corsHeaders
+    });
+  }
+
+  if (req.method !== "POST") {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Método no permitido."
+      },
+      405
+    );
+  }
+
+  let payload: any = {};
+
+  try {
+    payload = await req.json();
+  } catch {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Body inválido. Se esperaba JSON."
+      },
+      400
+    );
+  }
+
+  try {
+    const supabase = getSupabaseAdmin();
+    const { token, phoneNumberId, apiVersion } = getMetaConfig();
+
+    const phone = normalizePhone(payload.to || payload.phone);
+
+    if (!phone) {
+      await updateLocalMessage({
+        supabase,
+        localMessageId: payload.local_message_id,
+        status: "failed",
+        errorCode: "missing_phone",
+        errorMessage: "Falta teléfono de destino."
+      });
+
+      return jsonResponse({
+        ok: false,
+        success: false,
+        status: "failed",
+        error: "Falta teléfono de destino.",
+        wa_error_code: "missing_phone",
+        wa_error_message: "Falta teléfono de destino."
+      });
+    }
+
+    const forwardedFromMessage = await getLocalMessage({
+      supabase,
+      messageId: payload.forwarded_from_message_id
+    });
+
+    if (forwardedFromMessage) {
+      payload.is_forwarded = true;
+
+      if (!payload.content && forwardedFromMessage.content) {
+        payload.content = forwardedFromMessage.content;
+      }
+
+      if (!payload.message_type && forwardedFromMessage.message_type) {
+        payload.message_type = forwardedFromMessage.message_type;
+      }
+
+      if (!payload.media_url && forwardedFromMessage.media_url) {
+        payload.media_url = forwardedFromMessage.media_url;
+      }
+
+      if (!payload.media_filename && forwardedFromMessage.media_filename) {
+        payload.media_filename = forwardedFromMessage.media_filename;
+      }
+
+      if (!payload.media_mime_type && forwardedFromMessage.media_mime_type) {
+        payload.media_mime_type = forwardedFromMessage.media_mime_type;
+      }
+    }
+
+    const buildResult = await buildMetaMessage({
+      payload,
+      to: phone,
+      token,
+      phoneNumberId,
+      apiVersion
+    });
+
+    if (!buildResult.ok) {
+      await updateLocalMessage({
+        supabase,
+        localMessageId: payload.local_message_id,
+        status: "failed",
+        errorCode: buildResult.errorCode || "media_upload_failed",
+        errorMessage: buildResult.error || "No se pudo subir el archivo a WhatsApp.",
+        metaResponse: buildResult.metaResponse,
+        uploadResponse: buildResult.uploadResponse
+      });
+
+      return jsonResponse({
+        ok: false,
+        success: false,
+        status: "failed",
+        error: buildResult.error,
+        error_code: buildResult.errorCode || "media_upload_failed",
+        wa_error_code: buildResult.errorCode || "media_upload_failed",
+        wa_error_message: buildResult.error,
+        meta_response: buildResult.metaResponse
+      });
+    }
+
+    const metaUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+
+    const metaRes = await fetch(metaUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(buildResult.metaMessage)
+    });
+
+    const metaData = await metaRes.json();
+
+    if (!metaRes.ok || metaData.error) {
+      const message =
+        metaData?.error?.message ||
+        metaData?.error?.error_user_msg ||
+        "WhatsApp rechazó el envío.";
+
+      const code = metaData?.error?.code ? String(metaData.error.code) : null;
+
+      await updateLocalMessage({
+        supabase,
+        localMessageId: payload.local_message_id,
+        status: "failed",
+        mediaWhatsappId: buildResult.uploadedMediaId,
+        errorCode: code,
+        errorMessage: message,
+        metaResponse: metaData,
+        uploadResponse: buildResult.uploadResponse
+      });
+
+      return jsonResponse({
+        ok: false,
+        success: false,
+        status: "failed",
+        error: message,
+        error_code: code,
+        wa_error_code: code,
+        wa_error_message: message,
+        meta_response: metaData
+      });
+    }
+
+    const whatsappMessageId = metaData?.messages?.[0]?.id || null;
+    const messageStatus = metaData?.messages?.[0]?.message_status || "sent";
+
+    const reactionEmoji = cleanText(payload.reaction_emoji || payload.emoji);
+    const reactionToWhatsappMessageId = cleanText(
+      payload.reaction_to_whatsapp_message_id ||
+        payload.react_to_whatsapp_message_id ||
+        payload.reply_to_whatsapp_message_id
+    );
+
+    await updateLocalMessage({
+      supabase,
+      localMessageId: payload.local_message_id,
+      status: "sent",
+      whatsappMessageId,
+      mediaWhatsappId: buildResult.uploadedMediaId,
+      errorCode: null,
+      errorMessage: null,
+      metaResponse: metaData,
+      uploadResponse: buildResult.uploadResponse,
+      reactionEmoji: reactionEmoji || null,
+      reactionToWhatsappMessageId: reactionToWhatsappMessageId || null
+    });
+
+    if (reactionEmoji && reactionToWhatsappMessageId) {
+      await insertReaction({
+        supabase,
+        conversationId: payload.conversation_id,
+        localMessageId: payload.local_message_id,
+        whatsappMessageId,
+        reactedToWhatsappMessageId: reactionToWhatsappMessageId,
+        emoji: reactionEmoji,
+        senderName: payload.sender_name || null,
+        senderId: payload.sender_id || null,
+        metaResponse: metaData
+      });
+    }
+
+   await touchConversation({
+  supabase,
+  conversationId: payload.conversation_id,
+  lastMessage: getLastMessagePreview(payload),
+  payload
+});
+
+    return jsonResponse({
+      ok: true,
+      success: true,
+      status: messageStatus,
+      whatsapp_message_id: whatsappMessageId,
+      message_id: whatsappMessageId,
+      media_whatsapp_id: buildResult.uploadedMediaId,
+      meta_response: metaData,
+      media_upload_response: buildResult.uploadResponse
+    });
+  } catch (error) {
+    const message = normalizeError(error);
+
+    try {
+      const supabase = getSupabaseAdmin();
+
+      await updateLocalMessage({
+        supabase,
+        localMessageId: payload.local_message_id,
+        status: "failed",
+        errorCode: "edge_exception",
+        errorMessage: message
+      });
+    } catch {
+      // Evita que un error secundario tape el error principal.
+    }
+
+    return jsonResponse({
+      ok: false,
+      success: false,
+      status: "failed",
+      error: message,
+      error_code: "edge_exception",
+      wa_error_code: "edge_exception",
+      wa_error_message: message
+    });
+  }
+});

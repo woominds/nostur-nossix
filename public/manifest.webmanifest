@@ -1,0 +1,32 @@
+{
+  "name": "NOSTUR Mobile",
+  "short_name": "NOSTUR",
+  "description": "Sistema operativo mobile de NOSTUR para chats, carritos, caja y gestión comercial.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7fbfc",
+  "theme_color": "#172033",
+  "categories": ["business", "productivity", "travel"],
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/brand/NOSSTOUR_icono_app_1024_transparente.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,0 +1,1044 @@
+// @ts-nocheck
+
+/* =========================================================
+   NOSSIX / NOSTUR — whatsapp-webhook
+   Recibe:
+   - textos
+   - imágenes
+   - audios
+   - videos
+   - documentos
+   - stickers
+   - status de mensajes
+
+   Descarga media desde Meta → Supabase Storage → messages.media_url
+   Guarda debug crudo en whatsapp_webhook_debug
+   Dispara CANDE/IAPAX si la conversación está en automático
+========================================================= */
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+type WhatsAppWebhookPayload = {
+  object?: string;
+  entry?: Array<{
+    id?: string;
+    changes?: Array<{
+      field?: string;
+      value?: {
+        messaging_product?: string;
+        metadata?: {
+          display_phone_number?: string;
+          phone_number_id?: string;
+        };
+        contacts?: Array<{
+          profile?: {
+            name?: string;
+          };
+          wa_id?: string;
+        }>;
+        messages?: Array<any>;
+        statuses?: Array<any>;
+      };
+    }>;
+  }>;
+};
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
+};
+
+/* =========================================================
+   RESPONSES
+========================================================= */
+
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json"
+    }
+  });
+}
+
+function textResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/plain"
+    }
+  });
+}
+
+/* =========================================================
+   ENV / CLIENTS
+========================================================= */
+
+function getSupabaseAdmin() {
+  const supabaseUrl =
+    Deno.env.get("SUPABASE_URL") ||
+    "https://vkzgfhdfqyjqwvowtarh.supabase.co";
+
+  const serviceRoleKey =
+    Deno.env.get("NOSTUR_SERVICE_ROLE_KEY") ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!serviceRoleKey) {
+    throw new Error("Falta configurar NOSTUR_SERVICE_ROLE_KEY.");
+  }
+
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  });
+}
+
+function getMetaConfig() {
+  const token =
+    Deno.env.get("WHATSAPP_ACCESS_TOKEN") ||
+    Deno.env.get("WHATSAPP_TOKEN");
+
+  const apiVersion = Deno.env.get("WHATSAPP_API_VERSION") || "v25.0";
+
+  if (!token) {
+    throw new Error("Falta configurar WHATSAPP_ACCESS_TOKEN.");
+  }
+
+  return {
+    token,
+    apiVersion
+  };
+}
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function cleanText(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function normalizePhoneToPlus(value: unknown): string {
+  const raw = String(value || "").replace(/[^\d+]/g, "");
+
+  if (!raw) return "";
+  if (raw.startsWith("+")) return raw;
+
+  return `+${raw}`;
+}
+
+function normalizePhoneDigits(value: unknown): string {
+  return String(value || "").replace(/[^\d]/g, "");
+}
+
+function addHoursIso(hours: number): string {
+  const date = new Date();
+  date.setHours(date.getHours() + hours);
+  return date.toISOString();
+}
+
+function getNowIso(): string {
+  return new Date().toISOString();
+}
+
+function safeFileName(value: unknown, fallback = "archivo"): string {
+  const name = cleanText(value) || fallback;
+
+  return name
+    .replace(/[^\w.\-áéíóúÁÉÍÓÚñÑ ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 140);
+}
+
+function getExtensionFromMime(mimeType?: string | null): string {
+  const mime = cleanText(mimeType).toLowerCase();
+
+  const map: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "application/pdf": "pdf",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "text/plain": "txt",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/ogg": "ogg",
+    "audio/opus": "opus",
+    "audio/webm": "webm",
+    "video/mp4": "mp4",
+    "video/3gpp": "3gp"
+  };
+
+  return map[mime] || "bin";
+}
+
+function getMessageContent(message: any): string | null {
+  const type = message?.type;
+
+  if (type === "text") return cleanText(message?.text?.body) || null;
+
+  if (type === "button") return cleanText(message?.button?.text) || null;
+
+  if (type === "interactive") {
+    return (
+      cleanText(message?.interactive?.button_reply?.title) ||
+      cleanText(message?.interactive?.list_reply?.title) ||
+      cleanText(message?.interactive?.button_reply?.id) ||
+      cleanText(message?.interactive?.list_reply?.id) ||
+      null
+    );
+  }
+
+  if (type === "image") return cleanText(message?.image?.caption) || "Imagen recibida";
+  if (type === "audio") return "Audio recibido";
+  if (type === "video") return cleanText(message?.video?.caption) || "Video recibido";
+
+  if (type === "document") {
+    return (
+      cleanText(message?.document?.caption) ||
+      cleanText(message?.document?.filename) ||
+      "Documento recibido"
+    );
+  }
+
+  if (type === "sticker") return "Sticker recibido";
+  if (type === "location") return "Ubicación recibida";
+  if (type === "contacts") return "Contacto recibido";
+
+  return "Mensaje recibido";
+}
+
+function mapMessageType(message: any): string {
+  const type = message?.type;
+
+  if (["text", "image", "audio", "video", "document", "sticker"].includes(type)) return type;
+  if (type === "button" || type === "interactive") return "text";
+
+  return "text";
+}
+
+function getMediaData(message: any): {
+  mediaId: string | null;
+  filename: string | null;
+  mimeType: string | null;
+  sha256: string | null;
+} {
+  const type = message?.type;
+
+  const media =
+    type === "image"
+      ? message.image
+      : type === "audio"
+        ? message.audio
+        : type === "video"
+          ? message.video
+          : type === "document"
+            ? message.document
+            : type === "sticker"
+              ? message.sticker
+              : null;
+
+  return {
+    mediaId: media?.id || null,
+    filename: media?.filename || null,
+    mimeType: media?.mime_type || null,
+    sha256: media?.sha256 || null
+  };
+}
+
+/* =========================================================
+   DEBUG
+========================================================= */
+
+async function saveWebhookDebug(params: {
+  supabase: any;
+  eventType: string;
+  field: string | null;
+  whatsappMessageId?: string | null;
+  status?: string | null;
+  fromPhone?: string | null;
+  recipientId?: string | null;
+  rawPayload: any;
+}) {
+  try {
+    await params.supabase
+      .from("whatsapp_webhook_debug")
+      .insert({
+        event_type: params.eventType,
+        field: params.field,
+        whatsapp_message_id: params.whatsappMessageId || null,
+        status: params.status || null,
+        from_phone: params.fromPhone || null,
+        recipient_id: params.recipientId || null,
+        raw_payload: params.rawPayload
+      });
+  } catch {
+    // El debug nunca debe romper el webhook.
+  }
+}
+
+/* =========================================================
+   MEDIA DOWNLOAD FROM META → SUPABASE STORAGE
+========================================================= */
+
+async function downloadIncomingMedia(params: {
+  supabase: any;
+  token: string;
+  apiVersion: string;
+  conversationId: string;
+  message: any;
+}) {
+  const mediaData = getMediaData(params.message);
+
+  if (!mediaData.mediaId) {
+    return {
+      mediaUrl: null,
+      mediaPath: null,
+      mediaFilename: mediaData.filename,
+      mediaMimeType: mediaData.mimeType,
+      mediaSize: null,
+      mediaWhatsappId: null,
+      mediaDownloadedAt: null,
+      mediaDownloadError: null
+    };
+  }
+
+  const metaInfoUrl = `https://graph.facebook.com/${params.apiVersion}/${mediaData.mediaId}`;
+
+  const infoRes = await fetch(metaInfoUrl, {
+    headers: {
+      Authorization: `Bearer ${params.token}`
+    }
+  });
+
+  const infoData = await infoRes.json();
+
+  if (!infoRes.ok || infoData.error || !infoData.url) {
+    return {
+      mediaUrl: null,
+      mediaPath: null,
+      mediaFilename: mediaData.filename,
+      mediaMimeType: mediaData.mimeType,
+      mediaSize: null,
+      mediaWhatsappId: mediaData.mediaId,
+      mediaDownloadedAt: null,
+      mediaDownloadError:
+        infoData?.error?.message || "No se pudo obtener la URL del archivo de Meta."
+    };
+  }
+
+  const fileRes = await fetch(infoData.url, {
+    headers: {
+      Authorization: `Bearer ${params.token}`
+    }
+  });
+
+  if (!fileRes.ok) {
+    return {
+      mediaUrl: null,
+      mediaPath: null,
+      mediaFilename: mediaData.filename,
+      mediaMimeType: mediaData.mimeType,
+      mediaSize: null,
+      mediaWhatsappId: mediaData.mediaId,
+      mediaDownloadedAt: null,
+      mediaDownloadError: `No se pudo descargar el archivo de Meta. HTTP ${fileRes.status}`
+    };
+  }
+
+  const blob = await fileRes.blob();
+
+  const mimeType =
+    cleanText(mediaData.mimeType) ||
+    cleanText(fileRes.headers.get("content-type")) ||
+    blob.type ||
+    "application/octet-stream";
+
+  const extension = getExtensionFromMime(mimeType);
+
+  const fallbackName =
+    params.message?.type === "image"
+      ? `imagen.${extension}`
+      : params.message?.type === "audio"
+        ? `audio.${extension}`
+        : params.message?.type === "video"
+          ? `video.${extension}`
+          : params.message?.type === "sticker"
+            ? `sticker.${extension}`
+            : `documento.${extension}`;
+
+  const filename = safeFileName(mediaData.filename, fallbackName);
+
+  const storagePath = `whatsapp-inbound/${params.conversationId}/${Date.now()}-${mediaData.mediaId}.${extension}`;
+
+  const uploadRes = await params.supabase.storage
+    .from("comunicaciones-media")
+    .upload(storagePath, blob, {
+      contentType: mimeType,
+      cacheControl: "3600",
+      upsert: false
+    });
+
+  if (uploadRes.error) {
+    return {
+      mediaUrl: null,
+      mediaPath: null,
+      mediaFilename: filename,
+      mediaMimeType: mimeType,
+      mediaSize: blob.size,
+      mediaWhatsappId: mediaData.mediaId,
+      mediaDownloadedAt: null,
+      mediaDownloadError: uploadRes.error.message
+    };
+  }
+
+  const publicRes = params.supabase.storage
+    .from("comunicaciones-media")
+    .getPublicUrl(storagePath);
+
+  return {
+    mediaUrl: publicRes.data.publicUrl,
+    mediaPath: storagePath,
+    mediaFilename: filename,
+    mediaMimeType: mimeType,
+    mediaSize: blob.size,
+    mediaWhatsappId: mediaData.mediaId,
+    mediaDownloadedAt: new Date().toISOString(),
+    mediaDownloadError: null
+  };
+}
+
+/* =========================================================
+   CONVERSATION / MESSAGE UPSERTS
+========================================================= */
+
+async function findOrCreateConversation(params: {
+  supabase: any;
+  phone: string;
+  contactName: string | null;
+  lastMessage: string | null;
+  phoneNumberId: string | null;
+}) {
+  const phoneDigits = normalizePhoneDigits(params.phone);
+
+  const existingRes = await params.supabase
+    .from("conversations")
+    .select("id, unread_count, assigned_to, sucursal_id, metadata")
+    .eq("channel", "whatsapp")
+    .or(`telefono.eq.${params.phone},telefono.eq.${phoneDigits},telefono.eq.+${phoneDigits}`)
+    .is("deleted_at", null)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingRes.error) throw existingRes.error;
+
+  if (existingRes.data?.id) {
+    const conversationId = existingRes.data.id;
+    const unreadCount = Number(existingRes.data.unread_count || 0) + 1;
+    const previousMetadata = readRecord(existingRes.data.metadata);
+
+    const updateRes = await params.supabase
+      .from("conversations")
+      .update({
+        contacto_nombre: params.contactName || undefined,
+        telefono: params.phone,
+        last_message: params.lastMessage,
+        last_message_time: getNowIso(),
+        last_inbound_message_at: getNowIso(),
+        whatsapp_24h_expires_at: addHoursIso(24),
+        unread_count: unreadCount,
+        status: "ABIERTA",
+        archived: false,
+        archived_at: null,
+        deleted: false,
+        deleted_at: null,
+        estado_gestion: "ESPERA_AGENTE",
+        metadata: {
+          ...previousMetadata,
+          whatsapp_phone_number_id: params.phoneNumberId,
+          last_webhook_update_at: getNowIso()
+        },
+        updated_at: getNowIso()
+      })
+      .eq("id", conversationId)
+      .select("id")
+      .single();
+
+    if (updateRes.error) throw updateRes.error;
+
+    return conversationId as string;
+  }
+
+  const insertRes = await params.supabase
+    .from("conversations")
+    .insert({
+      channel: "whatsapp",
+      subject: params.contactName || params.phone,
+      titulo: params.contactName || params.phone,
+      contacto_nombre: params.contactName,
+      telefono: params.phone,
+      status: "ABIERTA",
+      estado_comercial: "NUEVO",
+      estado_gestion: "ESPERA_AGENTE",
+      prioridad: "NORMAL",
+      unread_count: 1,
+      last_message: params.lastMessage,
+      last_message_time: getNowIso(),
+      last_inbound_message_at: getNowIso(),
+      whatsapp_24h_expires_at: addHoursIso(24),
+      mostrar_agente: true,
+      archived: false,
+      deleted: false,
+
+      customer_ai_enabled: true,
+      customer_ai_mode: "APAGADA",
+      customer_ai_status: "INACTIVA",
+      customer_ai_handoff_status: "NO_DERIVADA",
+
+      metadata: {
+        source: "whatsapp_webhook",
+        whatsapp_phone_number_id: params.phoneNumberId,
+        created_from_webhook_at: getNowIso()
+      }
+    })
+    .select("id")
+    .single();
+
+  if (insertRes.error) throw insertRes.error;
+
+  return insertRes.data.id as string;
+}
+
+async function insertIncomingMessage(params: {
+  supabase: any;
+  token: string;
+  apiVersion: string;
+  conversationId: string;
+  message: any;
+  contactName: string | null;
+  phone: string;
+}) {
+  const content = getMessageContent(params.message);
+  const messageType = mapMessageType(params.message);
+  const mediaData = getMediaData(params.message);
+  const whatsappMessageId = params.message?.id || null;
+
+  if (whatsappMessageId) {
+    const existing = await params.supabase
+      .from("messages")
+      .select("id")
+      .eq("whatsapp_message_id", whatsappMessageId)
+      .maybeSingle();
+
+    if (existing.error) throw existing.error;
+
+    if (existing.data?.id) {
+      return existing.data.id as string;
+    }
+  }
+
+  const downloadedMedia = await downloadIncomingMedia({
+    supabase: params.supabase,
+    token: params.token,
+    apiVersion: params.apiVersion,
+    conversationId: params.conversationId,
+    message: params.message
+  });
+
+  const insertRes = await params.supabase
+    .from("messages")
+    .insert({
+      conversation_id: params.conversationId,
+      channel: "whatsapp",
+      direction: "inbound",
+      sender_type: "cliente",
+      sender_id: null,
+      sender_name: params.contactName || params.phone,
+      content,
+      message_type: messageType,
+
+      media_url: downloadedMedia.mediaUrl,
+      media_path: downloadedMedia.mediaPath,
+      media_filename: downloadedMedia.mediaFilename || mediaData.filename,
+      media_mime_type: downloadedMedia.mediaMimeType || mediaData.mimeType,
+      media_size: downloadedMedia.mediaSize,
+      media_whatsapp_id: downloadedMedia.mediaWhatsappId || mediaData.mediaId,
+      media_downloaded_at: downloadedMedia.mediaDownloadedAt || null,
+
+      reply_to_id: params.message?.context?.id || null,
+      status: "received",
+      whatsapp_message_id: whatsappMessageId,
+      is_internal: false,
+      metadata: {
+        source: "whatsapp_webhook",
+        raw_type: params.message?.type || null,
+        whatsapp_timestamp: params.message?.timestamp || null,
+        media_id: mediaData.mediaId,
+        media_sha256: mediaData.sha256,
+        media_download_error: downloadedMedia.mediaDownloadError || null,
+        raw_message: params.message
+      }
+    })
+    .select("id")
+    .single();
+
+  if (insertRes.error) throw insertRes.error;
+
+  return insertRes.data.id as string;
+}
+
+/* =========================================================
+   STATUS UPDATE — IMPORTANTE:
+   No pisar metadata existente.
+   Mantiene:
+   - metadata.source
+   - metadata.inbound_message_id
+   - metadata.ai_persona_code
+   - metadata.raw_message
+========================================================= */
+
+async function updateMessageStatus(params: {
+  supabase: any;
+  status: any;
+}) {
+  const whatsappMessageId = params.status?.id || null;
+  const statusValue = cleanText(params.status?.status);
+
+  if (!whatsappMessageId || !statusValue) return;
+
+  const mappedStatus =
+    statusValue === "delivered"
+      ? "delivered"
+      : statusValue === "read"
+        ? "read"
+        : statusValue === "sent"
+          ? "sent"
+          : statusValue === "failed"
+            ? "failed"
+            : statusValue;
+
+  const existingRes = await params.supabase
+    .from("messages")
+    .select("id, metadata")
+    .eq("whatsapp_message_id", whatsappMessageId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingRes.error) {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "status_update_read_error",
+      field: "messages",
+      whatsappMessageId,
+      status: mappedStatus,
+      recipientId: params.status?.recipient_id || null,
+      rawPayload: {
+        error: existingRes.error,
+        status: params.status
+      }
+    });
+
+    return;
+  }
+
+  const previousMetadata =
+    existingRes.data?.metadata &&
+    typeof existingRes.data.metadata === "object" &&
+    !Array.isArray(existingRes.data.metadata)
+      ? existingRes.data.metadata
+      : {};
+
+  const updateRes = await params.supabase
+    .from("messages")
+    .update({
+      status: mappedStatus,
+      wa_error_code: params.status?.errors?.[0]?.code
+        ? String(params.status.errors[0].code)
+        : null,
+      wa_error_message:
+        params.status?.errors?.[0]?.title ||
+        params.status?.errors?.[0]?.message ||
+        null,
+      metadata: {
+        ...previousMetadata,
+        whatsapp_status_update: params.status,
+        whatsapp_last_status: mappedStatus,
+        whatsapp_last_status_at: new Date().toISOString()
+      }
+    })
+    .eq("whatsapp_message_id", whatsappMessageId)
+    .select("id, status, whatsapp_message_id");
+
+  if (updateRes.error) {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "status_update_error",
+      field: "messages",
+      whatsappMessageId,
+      status: mappedStatus,
+      recipientId: params.status?.recipient_id || null,
+      rawPayload: {
+        error: updateRes.error,
+        status: params.status
+      }
+    });
+
+    return;
+  }
+
+  if (!updateRes.data || updateRes.data.length === 0) {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "status_no_match",
+      field: "messages",
+      whatsappMessageId,
+      status: mappedStatus,
+      recipientId: params.status?.recipient_id || null,
+      rawPayload: params.status
+    });
+  }
+}
+
+/* =========================================================
+   CANDE / IAPAX AUTO REPLY TRIGGER
+========================================================= */
+
+async function triggerIapaxAutoReply(params: {
+  supabase: any;
+  conversationId: string;
+  messageId: string;
+  whatsappMessageId?: string | null;
+  fromPhone?: string | null;
+}) {
+  try {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "iapax_check_start",
+      field: "customer-assistant-reply",
+      whatsappMessageId: params.whatsappMessageId || null,
+      fromPhone: params.fromPhone || null,
+      rawPayload: {
+        conversation_id: params.conversationId,
+        inbound_message_id: params.messageId
+      }
+    });
+
+    const conversationRes = await params.supabase
+      .from("conversations")
+      .select(
+        "id, channel, customer_ai_enabled, customer_ai_mode, customer_ai_status, customer_ai_handoff_status, customer_ai_persona_id, customer_ai_last_response_at"
+      )
+      .eq("id", params.conversationId)
+      .maybeSingle();
+
+    if (conversationRes.error) {
+      await saveWebhookDebug({
+        supabase: params.supabase,
+        eventType: "iapax_conversation_error",
+        field: "conversations",
+        whatsappMessageId: params.whatsappMessageId || null,
+        fromPhone: params.fromPhone || null,
+        rawPayload: {
+          conversation_id: params.conversationId,
+          error: conversationRes.error.message || conversationRes.error
+        }
+      });
+
+      return;
+    }
+
+    const conversation = conversationRes.data;
+
+    if (!conversation?.id) {
+      await saveWebhookDebug({
+        supabase: params.supabase,
+        eventType: "iapax_conversation_not_found",
+        field: "conversations",
+        whatsappMessageId: params.whatsappMessageId || null,
+        fromPhone: params.fromPhone || null,
+        rawPayload: {
+          conversation_id: params.conversationId
+        }
+      });
+
+      return;
+    }
+
+    const customerAiEnabled = Boolean(conversation.customer_ai_enabled);
+    const customerAiMode = cleanText(conversation.customer_ai_mode).toUpperCase();
+    const customerAiStatus = cleanText(conversation.customer_ai_status).toUpperCase();
+    const customerAiHandoffStatus = cleanText(
+      conversation.customer_ai_handoff_status
+    ).toUpperCase();
+
+    const shouldInvokeIapax =
+      customerAiEnabled &&
+      customerAiMode === "AUTOMATICA" &&
+      customerAiStatus !== "INACTIVA" &&
+      customerAiStatus !== "PAUSADA" &&
+      customerAiHandoffStatus !== "PENDIENTE_VENDEDOR" &&
+      customerAiHandoffStatus !== "TOMADA" &&
+      customerAiHandoffStatus !== "DERIVADA";
+
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "iapax_check_result",
+      field: "customer-assistant-reply",
+      whatsappMessageId: params.whatsappMessageId || null,
+      fromPhone: params.fromPhone || null,
+      rawPayload: {
+        conversation_id: params.conversationId,
+        inbound_message_id: params.messageId,
+        customer_ai_enabled: customerAiEnabled,
+        customer_ai_mode: customerAiMode,
+        customer_ai_status: customerAiStatus,
+        customer_ai_handoff_status: customerAiHandoffStatus,
+        should_invoke_iapax: shouldInvokeIapax
+      }
+    });
+
+    if (!shouldInvokeIapax) return;
+
+    const functionRes = await params.supabase.functions.invoke("customer-assistant-reply", {
+      body: {
+        conversation_id: params.conversationId,
+        inbound_message_id: params.messageId,
+        force: false,
+        source: "whatsapp-webhook",
+        mode: "AUTOMATICA"
+      }
+    });
+
+    if (functionRes.error) {
+      await params.supabase
+        .from("conversations")
+        .update({
+          customer_ai_last_error:
+            functionRes.error.message || "No se pudo invocar CANDE.",
+          updated_at: getNowIso()
+        })
+        .eq("id", params.conversationId);
+
+      await saveWebhookDebug({
+        supabase: params.supabase,
+        eventType: "iapax_invoke_error",
+        field: "customer-assistant-reply",
+        whatsappMessageId: params.whatsappMessageId || null,
+        fromPhone: params.fromPhone || null,
+        rawPayload: {
+          conversation_id: params.conversationId,
+          inbound_message_id: params.messageId,
+          error: functionRes.error.message || functionRes.error
+        }
+      });
+
+      return;
+    }
+
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "iapax_invoked",
+      field: "customer-assistant-reply",
+      whatsappMessageId: params.whatsappMessageId || null,
+      fromPhone: params.fromPhone || null,
+      rawPayload: {
+        conversation_id: params.conversationId,
+        inbound_message_id: params.messageId,
+        response: functionRes.data || null
+      }
+    });
+  } catch (error) {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "iapax_webhook_soft_error",
+      field: "customer-assistant-reply",
+      whatsappMessageId: params.whatsappMessageId || null,
+      fromPhone: params.fromPhone || null,
+      rawPayload: {
+        conversation_id: params.conversationId,
+        inbound_message_id: params.messageId,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
+  }
+}
+
+/* =========================================================
+   SERVER
+========================================================= */
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", {
+      headers: corsHeaders
+    });
+  }
+
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+
+    const verifyToken =
+      Deno.env.get("WHATSAPP_VERIFY_TOKEN") ||
+      Deno.env.get("META_VERIFY_TOKEN") ||
+      "nossix_verify_token";
+
+    if (mode === "subscribe" && token === verifyToken && challenge) {
+      return textResponse(challenge, 200);
+    }
+
+    return textResponse("Forbidden", 403);
+  }
+
+  if (req.method !== "POST") {
+    return jsonResponse(
+      {
+        ok: false,
+        error: "Método no permitido."
+      },
+      405
+    );
+  }
+
+  const supabase = getSupabaseAdmin();
+  const { token, apiVersion } = getMetaConfig();
+
+  try {
+    const payload = (await req.json()) as WhatsAppWebhookPayload;
+
+    await saveWebhookDebug({
+      supabase,
+      eventType: "raw_post",
+      field: null,
+      rawPayload: payload
+    });
+
+    for (const entry of payload.entry || []) {
+      for (const change of entry.changes || []) {
+        const value = change.value || {};
+        const phoneNumberId = value.metadata?.phone_number_id || null;
+
+        await saveWebhookDebug({
+          supabase,
+          eventType: "change",
+          field: change.field || null,
+          rawPayload: change
+        });
+
+        if (change.field !== "messages") continue;
+
+        for (const status of value.statuses || []) {
+          await saveWebhookDebug({
+            supabase,
+            eventType: "status",
+            field: change.field || null,
+            whatsappMessageId: status?.id || null,
+            status: status?.status || null,
+            recipientId: status?.recipient_id || null,
+            rawPayload: status
+          });
+
+          await updateMessageStatus({
+            supabase,
+            status
+          });
+        }
+
+        for (const message of value.messages || []) {
+          const from = normalizePhoneToPlus(message.from);
+          const contact =
+            value.contacts?.find((item) => item.wa_id === message.from) ||
+            value.contacts?.[0];
+
+          const contactName = cleanText(contact?.profile?.name) || from;
+          const content = getMessageContent(message);
+
+          await saveWebhookDebug({
+            supabase,
+            eventType: "message",
+            field: change.field || null,
+            whatsappMessageId: message?.id || null,
+            fromPhone: from,
+            rawPayload: message
+          });
+
+          const conversationId = await findOrCreateConversation({
+            supabase,
+            phone: from,
+            contactName,
+            lastMessage: content,
+            phoneNumberId
+          });
+
+          const insertedMessageId = await insertIncomingMessage({
+            supabase,
+            token,
+            apiVersion,
+            conversationId,
+            message,
+            contactName,
+            phone: from
+          });
+
+          await triggerIapaxAutoReply({
+            supabase,
+            conversationId,
+            messageId: insertedMessageId,
+            whatsappMessageId: message?.id || null,
+            fromPhone: from
+          });
+        }
+      }
+    }
+
+    return jsonResponse({
+      ok: true,
+      received: true
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    try {
+      await saveWebhookDebug({
+        supabase,
+        eventType: "webhook_exception",
+        field: null,
+        rawPayload: {
+          error: message
+        }
+      });
+    } catch {
+      // Evita error secundario.
+    }
+
+    return jsonResponse(
+      {
+        ok: false,
+        error: message
+      },
+      200
+    );
+  }
+});

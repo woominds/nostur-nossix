@@ -1,0 +1,32 @@
+[functions.analyze-conversation-ai]
+enabled = true
+verify_jwt = false
+import_map = "./functions/analyze-conversation-ai/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/analyze-conversation-ai/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/analyze-conversation-ai/*.html" ]
+
+[functions.whatsapp-webhook]
+verify_jwt = false
+
+[functions.customer-assistant-reply]
+verify_jwt = false
+
+[functions.whatsapp-send-message]
+verify_jwt = false
+[functions.nia-transcribe-audio]
+enabled = true
+verify_jwt = true
+import_map = "./functions/nia-transcribe-audio/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/nia-transcribe-audio/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/nia-transcribe-audio/*.html" ]
+
+[functions.parse-vuelos]
+verify_jwt = false

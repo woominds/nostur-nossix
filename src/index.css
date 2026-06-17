@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #080b10;
+  color: #f6f7fb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input {
+  font-family: inherit;
+}
+
+button {
+  user-select: none;
+}
+
+.nostur-drag {
+  -webkit-app-region: drag;
+}
+
+.nostur-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+webview {
+  position: absolute;
+  inset: 0;
+  display: flex !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 100% !important;
+  min-height: 100% !important;
+  border: 0;
+  background: #ffffff;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 7px;
+  width: 7px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb { 
+  background: #334155;
+  border-radius: 999px;
+}
