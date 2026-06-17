@@ -49,11 +49,11 @@
       }
     ],
     "publish": [
-      {
-        "provider": "generic",
-        "url": "https://updates.nostur.com.ar/nossix/desktop/${os}"
-      }
-    ],
+  {
+    "provider": "generic",
+    "url": "https://nossix.nostur.com.ar/desktop/${os}"
+  }
+],
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.business",

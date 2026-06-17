@@ -51,7 +51,7 @@ export const tenantConfig: NosturTenantConfig = {
 
   supportEmail: "soporte@nostur.com.ar",
 
-  updateBaseUrl: "https://updates.nostur.com.ar/nossix/desktop",
+  updateBaseUrl: "https://nossix.nostur.com.ar/desktop",
 
   supabaseUrl: import.meta.env.VITE_SUPABASE_URL || "",
   supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || "",

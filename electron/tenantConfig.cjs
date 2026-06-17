@@ -19,5 +19,5 @@ module.exports = {
   tenantLegalName: "NOSSIX S.A.S.",
   tenantDisplayName: "NOSSIX / ALMUNDO Franquicia Córdoba",
   supportEmail: "soporte@nostur.com.ar",
-  updateBaseUrl: "https://updates.nostur.com.ar/nossix/desktop"
+  updateBaseUrl: "https://nossix.nostur.com.ar/desktop"
 };
