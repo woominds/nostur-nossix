@@ -1,56 +1,21 @@
-name: Deploy NOSTUR NOSSIX PWA
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "src/**"
-      - "public/**"
-      - "index.html"
-      - "vite.config.ts"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/deploy-pwa.yml"
-
-jobs:
-  deploy:
-    name: Build and deploy PWA
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build PWA
-        run: npm run build:web
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-
       - name: Setup SSH
         run: |
+          if [ -z "${{ secrets.HOSTING_HOST }}" ]; then
+            echo "Missing secret HOSTING_HOST"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.HOSTING_USER }}" ]; then
+            echo "Missing secret HOSTING_USER"
+            exit 1
+          fi
+
+          if [ -z "${{ secrets.HOSTING_SSH_KEY }}" ]; then
+            echo "Missing secret HOSTING_SSH_KEY"
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
-          echo "${{ secrets.HOSTING_SSH_KEY }}" > ~/.ssh/nostur_fastcomet_deploy
+          printf '%s\n' "${{ secrets.HOSTING_SSH_KEY }}" > ~/.ssh/nostur_fastcomet_deploy
           chmod 600 ~/.ssh/nostur_fastcomet_deploy
           ssh-keyscan "${{ secrets.HOSTING_HOST }}" >> ~/.ssh/known_hosts
-
-      - name: Deploy PWA to FastComet
-        run: |
-          rsync -avz --delete \
-            -e "ssh -i ~/.ssh/nostur_fastcomet_deploy" \
-            dist/ \
-            ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/app/
-
-      - name: Done
-        run: echo "PWA deployed to https://nossix.nostur.com.ar/app/"
