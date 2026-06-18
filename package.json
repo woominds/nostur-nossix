@@ -22,7 +22,11 @@
     "preview": "vite preview",
     "preview:web": "vite preview --host 0.0.0.0 --port 4173",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "deploy:pwa:nossix": "npm run build:web && node scripts/deploy-pwa-nossix.mjs",
+"deploy:desktop:mac:nossix": "npm run dist:mac && node scripts/deploy-desktop-nossix.mjs mac",
+"deploy:desktop:win:nossix": "npm run dist:win && node scripts/deploy-desktop-nossix.mjs win",
+"deploy:desktop:all:nossix": "node scripts/deploy-desktop-nossix.mjs mac && node scripts/deploy-desktop-nossix.mjs win"
   },
   "build": {
     "appId": "com.nostur.nossix",
@@ -135,3 +139,4 @@
     "wait-on": "^9.0.5"
   }
 }
+
