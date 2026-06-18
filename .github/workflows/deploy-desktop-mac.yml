@@ -63,7 +63,7 @@ jobs:
             release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.zip.blockmap \
             ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/desktop/mac/
 
-       - name: Prepare Mac stable download
+      - name: Prepare Mac stable download
         run: |
           VERSION="${{ steps.package.outputs.version }}"
           cp "release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.dmg" "release/NOSTUR-NOSSIX-mac-latest.dmg"
