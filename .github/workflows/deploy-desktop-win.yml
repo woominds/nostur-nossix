@@ -59,8 +59,7 @@ jobs:
         run: |
           VERSION="${{ steps.package.outputs.version }}"
 
-          rsync -avz \
-            -e "ssh -i ~/.ssh/nostur_fastcomet_deploy" \
+          scp -i ~/.ssh/nostur_fastcomet_deploy \
             release/latest.yml \
             release/NOSTUR-NOSSIX-Setup-${VERSION}.exe \
             release/NOSTUR-NOSSIX-Setup-${VERSION}.exe.blockmap \
@@ -71,8 +70,7 @@ jobs:
         run: |
           VERSION="${{ steps.package.outputs.version }}"
 
-          rsync -avz \
-            -e "ssh -i ~/.ssh/nostur_fastcomet_deploy" \
+          scp -i ~/.ssh/nostur_fastcomet_deploy \
             release/NOSTUR-NOSSIX-Setup-${VERSION}.exe \
             ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/downloads/win/
 
