@@ -49,6 +49,7 @@ import {
   type UserCredential
 } from "../../store/configStore";
 import { ImportadorCatalogosPanel } from "./ImportadorCatalogosPanel";
+import { DeployActionsPanel } from "./DeployActionsPanel";
 
 type ConfigTab =
   | "sucursales"
@@ -1750,8 +1751,16 @@ color: normalizeHexColor(form.color),
     );
   }
 
-  const activeTabMeta = tabs.find((tab) => tab.id === activeTab) || tabs[0];
-  const ActiveIcon = activeTabMeta.icon;
+const activeTabMeta = tabs.find((tab) => tab.id === activeTab) || tabs[0];
+const ActiveIcon = activeTabMeta.icon;
+const currentProfileRecord = currentProfile as
+  | (Profile & { is_support_user?: boolean })
+  | null;
+
+const canSeeDeployPanel =
+  currentProfileRecord?.email?.toLowerCase() === "soporte@nostur.com.ar" ||
+  currentProfileRecord?.is_support_user === true;
+
 
   return (
     <div className="h-full overflow-auto bg-[#edf3f7] px-5 py-4 text-[#172033]">
@@ -1801,6 +1810,12 @@ color: normalizeHexColor(form.color),
             </div>
           </div>
         </header>
+
+      {canSeeDeployPanel ? (
+  <div className="mb-3">
+    <DeployActionsPanel />
+  </div>
+) : null}
 
         <section className="relative z-[30] mb-3 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
