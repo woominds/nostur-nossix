@@ -1,0 +1,79 @@
+name: Deploy NOSTUR NOSSIX Desktop Mac
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Build and deploy Mac release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Read package version
+        id: package
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package version: $VERSION"
+
+      - name: Build Mac release
+        run: npm run dist:mac
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Check required secrets
+        run: |
+          test -n "${{ secrets.HOSTING_HOST }}" && echo "HOSTING_HOST OK" || (echo "HOSTING_HOST missing" && exit 1)
+          test -n "${{ secrets.HOSTING_USER }}" && echo "HOSTING_USER OK" || (echo "HOSTING_USER missing" && exit 1)
+          test -n "${{ secrets.HOSTING_SSH_KEY }}" && echo "HOSTING_SSH_KEY OK" || (echo "HOSTING_SSH_KEY missing" && exit 1)
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.HOSTING_SSH_KEY }}" > ~/.ssh/nostur_fastcomet_deploy
+          chmod 600 ~/.ssh/nostur_fastcomet_deploy
+          ssh-keyscan "${{ secrets.HOSTING_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: List release files
+        run: ls -la release
+
+      - name: Deploy Mac update files to FastComet
+        run: |
+          VERSION="${{ steps.package.outputs.version }}"
+
+          rsync -avz \
+            -e "ssh -i ~/.ssh/nostur_fastcomet_deploy" \
+            release/latest-mac.yml \
+            release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.dmg \
+            release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.dmg.blockmap \
+            release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.zip \
+            release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.zip.blockmap \
+            ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/desktop/mac/
+
+      - name: Deploy Mac manual download
+        run: |
+          VERSION="${{ steps.package.outputs.version }}"
+
+          rsync -avz \
+            -e "ssh -i ~/.ssh/nostur_fastcomet_deploy" \
+            release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.dmg \
+            ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/downloads/mac/
+
+      - name: Done
+        run: |
+          echo "Mac release deployed:"
+          echo "https://nossix.nostur.com.ar/desktop/mac/latest-mac.yml"
+          echo "https://nossix.nostur.com.ar/downloads/mac/NOSTUR-NOSSIX-${{ steps.package.outputs.version }}-arm64-mac.dmg"
