@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NOSTUR NOSSIX · Descargas</title>
+    <meta
+      name="description"
+      content="Descarga NOSTUR para NOSSIX: acceso web, aplicación para Mac y aplicación para Windows."
+    />
+
+    <style>
+      :root {
+        --bg: #edf3f7;
+        --card: rgba(255, 255, 255, 0.82);
+        --text: #172033;
+        --muted: #64748b;
+        --line: rgba(15, 23, 42, 0.1);
+        --brand: #4f7c90;
+        --brand-dark: #406b7d;
+        --orange: #ff6a00;
+        --green: #16a34a;
+        --shadow: 0 18px 60px rgba(15, 23, 42, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(255, 106, 0, 0.14), transparent 34%),
+          radial-gradient(circle at top right, rgba(79, 124, 144, 0.22), transparent 38%),
+          linear-gradient(135deg, #edf3f7 0%, #f8fafc 52%, #edf3f7 100%);
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .page {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 38px 18px;
+      }
+
+      .shell {
+        width: min(1080px, 100%);
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 32px;
+        background: var(--card);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
+      }
+
+      .hero::before {
+        content: "";
+        position: absolute;
+        inset: -120px -160px auto auto;
+        width: 420px;
+        height: 420px;
+        border-radius: 999px;
+        background: rgba(79, 124, 144, 0.14);
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        left: -130px;
+        bottom: -150px;
+        width: 340px;
+        height: 340px;
+        border-radius: 999px;
+        background: rgba(255, 106, 0, 0.1);
+      }
+
+      .content {
+        position: relative;
+        z-index: 2;
+        padding: 34px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 34px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 15px;
+        background: linear-gradient(135deg, var(--brand), #82a9b8);
+        color: white;
+        font-weight: 900;
+        letter-spacing: -0.06em;
+        box-shadow: 0 12px 28px rgba(79, 124, 144, 0.28);
+      }
+
+      .brand-title {
+        font-size: 15px;
+        font-weight: 900;
+        letter-spacing: -0.04em;
+      }
+
+      .brand-subtitle {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 32px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 106, 0, 0.16);
+        background: rgba(255, 106, 0, 0.08);
+        padding: 7px 12px;
+        color: #b45309;
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        white-space: nowrap;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1.08fr;
+        gap: 28px;
+        align-items: end;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 620px;
+        font-size: clamp(36px, 5vw, 64px);
+        line-height: 0.94;
+        letter-spacing: -0.075em;
+      }
+
+      .lead {
+        margin: 20px 0 0;
+        max-width: 590px;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.65;
+        font-weight: 600;
+      }
+
+      .actions {
+        display: grid;
+        gap: 12px;
+      }
+
+      .download-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.72);
+        padding: 16px;
+        transition:
+          transform 0.18s ease,
+          background 0.18s ease,
+          border-color 0.18s ease;
+      }
+
+      .download-card:hover {
+        transform: translateY(-2px);
+        background: white;
+        border-color: rgba(79, 124, 144, 0.34);
+      }
+
+      .download-main {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        min-width: 0;
+      }
+
+      .icon {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+        border-radius: 15px;
+        background: #eef6f8;
+        color: var(--brand);
+        font-size: 20px;
+      }
+
+      .download-title {
+        font-size: 14px;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+      }
+
+      .download-desc {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+        line-height: 1.35;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 38px;
+        border-radius: 14px;
+        padding: 0 14px;
+        background: var(--brand);
+        color: white;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+        box-shadow: 0 10px 24px rgba(79, 124, 144, 0.22);
+      }
+
+      .download-card:hover .button {
+        background: var(--brand-dark);
+      }
+
+      .button.orange {
+        background: var(--orange);
+        box-shadow: 0 10px 24px rgba(255, 106, 0, 0.22);
+      }
+
+      .button.green {
+        background: var(--green);
+        box-shadow: 0 10px 24px rgba(22, 163, 74, 0.18);
+      }
+
+      .notes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 22px;
+      }
+
+      .note {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(248, 250, 252, 0.74);
+        padding: 12px;
+      }
+
+      .note-k {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+
+      .note-v {
+        margin-top: 5px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .footer {
+        margin-top: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+        padding: 0 4px;
+      }
+
+      .footer a {
+        color: var(--brand);
+        font-weight: 900;
+      }
+
+      @media (max-width: 860px) {
+        .content {
+          padding: 24px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          margin-bottom: 26px;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .notes {
+          grid-template-columns: 1fr;
+        }
+
+        .download-card {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <main class="page">
+      <section class="shell">
+        <div class="hero">
+          <div class="content">
+            <div class="topbar">
+              <div class="brand">
+                <div class="brand-mark">NS</div>
+                <div>
+                  <div class="brand-title">NOSTUR · NOSSIX</div>
+                  <div class="brand-subtitle">Sistema integral de turismo emisivo</div>
+                </div>
+              </div>
+
+              <div class="badge">Descargas oficiales</div>
+            </div>
+
+            <div class="grid">
+              <div>
+                <h1>Instalá NOSTUR para operar NOSSIX.</h1>
+
+                <p class="lead">
+                  Acceso centralizado para operación, ventas, administración, comunicaciones,
+                  sesiones persistentes y entorno controlado de trabajo.
+                </p>
+
+                <div class="notes">
+                  <div class="note">
+                    <div class="note-k">Cliente</div>
+                    <div class="note-v">NOSSIX</div>
+                  </div>
+                  <div class="note">
+                    <div class="note-k">Canal</div>
+                    <div class="note-v">PWA / Desktop</div>
+                  </div>
+                  <div class="note">
+                    <div class="note-k">Updates</div>
+                    <div class="note-v">Automáticos</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="actions">
+                <a class="download-card" href="/app/">
+                  <div class="download-main">
+                    <div class="icon">🌐</div>
+                    <div>
+                      <div class="download-title">Abrir versión web</div>
+                      <div class="download-desc">
+                        Acceso PWA desde navegador. Ideal para uso rápido o respaldo.
+                      </div>
+                    </div>
+                  </div>
+                  <span class="button green">Abrir</span>
+                </a>
+
+               <a class="download-card" href="/downloads/mac/NOSTUR-NOSSIX-mac-latest.dmg">
+                  <div class="download-main">
+                    <div class="icon"></div>
+                    <div>
+                      <div class="download-title">Descargar para Mac</div>
+                      <div class="download-desc">
+                        Instalador para macOS Apple Silicon. Recibe actualizaciones automáticas.
+                      </div>
+                    </div>
+                  </div>
+                  <span class="button">Descargar</span>
+                </a>
+
+                <a class="download-card" href="/downloads/win/NOSTUR-NOSSIX-win-latest.exe">
+                  <div class="download-main">
+                    <div class="icon">▦</div>
+                    <div>
+                      <div class="download-title">Descargar para Windows</div>
+                      <div class="download-desc">
+                        Instalador para Windows. Recibe actualizaciones automáticas.
+                      </div>
+                    </div>
+                  </div>
+                  <span class="button orange">Descargar</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <span>© NOSTUR · NOSSIX</span>
+          <span>Soporte: <a href="mailto:soporte@nostur.com.ar">soporte@nostur.com.ar</a></span>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

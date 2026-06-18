@@ -65,6 +65,12 @@ jobs:
             release/NOSTUR-NOSSIX-Setup-${VERSION}.exe.blockmap \
             ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/desktop/win/
 
+      - name: Prepare Windows stable download
+        shell: bash
+        run: |
+          VERSION="${{ steps.package.outputs.version }}"
+          cp "release/NOSTUR-NOSSIX-Setup-${VERSION}.exe" "release/NOSTUR-NOSSIX-win-latest.exe"
+
       - name: Deploy Windows manual download
         shell: bash
         run: |
@@ -72,6 +78,7 @@ jobs:
 
           scp -i ~/.ssh/nostur_fastcomet_deploy \
             release/NOSTUR-NOSSIX-Setup-${VERSION}.exe \
+            release/NOSTUR-NOSSIX-win-latest.exe \
             ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/downloads/win/
 
       - name: Done
@@ -79,4 +86,4 @@ jobs:
         run: |
           echo "Windows release deployed:"
           echo "https://nossix.nostur.com.ar/desktop/win/latest.yml"
-          echo "https://nossix.nostur.com.ar/downloads/win/NOSTUR-NOSSIX-Setup-${{ steps.package.outputs.version }}.exe"
+          echo "https://nossix.nostur.com.ar/downloads/win/NOSTUR-NOSSIX-win-latest.exe"

@@ -27,32 +27,32 @@ function getWorkflowId(target: DeployTarget): string {
   return getEnv("GITHUB_WORKFLOW_WIN");
 }
 
+function getTargetLabel(target: DeployTarget): string {
+  if (target === "pwa") return "PWA";
+  if (target === "mac") return "MAC";
+  return "WINDOWS";
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   if (req.method !== "POST") {
-    return new Response(
-      JSON.stringify({ error: "Método no permitido" }),
-      {
-        status: 405,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
-      }
-    );
+    return new Response(JSON.stringify({ error: "Método no permitido" }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
   }
 
   try {
     const authHeader = req.headers.get("Authorization") || "";
 
     if (!authHeader.startsWith("Bearer ")) {
-      return new Response(
-        JSON.stringify({ error: "No autorizado" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" }
-        }
-      );
+      return new Response(JSON.stringify({ error: "No autorizado" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
     const supabaseUrl = getEnv("SUPABASE_URL");
@@ -75,13 +75,10 @@ serve(async (req) => {
     } = await userClient.auth.getUser();
 
     if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: "Sesión inválida" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" }
-        }
-      );
+      return new Response(JSON.stringify({ error: "Sesión inválida" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
     const { data: profile, error: profileError } = await adminClient
@@ -94,9 +91,11 @@ serve(async (req) => {
       throw profileError;
     }
 
-  const canDeploy =
-  Boolean(profile?.activo) &&
-  (profile?.is_support_user === true || profile?.email === "soporte@nostur.com.ar");
+    const profileEmail = String(profile?.email || user.email || "").toLowerCase();
+
+    const canDeploy =
+      Boolean(profile?.activo) &&
+      (profile?.is_support_user === true || profileEmail === "soporte@nostur.com.ar");
 
     if (!canDeploy) {
       return new Response(
@@ -112,13 +111,10 @@ serve(async (req) => {
     const target = String(body.target || "pwa") as DeployTarget;
 
     if (!["pwa", "mac", "win"].includes(target)) {
-      return new Response(
-        JSON.stringify({ error: "Target inválido. Usar pwa, mac o win." }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" }
-        }
-      );
+      return new Response(JSON.stringify({ error: "Target inválido. Usar pwa, mac o win." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
     }
 
     const githubToken = getEnv("GITHUB_DEPLOY_TOKEN");
@@ -126,6 +122,8 @@ serve(async (req) => {
     const repo = getEnv("GITHUB_REPO");
     const ref = Deno.env.get("GITHUB_REF") || "main";
     const workflowId = getWorkflowId(target);
+    const targetLabel = getTargetLabel(target);
+    const actionsUrl = `https://github.com/${owner}/${repo}/actions`;
 
     const githubUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`;
 
@@ -143,6 +141,25 @@ serve(async (req) => {
     if (!githubResponse.ok) {
       const detail = await githubResponse.text();
 
+      await adminClient.from("deploy_jobs").insert({
+        tenant_slug: "nossix",
+        target,
+        status: "failed",
+        workflow_id: workflowId,
+        github_owner: owner,
+        github_repo: repo,
+        github_ref: ref,
+        github_actions_url: actionsUrl,
+        triggered_by: user.id,
+        triggered_by_email: profile?.email || user.email || null,
+        message: `Deploy ${targetLabel} rechazado por GitHub.`,
+        error_message: detail,
+        raw_response: {
+          status: githubResponse.status,
+          detail
+        }
+      });
+
       return new Response(
         JSON.stringify({
           error: "GitHub rechazó el deploy.",
@@ -156,14 +173,37 @@ serve(async (req) => {
       );
     }
 
+    const { data: deployJob, error: deployJobError } = await adminClient
+      .from("deploy_jobs")
+      .insert({
+        tenant_slug: "nossix",
+        target,
+        status: "triggered",
+        workflow_id: workflowId,
+        github_owner: owner,
+        github_repo: repo,
+        github_ref: ref,
+        github_actions_url: actionsUrl,
+        triggered_by: user.id,
+        triggered_by_email: profile?.email || user.email || null,
+        message: `Deploy ${targetLabel} disparado correctamente.`
+      })
+      .select("id")
+      .maybeSingle();
+
+    if (deployJobError) {
+      console.error("deploy_jobs insert error", deployJobError);
+    }
+
     return new Response(
       JSON.stringify({
         ok: true,
+        id: deployJob?.id || null,
         target,
         workflow: workflowId,
         ref,
-        message: `Deploy ${target.toUpperCase()} disparado correctamente.`,
-        actions_url: `https://github.com/${owner}/${repo}/actions`
+        message: `Deploy ${targetLabel} disparado correctamente.`,
+        actions_url: actionsUrl
       }),
       {
         status: 200,

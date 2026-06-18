@@ -63,6 +63,11 @@ jobs:
             release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.zip.blockmap \
             ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/desktop/mac/
 
+       - name: Prepare Mac stable download
+        run: |
+          VERSION="${{ steps.package.outputs.version }}"
+          cp "release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.dmg" "release/NOSTUR-NOSSIX-mac-latest.dmg"
+
       - name: Deploy Mac manual download
         run: |
           VERSION="${{ steps.package.outputs.version }}"
@@ -70,10 +75,11 @@ jobs:
           rsync -avz \
             -e "ssh -i ~/.ssh/nostur_fastcomet_deploy" \
             release/NOSTUR-NOSSIX-${VERSION}-arm64-mac.dmg \
+            release/NOSTUR-NOSSIX-mac-latest.dmg \
             ${{ secrets.HOSTING_USER }}@${{ secrets.HOSTING_HOST }}:/home/jbaticac/nossix.nostur.com.ar/downloads/mac/
 
       - name: Done
         run: |
           echo "Mac release deployed:"
           echo "https://nossix.nostur.com.ar/desktop/mac/latest-mac.yml"
-          echo "https://nossix.nostur.com.ar/downloads/mac/NOSTUR-NOSSIX-${{ steps.package.outputs.version }}-arm64-mac.dmg"
+          echo "https://nossix.nostur.com.ar/downloads/mac/NOSTUR-NOSSIX-mac-latest.dmg"

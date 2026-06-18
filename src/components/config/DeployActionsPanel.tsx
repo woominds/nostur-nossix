@@ -1,8 +1,11 @@
 // src/components/config/DeployActionsPanel.tsx
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
+  CheckCircle2,
   CloudUpload,
+  ExternalLink,
   Loader2,
   MonitorDown,
   RefreshCcw,
@@ -11,11 +14,29 @@ import {
 import { supabase } from "../../lib/supabase";
 
 type DeployTarget = "pwa" | "mac" | "win";
+type DeployStatus = "triggered" | "running" | "success" | "failed";
 
 type DeployState = {
   loading: DeployTarget | null;
   message: string | null;
   error: string | null;
+};
+
+type DeployJob = {
+  id: string;
+  created_at: string;
+  updated_at: string | null;
+  tenant_slug: string;
+  target: DeployTarget;
+  status: DeployStatus;
+  workflow_id: string | null;
+  github_owner: string | null;
+  github_repo: string | null;
+  github_ref: string | null;
+  github_actions_url: string | null;
+  triggered_by_email: string | null;
+  message: string | null;
+  error_message: string | null;
 };
 
 const DEPLOY_OPTIONS: Array<{
@@ -44,12 +65,119 @@ const DEPLOY_OPTIONS: Array<{
   }
 ];
 
+function getTargetLabel(target: DeployTarget): string {
+  if (target === "pwa") return "PWA";
+  if (target === "mac") return "Mac";
+  return "Windows";
+}
+
+function getStatusLabel(status: DeployStatus): string {
+  if (status === "triggered") return "Disparado";
+  if (status === "running") return "Ejecutando";
+  if (status === "success") return "Exitoso";
+  return "Fallido";
+}
+
+function getStatusClasses(status: DeployStatus): string {
+  if (status === "failed") {
+    return "border-red-200 bg-red-50 text-red-700";
+  }
+
+  if (status === "success") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  if (status === "running") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+
+  return "border-amber-200 bg-amber-50 text-amber-700";
+}
+
+function formatDeployDate(value: string): string {
+  if (!value) return "Sin fecha";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "Sin fecha";
+
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
 export function DeployActionsPanel() {
   const [state, setState] = useState<DeployState>({
     loading: null,
     message: null,
     error: null
   });
+
+  const [deployJobs, setDeployJobs] = useState<DeployJob[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const lastDeployByTarget = useMemo(() => {
+    const map = new Map<DeployTarget, DeployJob>();
+
+    deployJobs.forEach((job) => {
+      if (!map.has(job.target)) {
+        map.set(job.target, job);
+      }
+    });
+
+    return map;
+  }, [deployJobs]);
+
+  async function loadDeployHistory() {
+    setHistoryLoading(true);
+    setHistoryError(null);
+
+    try {
+      const { data, error } = await supabase
+        .from("deploy_jobs")
+        .select(
+          [
+            "id",
+            "created_at",
+            "updated_at",
+            "tenant_slug",
+            "target",
+            "status",
+            "workflow_id",
+            "github_owner",
+            "github_repo",
+            "github_ref",
+            "github_actions_url",
+            "triggered_by_email",
+            "message",
+            "error_message"
+          ].join(",")
+        )
+        .order("created_at", { ascending: false })
+        .limit(8);
+
+      if (error) {
+        throw error;
+      }
+
+      setDeployJobs(((data || []) as unknown) as DeployJob[]);
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error ? error.message : "No se pudo cargar el historial de deploys."
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadDeployHistory();
+  }, []);
 
   async function triggerDeploy(target: DeployTarget) {
     if (state.loading) return;
@@ -86,12 +214,16 @@ export function DeployActionsPanel() {
         message: data?.message || "Deploy disparado correctamente.",
         error: null
       });
+
+      await loadDeployHistory();
     } catch (error) {
       setState({
         loading: null,
         message: null,
         error: error instanceof Error ? error.message : "No se pudo disparar el deploy."
       });
+
+      await loadDeployHistory();
     }
   }
 
@@ -129,6 +261,7 @@ export function DeployActionsPanel() {
           const Icon = option.icon;
           const loading = state.loading === option.target;
           const disabled = Boolean(state.loading);
+          const lastDeploy = lastDeployByTarget.get(option.target);
 
           return (
             <button
@@ -153,9 +286,140 @@ export function DeployActionsPanel() {
               <p className="mt-1 text-[11px] font-medium leading-relaxed text-[#64748b]">
                 {option.description}
               </p>
+
+              {lastDeploy ? (
+                <div className="mt-3 rounded-[12px] border border-black/10 bg-white px-2.5 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.12em] text-[#94a3b8]">
+                      Último
+                    </span>
+
+                    <span
+                      className={[
+                        "rounded-full border px-2 py-0.5 text-[10px] font-black",
+                        getStatusClasses(lastDeploy.status)
+                      ].join(" ")}
+                    >
+                      {getStatusLabel(lastDeploy.status)}
+                    </span>
+                  </div>
+
+                  <div className="mt-1 text-[11px] font-semibold text-[#64748b]">
+                    {formatDeployDate(lastDeploy.created_at)}
+                  </div>
+                </div>
+              ) : null}
             </button>
           );
         })}
+      </div>
+
+      <div className="mt-4 rounded-[18px] border border-black/10 bg-[#f8fafc] p-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 className="text-[13px] font-bold text-[#172033]">Últimos deploys</h4>
+            <p className="text-[11px] font-medium text-[#64748b]">
+              Auditoría local del tenant NOSSIX.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void loadDeployHistory()}
+            disabled={historyLoading}
+            className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-white px-2.5 text-[11px] font-bold text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-60"
+          >
+            <RefreshCcw size={13} className={historyLoading ? "animate-spin" : ""} />
+            Actualizar
+          </button>
+        </div>
+
+        {historyError ? (
+          <div className="rounded-[14px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-semibold text-red-700">
+            {historyError}
+          </div>
+        ) : null}
+
+        {!historyError && deployJobs.length === 0 ? (
+          <div className="rounded-[14px] border border-dashed border-black/15 bg-white px-3 py-4 text-center text-[12px] font-semibold text-[#94a3b8]">
+            Todavía no hay deploys registrados.
+          </div>
+        ) : null}
+
+        {deployJobs.length > 0 ? (
+          <div className="grid gap-2">
+            {deployJobs.map((job) => {
+              const failed = job.status === "failed";
+
+              return (
+                <div
+                  key={job.id}
+                  className="rounded-[14px] border border-black/10 bg-white px-3 py-2 shadow-sm"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div
+                        className={[
+                          "flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px]",
+                          failed ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+                        ].join(" ")}
+                      >
+                        {failed ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[12px] font-black text-[#172033]">
+                            {getTargetLabel(job.target)}
+                          </span>
+
+                          <span
+                            className={[
+                              "rounded-full border px-2 py-0.5 text-[10px] font-black",
+                              getStatusClasses(job.status)
+                            ].join(" ")}
+                          >
+                            {getStatusLabel(job.status)}
+                          </span>
+                        </div>
+
+                        <div className="mt-0.5 truncate text-[11px] font-semibold text-[#64748b]">
+                          {formatDeployDate(job.created_at)}
+                          {job.triggered_by_email ? ` · ${job.triggered_by_email}` : ""}
+                          {job.workflow_id ? ` · ${job.workflow_id}` : ""}
+                        </div>
+                      </div>
+                    </div>
+
+                    {job.github_actions_url ? (
+                      <a
+                        href={job.github_actions_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-[#eef6f8] px-2 text-[11px] font-bold text-[#4f7c90] transition hover:bg-[#dfeff3]"
+                      >
+                        <ExternalLink size={13} />
+                        Actions
+                      </a>
+                    ) : null}
+                  </div>
+
+                  {job.message ? (
+                    <div className="mt-2 text-[11px] font-semibold text-[#64748b]">
+                      {job.message}
+                    </div>
+                  ) : null}
+
+                  {job.error_message ? (
+                    <div className="mt-2 max-h-20 overflow-auto rounded-[12px] border border-red-200 bg-red-50 px-2.5 py-2 text-[10px] font-semibold text-red-700">
+                      {job.error_message}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       <p className="mt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#94a3b8]">
