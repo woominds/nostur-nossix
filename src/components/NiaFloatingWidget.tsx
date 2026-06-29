@@ -1,7 +1,17 @@
 // src/components/NiaFloatingWidget.tsx
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Mic, Send, Sparkles, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import {
+  Bot,
+  ChevronDown,
+  Mic,
+  RefreshCcw,
+  Send,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  X
+} from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 type NiaFloatingWidgetProps = {
@@ -9,17 +19,17 @@ type NiaFloatingWidgetProps = {
 };
 
 type NiaContext = {
-  source?: string;
-  module?: string;
-  action?: string;
+  source?: string | null;
+  module?: string | null;
+  action?: string | null;
 
-  conversation_id?: string;
-  conversacion_id?: string;
+  conversation_id?: string | null;
+  conversacion_id?: string | null;
 
-  wa_phone?: string;
-  contacto_id?: string;
-  contacto?: string;
-  contacto_nombre?: string;
+  wa_phone?: string | null;
+  contacto_id?: string | null;
+  contacto?: string | null;
+  contacto_nombre?: string | null;
   contacto_profile_name?: string | null;
 
   vendedor_id?: string | null;
@@ -46,7 +56,10 @@ type NiaContext = {
   cande_activa?: boolean;
   cande_handoff_requested_at?: string | null;
 
-  created_at?: string;
+  destino?: string | null;
+  origen?: string | null;
+
+  created_at?: string | null;
 };
 
 type ChatMessage = {
@@ -57,6 +70,41 @@ type ChatMessage = {
   audit_id?: string | null;
   feedback_rating?: "positive" | "negative" | null;
 };
+
+type OpportunityLite = {
+  id: string;
+  conversacion_id: string | null;
+  estado_id: string | null;
+  score: number | null;
+  datos: Record<string, unknown> | null;
+  manual_data?: Record<string, unknown> | null;
+  assigned_to: string | null;
+  cande_activa: boolean | null;
+  cande_handoff_requested_at?: string | null;
+  updated_at: string | null;
+  created_at: string | null;
+  nombre_contacto?: string | null;
+  telefono?: string | null;
+  email?: string | null;
+  notas?: string | null;
+};
+
+type PipelineEstadoLite = {
+  id: string;
+  nombre: string;
+  color: string | null;
+  orden: number | null;
+};
+
+const NIA_REFRESH_ACTIONS = [
+  "MOVER_PIPELINE",
+  "RECALIFICAR_OPORTUNIDAD",
+  "ACTUALIZAR_DATO_OPORTUNIDAD",
+  "ACTIVAR_CANDE",
+  "DESACTIVAR_CANDE",
+  "REPORTE_DIARIO_VENDEDORES",
+  "CAMBIAR_CONTEXTO_OPORTUNIDAD"
+];
 
 function isInternalUrl(activeUrl: string): boolean {
   return activeUrl.startsWith("internal://");
@@ -70,7 +118,7 @@ function shouldShowNiaFloatingWidget(activeUrl: string): boolean {
   /*
     Regla NOSTUR:
     - En LiveNos / Comunicaciones, NIA NO va como widget.
-      Ahí NIA debe aparecer como un chat más, siempre arriba.
+      Ahí NIA debe aparecer como un chat más o como panel interno.
     - El widget flotante solo queda en:
       Control IA, Panel NIA, Panel CANDE / Oportunidades.
   */
@@ -98,6 +146,19 @@ function shouldShowNiaFloatingWidget(activeUrl: string): boolean {
     url.includes("cande") ||
     url.includes("oportunidades")
   );
+}
+
+function cleanText(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function normalizeSearch(value: unknown): string {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getDefaultContextFromActiveUrl(activeUrl: string): NiaContext {
@@ -151,60 +212,301 @@ function getNiaConversationId(context: NiaContext | null): string | null {
   return context?.conversation_id || context?.conversacion_id || null;
 }
 
+function getNiaOpportunityId(context: NiaContext | null): string | null {
+  return context?.oportunidad_id || null;
+}
+
 function getNiaPassengerName(context: NiaContext | null): string {
   return (
     context?.contacto_nombre ||
     context?.contacto ||
     context?.contacto_profile_name ||
     context?.wa_phone ||
-    "conversación de LiveNos"
+    "sin oportunidad seleccionada"
   );
 }
 
-function formatContextValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "boolean") return value ? "Sí" : "No";
+function formatContextValue(value: unknown, fallback = "—"): string {
+  if (value === null || value === undefined) return fallback;
 
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text || fallback;
   }
 
-  return String(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "Sí" : "No";
+
+  return fallback;
+}
+
+function getContextData(context: NiaContext | null) {
+  const datos =
+    context?.oportunidad_datos && typeof context.oportunidad_datos === "object"
+      ? context.oportunidad_datos
+      : {};
+
+  const pasajero =
+    formatContextValue(context?.contacto_nombre, "") ||
+    formatContextValue(context?.contacto, "") ||
+    formatContextValue(datos.contacto_nombre, "") ||
+    formatContextValue(datos.pasajero, "") ||
+    formatContextValue(datos.nombre, "") ||
+    "Sin nombre";
+
+  const telefono =
+    formatContextValue(context?.wa_phone, "") ||
+    formatContextValue(datos.wa_phone, "") ||
+    formatContextValue(datos.telefono, "");
+
+  const destino =
+    formatContextValue(context?.destino, "") ||
+    formatContextValue(datos.destino, "") ||
+    formatContextValue(datos.lugar, "") ||
+    "sin definir";
+
+  const origenConfirmado =
+    formatContextValue(context?.origen, "") ||
+    formatContextValue(datos.origen, "") ||
+    formatContextValue(datos.origen_confirmado, "");
+
+  const origenSugerido = formatContextValue(datos.origen_sugerido, "");
+
+  const aeropuertoSugerido =
+    formatContextValue(datos.origen_sugerido_aeropuerto_nombre, "") ||
+    formatContextValue(datos.origen_sugerido_aeropuerto, "");
+
+  const origen = origenConfirmado
+    ? origenConfirmado
+    : origenSugerido
+      ? `${origenSugerido}${aeropuertoSugerido ? ` (${aeropuertoSugerido})` : ""} · sugerido, falta confirmar`
+      : "sin confirmar";
+
+  const fechas =
+    formatContextValue(datos.fechas_tentativas, "") ||
+    formatContextValue(datos.fecha_aproximada, "") ||
+    formatContextValue(datos.fecha, "") ||
+    formatContextValue(datos.fechas, "") ||
+    "sin definir";
+
+  const pasajeros =
+    formatContextValue(datos.cantidad_pasajeros, "") ||
+    formatContextValue(datos.pasajeros, "") ||
+    formatContextValue(datos.pax, "") ||
+    "sin definir";
+
+  const presupuesto =
+    formatContextValue(datos.presupuesto_aproximado, "") ||
+    formatContextValue(datos.presupuesto, "") ||
+    "sin definir";
+
+  const ultimoMensaje =
+    formatContextValue(context?.last_message_preview, "") ||
+    formatContextValue(datos.ultimo_mensaje, "");
+
+  const vendedor = formatContextValue(context?.vendedor_nombre, "sin asignar");
+  const estadoGestion = formatContextValue(context?.estado_gestion, "sin definir");
+  const estadoComercial = formatContextValue(context?.estado_comercial, "sin definir");
+  const score = formatContextValue(context?.oportunidad_score, "—");
+  const cande = context?.cande_activa ? "activa" : "pausada";
+
+  const faltantes: string[] = [];
+
+  if (!formatContextValue(datos.destino, "")) {
+    faltantes.push("Destino");
+  }
+
+  if (!origenConfirmado) {
+    faltantes.push("Confirmar origen / ciudad de salida");
+  }
+
+  if (
+    !formatContextValue(datos.fechas_tentativas, "") &&
+    !formatContextValue(datos.fecha_aproximada, "")
+  ) {
+    faltantes.push("Fechas tentativas");
+  }
+
+  if (!formatContextValue(datos.cantidad_pasajeros, "")) {
+    faltantes.push("Cantidad de pasajeros");
+  }
+
+  if (
+    !formatContextValue(datos.presupuesto_aproximado, "") &&
+    !formatContextValue(datos.presupuesto, "")
+  ) {
+    faltantes.push("Presupuesto aproximado");
+  }
+
+  return {
+    pasajero,
+    telefono,
+    vendedor,
+    estadoGestion,
+    estadoComercial,
+    destino,
+    origen,
+    fechas,
+    pasajeros,
+    presupuesto,
+    ultimoMensaje,
+    score,
+    cande,
+    faltantes
+  };
+}
+
+function getOpportunityData(opportunity: OpportunityLite | null | undefined) {
+  return {
+    ...(opportunity?.datos || {}),
+    ...(opportunity?.manual_data || {})
+  };
+}
+
+function getOpportunityValue(opportunity: OpportunityLite, keys: string[], fallback = "") {
+  const data = getOpportunityData(opportunity);
+
+  for (const key of keys) {
+    const value = data[key];
+
+    if (value === null || value === undefined) continue;
+
+    const text = String(value).trim();
+    if (text) return text;
+  }
+
+  return fallback;
+}
+
+function getOpportunityName(opportunity: OpportunityLite) {
+  return (
+    cleanText(opportunity.nombre_contacto) ||
+    getOpportunityValue(opportunity, [
+      "nombre",
+      "contacto_nombre",
+      "pasajero",
+      "nombre_pasajero",
+      "cliente",
+      "display_name",
+      "profile_name"
+    ]) ||
+    cleanText(opportunity.telefono) ||
+    "Sin nombre"
+  );
+}
+
+function getOpportunityPhone(opportunity: OpportunityLite) {
+  return (
+    cleanText(opportunity.telefono) ||
+    getOpportunityValue(opportunity, ["telefono", "wa_phone", "phone", "celular", "whatsapp"]) ||
+    ""
+  );
+}
+
+function getOpportunityDestino(opportunity: OpportunityLite) {
+  return getOpportunityValue(
+    opportunity,
+    ["destino", "destinos", "lugar", "ciudad_destino", "pais", "país"],
+    ""
+  );
+}
+
+function getOpportunityOrigen(opportunity: OpportunityLite) {
+  return getOpportunityValue(
+    opportunity,
+    ["origen", "ciudad_origen", "salida_desde", "origen_sugerido"],
+    ""
+  );
+}
+
+function getOpportunityFechas(opportunity: OpportunityLite) {
+  return getOpportunityValue(
+    opportunity,
+    ["fechas_tentativas", "fecha", "fechas", "mes", "cuando", "cuándo"],
+    ""
+  );
+}
+
+function buildContextFromOpportunity(
+  opportunity: OpportunityLite,
+  estados: PipelineEstadoLite[]
+): NiaContext {
+  const name = getOpportunityName(opportunity);
+  const phone = getOpportunityPhone(opportunity);
+  const estado = estados.find((item) => item.id === opportunity.estado_id) || null;
+
+  return {
+    source: "nia_widget_selector",
+    module: "oportunidades",
+    action: "context_update_from_selector",
+
+    conversation_id: opportunity.conversacion_id || null,
+    conversacion_id: opportunity.conversacion_id || null,
+
+    oportunidad_id: opportunity.id,
+    oportunidad_score: Number(opportunity.score || 0),
+    oportunidad_estado_id: opportunity.estado_id || null,
+    oportunidad_datos: opportunity.datos || null,
+
+    wa_phone: phone || null,
+    contacto_nombre: name,
+    contacto: name,
+    contacto_profile_name: name,
+
+    estado_comercial: estado?.nombre || null,
+    cande_activa: Boolean(opportunity.cande_activa),
+    cande_handoff_requested_at: opportunity.cande_handoff_requested_at || null,
+
+    destino: getOpportunityDestino(opportunity) || null,
+    origen: getOpportunityOrigen(opportunity) || null,
+
+    created_at: new Date().toISOString()
+  };
 }
 
 function buildNiaContextSummary(context: NiaContext | null): string {
-  if (!getNiaConversationId(context)) {
-    return "NIA abierta sin conversación seleccionada.";
+  if (!getNiaConversationId(context) && !getNiaOpportunityId(context)) {
+    return "NIA abierta sin conversación u oportunidad seleccionada.";
   }
 
+  const data = getContextData(context);
+
   return [
-    `Pasajero: ${getNiaPassengerName(context)}`,
-    `WhatsApp: ${formatContextValue(context?.wa_phone)}`,
-    `Vendedor: ${formatContextValue(context?.vendedor_nombre)}`,
-    `Estado gestión: ${formatContextValue(context?.estado_gestion)}`,
-    `Estado comercial: ${formatContextValue(context?.estado_comercial)}`,
-    `Último mensaje: ${formatContextValue(context?.last_message_preview)}`,
-    `Ventana 24h abierta: ${formatContextValue(context?.ventana_24h_abierta)}`,
-    `Score oportunidad: ${formatContextValue(context?.oportunidad_score)}`,
-    `Cande activa: ${formatContextValue(context?.cande_activa)}`,
-    `Datos oportunidad: ${formatContextValue(context?.oportunidad_datos)}`
-  ].join("\n");
+    `Pasajero: ${data.pasajero}`,
+    data.telefono ? `WhatsApp: ${data.telefono}` : null,
+    `Vendedor: ${data.vendedor}`,
+    `Estado gestión: ${data.estadoGestion}`,
+    `Estado comercial: ${data.estadoComercial}`,
+    "",
+    `Destino: ${data.destino}`,
+    `Origen: ${data.origen}`,
+    `Fechas: ${data.fechas}`,
+    `Pasajeros: ${data.pasajeros}`,
+    `Presupuesto: ${data.presupuesto}`,
+    "",
+    `Score: ${data.score}`,
+    `CANDE: ${data.cande}`,
+    data.ultimoMensaje ? `Último mensaje: “${data.ultimoMensaje}”` : null,
+    "",
+    "Faltantes detectados:",
+    data.faltantes.length > 0
+      ? data.faltantes.map((item) => `• ${item}`).join("\n")
+      : "• No detecto datos comerciales críticos faltantes."
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function getInitialMessages(context: NiaContext | null): ChatMessage[] {
-  if (getNiaConversationId(context)) {
+  if (getNiaConversationId(context) || getNiaOpportunityId(context)) {
     return [
       {
         id: crypto.randomUUID(),
         direction: "assistant",
-        text: `Estoy viendo el contexto real de LiveNos.\n\n${buildNiaContextSummary(
+        text: `Estoy viendo el contexto real de esta oportunidad.\n\n${buildNiaContextSummary(
           context
-        )}\n\nPodés pedirme, por ejemplo:\n• Resumí esta conversación.\n• Decime qué debería responder el vendedor.\n• Detectá si está caliente o fría.\n• Decime si conviene activar, pausar o derivar CANDE.`,
-        tool: "contexto_livenos",
+        )}\n\nPodés pedirme, por ejemplo:\n• Recalificá esta oportunidad.\n• Pasala a presupuestada / ganada / perdida / en gestión.\n• Activá o desactivá CANDE.\n• Cambiale el destino, origen, fechas, pasajeros o presupuesto.\n• Resumime la oportunidad.\n• Decime qué debería hacer el vendedor.`,
+        tool: "contexto_oportunidad",
         audit_id: null,
         feedback_rating: null
       }
@@ -217,12 +519,54 @@ function getInitialMessages(context: NiaContext | null): ChatMessage[] {
       direction: "assistant",
       text:
         context?.module && context.module !== "general"
-          ? `Estoy parada en el módulo ${context.module}.\n\nPodés pedirme un resumen, alertas, diagnóstico comercial o próximas acciones según esta pantalla.`
+          ? `Estoy parada en el módulo ${context.module}.\n\nPodés elegir una oportunidad arriba o pedirme un resumen, alertas, diagnóstico comercial o próximas acciones según esta pantalla.`
           : "Hola, soy NIA. Puedo ayudarte con oportunidades, conversaciones, reportes, alertas comerciales y acciones internas.",
       audit_id: null,
       feedback_rating: null
     }
   ];
+}
+
+function shouldDispatchRefresh(data: any) {
+  if (!data) return false;
+
+  if (data.action_executed === true) return true;
+
+  const action = String(data.action || data.result?.action || "").trim();
+
+  if (data.ok === true && NIA_REFRESH_ACTIONS.includes(action)) {
+    return true;
+  }
+
+  if (data.oportunidad_id && data.ok === true) {
+    return true;
+  }
+
+  return false;
+}
+
+function getAssistantText(data: any, error: any) {
+  return (
+    data?.text ||
+    data?.response ||
+    data?.message ||
+    data?.error ||
+    error?.message ||
+    "NIA no pudo responder en este momento."
+  );
+}
+
+function getAssistantTool(data: any, activeContext: NiaContext | null) {
+  if (data?.tool) return data.tool;
+  if (data?.action) return String(data.action).toLowerCase();
+
+  if (data?.action_executed) return "nia_action_livenos";
+
+  if (getNiaConversationId(activeContext) || getNiaOpportunityId(activeContext)) {
+    return "nia_context";
+  }
+
+  return "nia_chat";
 }
 
 export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
@@ -242,6 +586,12 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
   const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
+  const [opportunityOptions, setOpportunityOptions] = useState<OpportunityLite[]>([]);
+  const [pipelineEstados, setPipelineEstados] = useState<PipelineEstadoLite[]>([]);
+  const [opportunitiesLoading, setOpportunitiesLoading] = useState(false);
+  const [opportunitySelectOpen, setOpportunitySelectOpen] = useState(false);
+  const [opportunitySearch, setOpportunitySearch] = useState("");
+
   const openRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const audioRecorderRef = useRef<MediaRecorder | null>(null);
@@ -250,6 +600,29 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
   const visible = useMemo(() => {
     return shouldShowNiaFloatingWidget(activeUrl);
   }, [activeUrl]);
+
+  const filteredOpportunityOptions = useMemo(() => {
+    const search = normalizeSearch(opportunitySearch);
+
+    return opportunityOptions.filter((opportunity) => {
+      if (!search) return true;
+
+      const haystack = normalizeSearch(
+        [
+          getOpportunityName(opportunity),
+          getOpportunityPhone(opportunity),
+          opportunity.email,
+          getOpportunityDestino(opportunity),
+          getOpportunityOrigen(opportunity),
+          getOpportunityFechas(opportunity),
+          opportunity.score,
+          opportunity.estado_id
+        ].join(" ")
+      );
+
+      return haystack.includes(search);
+    });
+  }, [opportunityOptions, opportunitySearch]);
 
   useEffect(() => {
     openRef.current = open;
@@ -264,6 +637,51 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
         });
       }, 50);
     });
+  }
+
+  async function loadOpportunityOptions() {
+    setOpportunitiesLoading(true);
+
+    const [oppRes, estadosRes] = await Promise.all([
+      supabase
+        .from("lead_oportunidades")
+        .select(
+          [
+            "id",
+            "conversacion_id",
+            "estado_id",
+            "score",
+            "datos",
+            "manual_data",
+            "assigned_to",
+            "cande_activa",
+            "cande_handoff_requested_at",
+            "updated_at",
+            "created_at",
+            "nombre_contacto",
+            "telefono",
+            "email",
+            "notas"
+          ].join(",")
+        )
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .limit(300),
+
+      supabase
+        .from("pipeline_estados")
+        .select("id,nombre,color,orden")
+        .order("orden", { ascending: true })
+    ]);
+
+    if (!oppRes.error) {
+      setOpportunityOptions((oppRes.data || []) as unknown as OpportunityLite[]);
+    }
+
+    if (!estadosRes.error) {
+      setPipelineEstados((estadosRes.data || []) as unknown as PipelineEstadoLite[]);
+    }
+
+    setOpportunitiesLoading(false);
   }
 
   useEffect(() => {
@@ -285,6 +703,12 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
     if (!visible && open) {
       setOpen(false);
     }
+  }, [visible, open]);
+
+  useEffect(() => {
+    if (!visible || !open) return;
+
+    void loadOpportunityOptions();
   }, [visible, open]);
 
   function readContextFromStorage(options: { resetMessages?: boolean } = {}) {
@@ -325,18 +749,12 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
     if (raw) {
       try {
         const stored = JSON.parse(raw) as NiaContext;
-
-        /*
-          El contexto de LiveNos puede quedar guardado en localStorage.
-          Pero el widget ya no debe abrirse desde LiveNos. Si se abre desde
-          Control IA / NIA / CANDE / Oportunidades, usamos contexto de pantalla.
-        */
-        const storedHasConversation = Boolean(getNiaConversationId(stored));
+        const storedHasContext = Boolean(getNiaConversationId(stored) || getNiaOpportunityId(stored));
         const isWidgetAllowedHere = shouldShowNiaFloatingWidget(activeUrl);
 
-        if (storedHasConversation && isWidgetAllowedHere) {
-          setContext(screenContext);
-          setMessages(getInitialMessages(screenContext));
+        if (storedHasContext && isWidgetAllowedHere && activeUrl.includes("oportunidades")) {
+          setContext(stored);
+          setMessages(getInitialMessages(stored));
           setOpen(true);
           return;
         }
@@ -352,6 +770,50 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
 
   function closeChat() {
     setOpen(false);
+  }
+
+  function updateNiaContext(
+    nextContext: NiaContext,
+    options: { resetMessages?: boolean; announce?: boolean } = {}
+  ) {
+    setContext(nextContext);
+    window.localStorage.setItem("nostur_nia_context", JSON.stringify(nextContext));
+
+    window.dispatchEvent(
+      new CustomEvent("nostur:nia-context-updated", {
+        detail: nextContext
+      })
+    );
+
+    if (options.resetMessages) {
+      setMessages(getInitialMessages(nextContext));
+    }
+
+    if (options.announce) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          direction: "assistant",
+          text: `Listo. Ahora estoy trabajando con ${getNiaPassengerName(nextContext)}.`,
+          tool: "contexto_oportunidad",
+          audit_id: null,
+          feedback_rating: null
+        }
+      ]);
+    }
+  }
+
+  function selectOpportunityContext(opportunity: OpportunityLite) {
+    const nextContext = buildContextFromOpportunity(opportunity, pipelineEstados);
+
+    updateNiaContext(nextContext, {
+      resetMessages: true,
+      announce: false
+    });
+
+    setOpportunitySelectOpen(false);
+    setOpportunitySearch("");
   }
 
   function openFeedbackModal(message: ChatMessage, rating: "positive" | "negative") {
@@ -464,19 +926,50 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
   }
 
   function dispatchNiaActionExecuted(data: any, source: "nia" | "nia_audio") {
-    if (!data?.action_executed) return;
+    if (data?.context_update) {
+      updateNiaContext(data.context_update, {
+        resetMessages: true,
+        announce: false
+      });
+    }
+
+    if (!shouldDispatchRefresh(data)) return;
+
+    const action = String(data?.action || data?.result?.action || data?.tool || "").trim();
+
+    const detail = {
+      source,
+      tool: data?.tool || action || null,
+      action,
+      conversation_id: data?.conversation_id || data?.result?.conversation_id || null,
+      conversacion_id: data?.conversation_id || data?.result?.conversation_id || null,
+      oportunidad_id: data?.oportunidad_id || data?.result?.oportunidad_id || null,
+      action_result: data?.action_result || data?.result || null,
+      result: data?.result || null,
+      ok: data?.ok === true,
+      code_version: data?.code_version || null,
+      created_at: new Date().toISOString()
+    };
 
     window.dispatchEvent(
       new CustomEvent("nostur:nia-action-executed", {
-        detail: {
-          source,
-          tool: data?.tool || null,
-          conversation_id: data?.conversation_id || null,
-          action_result: data?.action_result || null,
-          created_at: new Date().toISOString()
-        }
+        detail
       })
     );
+
+    window.dispatchEvent(
+      new CustomEvent("nostur:oportunidades-refresh", {
+        detail
+      })
+    );
+
+    window.dispatchEvent(
+      new CustomEvent("nostur:livenos-refresh", {
+        detail
+      })
+    );
+
+    void loadOpportunityOptions();
   }
 
   async function handleSend() {
@@ -500,29 +993,26 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
       const { data, error } = await supabase.functions.invoke("nia-chat", {
         body: {
           message: clean,
+          text: clean,
           context: activeContext,
+
           conversation_id: getNiaConversationId(activeContext),
           conversacion_id: getNiaConversationId(activeContext),
-          source: "nia_floating_widget"
+
+          oportunidad_id: getNiaOpportunityId(activeContext),
+          opportunity_id: getNiaOpportunityId(activeContext),
+
+          source: "nia_floating_widget",
+          module: activeContext?.module || "oportunidades"
         }
       });
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
         direction: "assistant",
-        text:
-          data?.text ||
-          data?.error ||
-          error?.message ||
-          "NIA no pudo responder en este momento.",
-        tool:
-          data?.tool ||
-          (data?.action_executed
-            ? "nia_action_livenos"
-            : getNiaConversationId(activeContext)
-              ? "nia_livenos_context"
-              : "nia_chat"),
-        audit_id: data?.audit_id || null,
+        text: getAssistantText(data, error),
+        tool: getAssistantTool(data, activeContext),
+        audit_id: data?.audit_id || data?.interaction_id || null,
         feedback_rating: null
       };
 
@@ -637,29 +1127,26 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
         body: {
           message: transcribedText,
           text: transcribedText,
+          transcription: transcribedText,
           context: activeContext,
+
           conversation_id: getNiaConversationId(activeContext),
           conversacion_id: getNiaConversationId(activeContext),
-          source: "nia_floating_widget_audio"
+
+          oportunidad_id: getNiaOpportunityId(activeContext),
+          opportunity_id: getNiaOpportunityId(activeContext),
+
+          source: "nia_floating_widget_audio",
+          module: activeContext?.module || "oportunidades"
         }
       });
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
         direction: "assistant",
-        text:
-          data?.text ||
-          data?.error ||
-          error?.message ||
-          "NIA no pudo responder en este momento.",
-        tool:
-          data?.tool ||
-          (data?.action_executed
-            ? "nia_action_livenos"
-            : getNiaConversationId(activeContext)
-              ? "nia_livenos_context"
-              : "nia_chat"),
-        audit_id: data?.audit_id || null,
+        text: getAssistantText(data, error),
+        tool: getAssistantTool(data, activeContext),
+        audit_id: data?.audit_id || data?.interaction_id || null,
         feedback_rating: null
       };
 
@@ -774,12 +1261,10 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
       const customEvent = event as CustomEvent<NiaContext | undefined>;
 
       if (customEvent.detail) {
-        window.localStorage.setItem("nostur_nia_context", JSON.stringify(customEvent.detail));
-        setContext(customEvent.detail);
-
-        if (!openRef.current) {
-          setMessages(getInitialMessages(customEvent.detail));
-        }
+        updateNiaContext(customEvent.detail, {
+          resetMessages: !openRef.current,
+          announce: false
+        });
       } else if (!openRef.current) {
         readContextFromStorage({ resetMessages: true });
       }
@@ -845,7 +1330,7 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
             tabIndex={-1}
           />
 
-          <aside className="absolute bottom-4 right-4 top-4 flex w-[410px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[28px] border border-white/30 bg-white shadow-2xl">
+          <aside className="absolute bottom-4 right-4 top-4 flex w-[430px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[28px] border border-white/30 bg-white shadow-2xl">
             <header className="shrink-0 bg-gradient-to-r from-[#ff2f76] to-[#8b2cff] px-4 py-3 text-white">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -871,38 +1356,131 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
             </header>
 
             <div className="shrink-0 border-b border-black/10 bg-white px-4 py-3">
-              <div className="text-sm font-black text-[#dc1748]">
-                ✨ Pedile a NIA un resumen de tus oportunidades
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-black text-[#dc1748]">
+                  ✨ Contexto de trabajo
+                </div>
+
+                <button
+                  type="button"
+                  onClick={loadOpportunityOptions}
+                  disabled={opportunitiesLoading}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#f8fafc] text-[#64748b] ring-1 ring-black/10 hover:bg-[#f1f5f9] disabled:opacity-50"
+                  title="Actualizar oportunidades"
+                >
+                  <RefreshCcw size={14} className={opportunitiesLoading ? "animate-spin" : ""} />
+                </button>
               </div>
 
-              {context ? (
-                <div className="mt-2 rounded-2xl border border-purple-100 bg-purple-50 px-3 py-2 text-xs font-bold text-[#5b21b6]">
-                  {getNiaConversationId(context) ? (
-                    <>
-                      <div className="font-black">
-                        Contexto activo: {getNiaPassengerName(context)}
-                      </div>
+              <div className="relative mt-3">
+                <button
+                  type="button"
+                  onClick={() => setOpportunitySelectOpen((current) => !current)}
+                  className="flex w-full items-center justify-between gap-3 rounded-2xl border border-purple-100 bg-purple-50 px-3 py-2.5 text-left text-xs font-bold text-[#5b21b6] shadow-sm transition hover:border-purple-200 hover:bg-purple-50/80"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] font-black">
+                      {getNiaOpportunityId(context)
+                        ? `Contexto activo: ${getNiaPassengerName(context)}`
+                        : "Elegir oportunidad para NIA"}
+                    </span>
 
-                      <div className="mt-1 text-[11px] leading-relaxed text-[#6d28d9]">
-                        WhatsApp: {context?.wa_phone || "—"} · Score:{" "}
-                        {context?.oportunidad_score ?? "—"} · CANDE:{" "}
-                        {context?.cande_activa ? "activa" : "pausada"} · 24h:{" "}
-                        {context?.ventana_24h_abierta ? "abierta" : "cerrada"}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="font-black">
-                        Contexto activo: {context.module || "general"}
-                      </div>
+                    <span className="mt-1 block truncate text-[11px] leading-relaxed text-[#6d28d9]">
+                      {getNiaOpportunityId(context)
+                        ? `WhatsApp: ${context?.wa_phone || "—"} · Score: ${
+                            context?.oportunidad_score ?? "—"
+                          } · CANDE: ${context?.cande_activa ? "activa" : "pausada"}`
+                        : "Seleccioná una oportunidad para que NIA trabaje con ese contexto."}
+                    </span>
+                  </span>
 
-                      <div className="mt-1 text-[11px] leading-relaxed text-[#6d28d9]">
-                        NIA está parada en esta pantalla, sin conversación puntual seleccionada.
-                      </div>
-                    </>
-                  )}
-                </div>
-              ) : null}
+                  <ChevronDown
+                    size={16}
+                    className={[
+                      "shrink-0 transition",
+                      opportunitySelectOpen ? "rotate-180" : ""
+                    ].join(" ")}
+                  />
+                </button>
+
+                {opportunitySelectOpen ? (
+                  <div className="absolute left-0 right-0 top-[68px] z-[980] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl">
+                    <div className="border-b border-black/10 p-2">
+                      <input
+                        value={opportunitySearch}
+                        onChange={(event) => setOpportunitySearch(event.target.value)}
+                        placeholder="Buscar pasajero, teléfono o destino..."
+                        autoFocus
+                        className="h-9 w-full rounded-xl border border-black/10 bg-[#f8fafc] px-3 text-[12px] font-semibold text-[#172033] outline-none placeholder:text-[#94a3b8] focus:border-[#8b2cff]"
+                      />
+                    </div>
+
+                    <div className="max-h-[270px] overflow-auto p-2">
+                      {opportunitiesLoading ? (
+                        <div className="flex items-center gap-2 rounded-xl px-3 py-3 text-xs font-bold text-[#64748b]">
+                          <Sparkles size={14} className="animate-pulse" />
+                          Cargando oportunidades...
+                        </div>
+                      ) : filteredOpportunityOptions.length === 0 ? (
+                        <div className="rounded-xl px-3 py-3 text-xs font-bold text-[#94a3b8]">
+                          Sin oportunidades.
+                        </div>
+                      ) : (
+                        filteredOpportunityOptions.map((opportunity) => {
+                          const active = getNiaOpportunityId(context) === opportunity.id;
+                          const estado = pipelineEstados.find((item) => item.id === opportunity.estado_id);
+                          const name = getOpportunityName(opportunity);
+                          const phone = getOpportunityPhone(opportunity);
+                          const destino = getOpportunityDestino(opportunity);
+                          const fechas = getOpportunityFechas(opportunity);
+                          const score = Number(opportunity.score || 0);
+
+                          return (
+                            <button
+                              key={opportunity.id}
+                              type="button"
+                              onClick={() => selectOpportunityContext(opportunity)}
+                              className={[
+                                "flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition",
+                                active
+                                  ? "bg-purple-50 text-[#5b21b6] ring-1 ring-purple-100"
+                                  : "text-[#172033] hover:bg-[#f8fafc]"
+                              ].join(" ")}
+                            >
+                              <span
+                                className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
+                                style={{ backgroundColor: estado?.color || "#8b2cff" }}
+                              />
+
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[13px] font-black">
+                                  {name}
+                                </span>
+
+                                <span className="mt-0.5 block truncate text-[11px] font-semibold text-[#64748b]">
+                                  {phone || "Sin teléfono"} · Score {score}
+                                  {estado?.nombre ? ` · ${estado.nombre}` : ""}
+                                </span>
+
+                                <span className="mt-0.5 block truncate text-[11px] font-normal text-[#94a3b8]">
+                                  {destino || "Sin destino"}
+                                  {fechas ? ` · ${fechas}` : ""}
+                                </span>
+                              </span>
+
+                              {active ? (
+                                <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">
+                                  Activa
+                                </span>
+                              ) : null}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
 
               {feedbackError && !feedbackModalOpen ? (
                 <div className="mt-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
@@ -975,6 +1553,17 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
                 );
               })}
 
+              {sending || audioSending ? (
+                <div className="flex justify-start">
+                  <div className="rounded-[22px] rounded-bl-md border border-black/10 bg-white px-4 py-3 text-sm font-semibold leading-relaxed text-[#64748b] shadow-sm">
+                    <span className="inline-flex items-center gap-2">
+                      <Sparkles size={15} className="animate-pulse text-[#8b2cff]" />
+                      NIA pensando...
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
               <div ref={messagesEndRef} />
             </div>
 
@@ -1011,7 +1600,11 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
                     }
                   }}
                   rows={1}
-                  placeholder="Hablale a NIA..."
+                  placeholder={
+                    getNiaOpportunityId(context)
+                      ? `Hablale a NIA sobre ${getNiaPassengerName(context)}...`
+                      : "Elegí una oportunidad o hablale a NIA..."
+                  }
                   className="max-h-28 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm font-semibold text-[#172033] outline-none placeholder:text-[#94a3b8]"
                 />
 
@@ -1038,9 +1631,7 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
         <div className="nostur-no-drag fixed inset-0 z-[1000] flex items-center justify-center bg-[#0f172a]/45 p-4 backdrop-blur-sm">
           <div className="w-full max-w-[460px] overflow-hidden rounded-[28px] bg-white shadow-2xl ring-1 ring-black/10">
             <div className="border-b border-black/10 px-5 py-4">
-              <div className="text-base font-black text-[#142033]">
-                Feedback para NIA
-              </div>
+              <div className="text-base font-black text-[#142033]">Feedback para NIA</div>
 
               <div className="mt-1 text-xs font-bold text-[#64748b]">
                 Esto ayuda a mejorar las respuestas y queda guardado en auditoría.
@@ -1121,3 +1712,5 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
     </>
   );
 }
+
+export default NiaFloatingWidget;

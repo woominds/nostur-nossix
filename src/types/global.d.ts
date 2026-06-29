@@ -9,6 +9,10 @@ declare global {
       openExternal: (url: string) => Promise<boolean>;
       setMainZoom: (zoomFactor: number) => Promise<boolean>;
 
+      onPasswordResetLink: (
+        callback: (payload: { url?: string }) => void
+      ) => () => void;
+
       openDownloadedFile: (filePath: string) => Promise<boolean>;
       showDownloadedFile: (filePath: string) => Promise<boolean>;
 
@@ -23,9 +27,9 @@ declare global {
         kind: "nuevo" | "gestion" | "cande_transfer";
       }) => Promise<boolean>;
 
-     onNewTabFromMain: (
-  callback: (payload: string | { url?: string; title?: string; appId?: string }) => void
-) => () => void;
+      onNewTabFromMain: (
+        callback: (payload: string | { url?: string; title?: string; appId?: string }) => void
+      ) => () => void;
 
       onOpenConversationFromNotification: (
         callback: (payload: { conversationId: string }) => void

@@ -10,6 +10,8 @@ export type ProfileLite = {
   rol: string;
   color: string;
   activo: boolean;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
 };
 
 export type CatalogItem = {
@@ -237,8 +239,9 @@ type CarritosState = {
   saving: boolean;
   error: string | null;
 
-  currentProfile: ProfileLite | null;
-  canManageCarritos: boolean;
+ currentProfile: ProfileLite | null;
+canManageCarritos: boolean;
+sellerDefaultApplied: boolean;
 
   carritos: Carrito[];
   pagosComerciales: PagoComercial[];
@@ -415,18 +418,24 @@ async function getCurrentUserId(): Promise<string | null> {
 function canProfileManage(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
         profile.rol === "gerencia" ||
-        profile.rol === "administracion")
+        profile.rol === "administracion" ||
+        profile.rol === "soporte")
   );
 }
 
 function canProfileUse(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
         profile.rol === "gerencia" ||
         profile.rol === "administracion" ||
+        profile.rol === "soporte" ||
         profile.rol === "vendedor")
   );
 }
@@ -510,8 +519,9 @@ export const useCarritosStore = create<CarritosState>((set, get) => ({
   saving: false,
   error: null,
 
-  currentProfile: null,
-  canManageCarritos: false,
+currentProfile: null,
+canManageCarritos: false,
+sellerDefaultApplied: false,
 
   carritos: [],
   pagosComerciales: [],
@@ -585,54 +595,72 @@ export const useCarritosStore = create<CarritosState>((set, get) => ({
       return;
     }
 
-    const filters = get().filters;
-    const periodRange =
-      filters.periodMode === "mes"
-        ? getMonthRange(filters.month)
-        : {
-            desde: filters.desde,
-            hasta: filters.hasta
-          };
+ const currentFilters = get().filters;
+const sellerDefaultApplied = get().sellerDefaultApplied;
 
-    let carritosQuery = supabase
-      .from("carritos")
-      .select("*, clientes(*)")
-      .gte("fecha_venta", periodRange.desde)
-      .lte("fecha_venta", periodRange.hasta)
-      .order("fecha_venta", { ascending: false })
-      .order("created_at", { ascending: false });
+let effectiveFilters = currentFilters;
 
-    if (!canManageCarritos) {
-      carritosQuery = carritosQuery.eq("vendedor_id", currentUserId);
-    }
+if (!sellerDefaultApplied) {
+  const role = String(currentProfile?.rol || "").toLowerCase();
 
-    if (filters.estado !== "todos") {
-      carritosQuery = carritosQuery.eq("estado", filters.estado);
-    }
+  const defaultVendedorId = role === "vendedor" ? currentUserId : "todos";
 
-    if (filters.vendedorId !== "todos" && canManageCarritos) {
-      carritosQuery = carritosQuery.eq("vendedor_id", filters.vendedorId);
-    }
+  effectiveFilters = {
+    ...currentFilters,
+    vendedorId: defaultVendedorId
+  };
 
-    if (filters.sucursalId !== "todos") {
-      carritosQuery = carritosQuery.eq("sucursal_id", filters.sucursalId);
-    }
+  set({
+    filters: effectiveFilters,
+    sellerDefaultApplied: true
+  });
+}
 
-    if (filters.riesgo === "riesgo") {
-      carritosQuery = carritosQuery.eq("riesgo", true);
-    }
+const periodRange =
+  effectiveFilters.periodMode === "mes"
+    ? getMonthRange(effectiveFilters.month)
+    : {
+        desde: effectiveFilters.desde,
+        hasta: effectiveFilters.hasta
+      };
 
-    if (filters.riesgo === "normal") {
-      carritosQuery = carritosQuery.eq("riesgo", false);
-    }
+let carritosQuery = supabase
+  .from("carritos")
+  .select("*, clientes(*)")
+  .gte("fecha_venta", periodRange.desde)
+  .lte("fecha_venta", periodRange.hasta)
+  .order("fecha_venta", { ascending: false })
+  .order("created_at", { ascending: false });
 
-    if (filters.activo === "activos") {
-      carritosQuery = carritosQuery.eq("activo", true);
-    }
+if (effectiveFilters.estado !== "todos") {
+  carritosQuery = carritosQuery.eq("estado", effectiveFilters.estado);
+}
 
-    if (filters.activo === "inactivos") {
-      carritosQuery = carritosQuery.eq("activo", false);
-    }
+if (effectiveFilters.vendedorId !== "todos") {
+  carritosQuery = carritosQuery.eq("vendedor_id", effectiveFilters.vendedorId);
+}
+
+  
+
+  if (effectiveFilters.sucursalId !== "todos") {
+  carritosQuery = carritosQuery.eq("sucursal_id", effectiveFilters.sucursalId);
+}
+
+if (effectiveFilters.riesgo === "riesgo") {
+  carritosQuery = carritosQuery.eq("riesgo", true);
+}
+
+if (effectiveFilters.riesgo === "normal") {
+  carritosQuery = carritosQuery.eq("riesgo", false);
+}
+
+if (effectiveFilters.activo === "activos") {
+  carritosQuery = carritosQuery.eq("activo", true);
+}
+
+if (effectiveFilters.activo === "inactivos") {
+  carritosQuery = carritosQuery.eq("activo", false);
+}
 
     const [
       carritosRes,
@@ -654,8 +682,8 @@ export const useCarritosStore = create<CarritosState>((set, get) => ({
       supabase
         .from("profiles")
         .select("*")
-        .in("rol", ["vendedor", "administracion", "gerencia", "admin_general"])
-        .eq("activo", true)
+  .in("rol", ["vendedor", "administracion", "gerencia", "admin_general"])
+          .eq("activo", true)
         .order("nombre")
     ]);
 
@@ -1053,10 +1081,7 @@ export const useCarritosStore = create<CarritosState>((set, get) => ({
       return false;
     }
 
-    if (!canManageCarritos && carritoActual.vendedor_id !== currentUserId) {
-      set({ saving: false, error: "No tenés permiso para editar este carrito." });
-      return false;
-    }
+   
 
     const totals = calculateMobileTotals(input);
 
@@ -1405,10 +1430,12 @@ export const useCarritosStore = create<CarritosState>((set, get) => ({
     }));
   },
 
-  resetFilters: () => {
-    set({ filters: getDefaultFilters() });
-  },
-
+resetFilters: () => {
+  set({
+    filters: getDefaultFilters(),
+    sellerDefaultApplied: false
+  });
+},
   selectCarrito: (id) => {
     set({ selectedCarritoId: id });
   },

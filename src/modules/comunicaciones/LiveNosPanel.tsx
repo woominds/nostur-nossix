@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OportunidadDetalleModal } from "./OportunidadDetalleModal";
+import { LiveNosAutomationsModal } from "./LiveNosAutomationsModal";
+import { NiaInternalChat } from "./liveNos/NiaInternalChat";
 import {
   Archive,
   Bot,
@@ -38,6 +40,7 @@ import {
   HeaderButton,
   LiveNosSidebar,
   MessageStatusIcon,
+  NIA_INTERNAL_ID,
   RightPanelTabs,
   StatusPill,
   getNotaVisual
@@ -136,6 +139,76 @@ function getScoreTextColor(score: number): string {
 function getProfileFullName(profile?: ProfileLite | null): string {
   if (!profile) return "Sin asignar";
   return `${profile.nombre || ""} ${profile.apellido || ""}`.trim() || profile.email || "Usuario";
+}
+
+function canSeeAllLiveNosConversations(profile?: ProfileLite | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
+  return Boolean(
+    profile?.is_super_admin ||
+      profile?.is_support_user ||
+      role === "gerencia" ||
+      role === "admin_general" ||
+      role === "administracion" ||
+      role === "soporte"
+  );
+}
+
+function isConversationCollaborator(
+  conv: ConversationVM,
+  userId: string | null
+): boolean {
+  if (!userId) return false;
+
+  return (conv.colaboradores || []).some(
+    (colaborador) => colaborador.profile_id === userId
+  );
+}
+
+function canUserSeeConversation(params: {
+  conv: ConversationVM;
+  userId: string | null;
+  currentProfile: ProfileLite | null;
+}): boolean {
+  const { conv, userId, currentProfile } = params;
+
+  if (canSeeAllLiveNosConversations(currentProfile)) return true;
+  if (!userId) return false;
+
+  const isOwner = conv.assigned_to === userId;
+  const isCollaborator = isConversationCollaborator(conv, userId);
+
+  if (isOwner || isCollaborator) return true;
+
+  const isUnassigned =
+    !conv.assigned_to &&
+    !conv.closed_at &&
+    !conv.archived_at &&
+    !conv.deleted_at &&
+    (
+      conv.estado_gestion === "sin_atender" ||
+      conv.estado_gestion === "espera_agente" ||
+      conv.estado_gestion === null ||
+      conv.estado_gestion === undefined
+    );
+
+  return isUnassigned;
+}
+
+function canUserWriteToClient(params: {
+  conv: ConversationVM | null;
+  userId: string | null;
+}): boolean {
+  const { conv, userId } = params;
+
+  if (!conv || !userId) return false;
+
+  return Boolean(
+    conv.assigned_to === userId &&
+      !conv.closed_at &&
+      !conv.archived_at &&
+      !conv.deleted_at
+  );
 }
 
 function LiveNosProfileSelect({
@@ -239,8 +312,10 @@ function LiveNosProfileSelect({
 export function LiveNosPanel() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [automationsOpen, setAutomationsOpen] = useState(false);
 
-  const [activeInbox, setActiveInbox] = useState<InboxKey>("en_gestion");
+  const [activeInbox, setActiveInbox] = useState<InboxKey>("sin_atender");
+  const [sellerFilterId, setSellerFilterId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -303,17 +378,20 @@ export function LiveNosPanel() {
 
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  
+const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
- const selectedIdRef = useRef<string | null>(null);
-const pendingScrollMessageIdRef = useRef<string | null>(null);
-const reloadTimerRef = useRef<number | null>(null);
-const audioRecorderRef = useRef<MediaRecorder | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const pendingScrollMessageIdRef = useRef<string | null>(null);
+  const reloadTimerRef = useRef<number | null>(null);
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
 
   const selectedConversation = useMemo(() => {
+    if (selectedId === NIA_INTERNAL_ID) return null;
     return conversaciones.find((item) => item.id === selectedId) || null;
   }, [conversaciones, selectedId]);
 
@@ -321,6 +399,24 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
   const selectedContacto = selectedConversation?.contacto || null;
   const selectedVendedor = selectedConversation?.vendedor || null;
   const selectedColaboradores = selectedConversation?.colaboradores || [];
+  const niaInternalSelected = selectedId === NIA_INTERNAL_ID;
+  const currentProfile = useMemo(() => {
+  if (!currentUserId) return null;
+  return profiles.find((profile) => profile.id === currentUserId) || null;
+}, [currentUserId, profiles]);
+
+const canSeeAllConversations = useMemo(() => {
+  return canSeeAllLiveNosConversations(currentProfile);
+}, [currentProfile]);
+
+const canFilterBySeller = canSeeAllConversations;
+const canWriteToClient = canUserWriteToClient({
+  conv: selectedConversation,
+  userId: currentUserId
+});
+
+const clientWriteBlocked = Boolean(selectedConversation) && !canWriteToClient;
+
   const [opportunityModalOpen, setOpportunityModalOpen] = useState(false);
 
   const timeline = useMemo<TimelineItem[]>(() => {
@@ -348,59 +444,113 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
     });
   }, [mensajes, notas]);
 
-  const filteredConversations = useMemo(() => {
-    const clean = search.trim().toLowerCase();
+const filteredConversations = useMemo(() => {
+  const clean = search.trim().toLowerCase();
 
-    return conversaciones
-      .filter((conv) => filterByInbox(conv, activeInbox))
-      .filter((conv) => {
-        if (!clean) return true;
-
-        const haystack = [
-          conv.wa_phone,
-          conv.last_message_preview,
-          conv.titulo,
-          conv.subject,
-          conv.contacto?.display_name,
-          conv.contacto?.profile_name,
-          conv.vendedor?.nombre,
-          conv.vendedor?.apellido,
-          conv.oportunidad?.datos?.destino,
-          conv.oportunidad?.datos?.origen,
-          conv.oportunidad?.datos?.origen_sugerido,
-          conv.oportunidad?.datos?.fechas_tentativas,
-          conv.oportunidad?.datos?.cantidad_pasajeros,
-          conv.oportunidad?.datos?.presupuesto_aproximado
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        return haystack.includes(clean);
+  return conversaciones
+    .filter((conv) =>
+      canUserSeeConversation({
+        conv,
+        userId: currentUserId,
+        currentProfile
       })
-      .sort((a, b) => {
-        const aDate = new Date(a.last_message_at || a.updated_at || a.created_at).getTime();
-        const bDate = new Date(b.last_message_at || b.updated_at || b.created_at).getTime();
-        return bDate - aDate;
-      });
-  }, [activeInbox, conversaciones, search]);
+    )
+    .filter((conv) => filterByInbox(conv, activeInbox))
+    .filter((conv) => {
+      if (!canSeeAllConversations) return true;
+      if (!sellerFilterId) return true;
 
-  const inboxCounts = useMemo(() => {
-    return [
-      "sin_atender",
-      "en_gestion",
-      "cande",
-      "colaboracion",
-      "cerradas",
-      "archivadas",
-      "eliminadas"
-    ].reduce<Record<InboxKey, number>>((acc, inbox) => {
-      acc[inbox as InboxKey] = conversaciones.filter((conv) =>
-        filterByInbox(conv, inbox as InboxKey)
-      ).length;
-      return acc;
-    }, {} as Record<InboxKey, number>);
-  }, [conversaciones]);
+      return conv.assigned_to === sellerFilterId;
+    })
+    .filter((conv) => {
+      if (!clean) return true;
+
+      const haystack = [
+        conv.wa_phone,
+        conv.last_message_preview,
+        conv.titulo,
+        conv.subject,
+        conv.contacto?.display_name,
+        conv.contacto?.profile_name,
+        conv.vendedor?.nombre,
+        conv.vendedor?.apellido,
+        conv.oportunidad?.datos?.destino,
+        conv.oportunidad?.datos?.origen,
+        conv.oportunidad?.datos?.origen_sugerido,
+        conv.oportunidad?.datos?.fechas_tentativas,
+        conv.oportunidad?.datos?.cantidad_pasajeros,
+        conv.oportunidad?.datos?.presupuesto_aproximado
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(clean);
+    })
+    .sort((a, b) => {
+      const aDate = new Date(a.last_message_at || a.updated_at || a.created_at).getTime();
+      const bDate = new Date(b.last_message_at || b.updated_at || b.created_at).getTime();
+
+      return bDate - aDate;
+    });
+}, [
+  activeInbox,
+  conversaciones,
+  search,
+  sellerFilterId,
+  currentUserId,
+  currentProfile,
+  canSeeAllConversations
+]);
+
+const inboxCounts = useMemo(() => {
+  const visibleConversations = conversaciones.filter((conv) =>
+    canUserSeeConversation({
+      conv,
+      userId: currentUserId,
+      currentProfile
+    })
+  );
+
+  return [
+    "sin_atender",
+    "en_gestion",
+    "cande",
+    "colaboracion",
+    "cerradas",
+    "archivadas",
+    "eliminadas"
+  ].reduce<Record<InboxKey, number>>((acc, inbox) => {
+    acc[inbox as InboxKey] = visibleConversations.filter((conv) =>
+      filterByInbox(conv, inbox as InboxKey)
+    ).length;
+
+    return acc;
+  }, {} as Record<InboxKey, number>);
+}, [conversaciones, currentUserId, currentProfile]);
+
+const sellerConversationCounts = useMemo(() => {
+  const counts: Record<string, number> = {};
+
+  conversaciones.forEach((conv) => {
+    if (!conv.assigned_to) return;
+    if (conv.deleted_at || conv.archived_at || conv.closed_at) return;
+
+    if (
+      !canUserSeeConversation({
+        conv,
+        userId: currentUserId,
+        currentProfile
+      })
+    ) {
+      return;
+    }
+
+    counts[conv.assigned_to] = (counts[conv.assigned_to] || 0) + 1;
+  });
+
+  return counts;
+}, [conversaciones, currentUserId, currentProfile]);
 
   const reaccionesByMensaje = useMemo(() => {
     return reacciones.reduce<Record<string, MensajeReaccion[]>>((acc, reaccion) => {
@@ -478,8 +628,6 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
     });
   }, [quickReplies, quickReplySearch]);
 
-  
-
   function scrollTimelineToBottom(behavior: ScrollBehavior = "auto") {
     window.requestAnimationFrame(() => {
       const el = timelineRef.current;
@@ -499,101 +647,151 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     shouldStickToBottomRef.current = distanceFromBottom < 120;
   }
+ const loadData = useCallback(async () => {
+  setError(null);
 
-  const loadData = useCallback(async () => {
-    setError(null);
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const userId = authData.user?.id || null;
 
-    const [convRes, contactosRes, profilesRes, oppRes, pipelineRes, colaboradoresRes] =
-      await Promise.all([
-        supabase
-          .from("conversaciones")
-          .select("*")
-          .order("last_message_at", { ascending: false, nullsFirst: false })
-          .limit(200),
-        supabase.from("contactos_wa").select("*"),
-        supabase
-          .from("profiles")
-          .select(
-            "id,nombre,apellido,email,color,activo,nombre_publico_whatsapp,mostrar_nombre_agente"
-          )
-          .eq("activo", true)
-          .order("nombre", { ascending: true }),
-        supabase.from("lead_oportunidades").select("*").order("updated_at", { ascending: false }),
-        supabase
-          .from("pipeline_estados")
-          .select("id,nombre,color,orden,es_final,resultado,es_sin_atender")
-          .order("orden", { ascending: true }),
-        supabase
-          .from("conversacion_colaboradores")
-          .select("id,conversacion_id,profile_id,added_by,created_at")
-          .order("created_at", { ascending: true })
-      ]);
+  if (authError || !userId) {
+    setError(authError?.message || "No se pudo identificar el usuario actual.");
+    return;
+  }
 
-    const firstError =
-      convRes.error ||
-      contactosRes.error ||
-      profilesRes.error ||
-      oppRes.error ||
-      pipelineRes.error ||
-      colaboradoresRes.error;
+  setCurrentUserId(userId);
 
-    if (firstError) {
-      setError(firstError.message || "No se pudo cargar LiveNos.");
-      return;
+  const [convRes, contactosRes, profilesRes, oppRes, pipelineRes, colaboradoresRes] =
+    await Promise.all([
+      supabase
+        .from("conversaciones")
+        .select("*")
+        .order("last_message_at", { ascending: false, nullsFirst: false })
+        .limit(300),
+
+      supabase.from("contactos_wa").select("*"),
+
+      supabase
+        .from("profiles")
+        .select(
+          "id,nombre,apellido,email,color,activo,nombre_publico_whatsapp,mostrar_nombre_agente,rol,is_super_admin,is_support_user"
+        )
+        .eq("activo", true)
+        .order("nombre", { ascending: true }),
+
+      supabase.from("lead_oportunidades").select("*").order("updated_at", { ascending: false }),
+
+      supabase
+        .from("pipeline_estados")
+        .select("id,nombre,color,orden,es_final,resultado,es_sin_atender")
+        .order("orden", { ascending: true }),
+
+      supabase
+        .from("conversacion_colaboradores")
+        .select("id,conversacion_id,profile_id,added_by,created_at")
+        .order("created_at", { ascending: true })
+    ]);
+
+  console.log("[LiveNos loadData debug]", {
+    convError: convRes.error,
+    convCount: convRes.data?.length || 0,
+    convFirst: convRes.data?.[0] || null,
+
+    contactosError: contactosRes.error,
+    contactosCount: contactosRes.data?.length || 0,
+
+    profilesError: profilesRes.error,
+    profilesCount: profilesRes.data?.length || 0,
+
+    oppError: oppRes.error,
+    oppCount: oppRes.data?.length || 0,
+
+    pipelineError: pipelineRes.error,
+    pipelineCount: pipelineRes.data?.length || 0,
+
+    colaboradoresError: colaboradoresRes.error,
+    colaboradoresCount: colaboradoresRes.data?.length || 0
+  });
+
+  const firstError =
+    convRes.error ||
+    contactosRes.error ||
+    profilesRes.error ||
+    oppRes.error ||
+    pipelineRes.error ||
+    colaboradoresRes.error;
+
+  if (firstError) {
+    setError(firstError.message || "No se pudo cargar LiveNos.");
+    return;
+  }
+
+  const nextProfiles = (profilesRes.data || []) as ProfileLite[];
+  const nextCurrentProfile =
+    nextProfiles.find((profile) => profile.id === userId) || null;
+
+  const contactosMap = new Map<string, ContactoWa>();
+  ((contactosRes.data || []) as ContactoWa[]).forEach((item) => contactosMap.set(item.id, item));
+
+  const profilesMap = new Map<string, ProfileLite>();
+  nextProfiles.forEach((item) => profilesMap.set(item.id, item));
+
+  const oppMap = new Map<string, LeadOportunidad>();
+  ((oppRes.data || []) as LeadOportunidad[]).forEach((item) => {
+    if (item.conversacion_id) {
+      oppMap.set(item.conversacion_id, item);
     }
+  });
 
-    const contactosMap = new Map<string, ContactoWa>();
-    ((contactosRes.data || []) as ContactoWa[]).forEach((item) => contactosMap.set(item.id, item));
+  const colaboradoresByConversation = new Map<string, ConversacionColaborador[]>();
 
-    const profilesMap = new Map<string, ProfileLite>();
-    ((profilesRes.data || []) as ProfileLite[]).forEach((item) => profilesMap.set(item.id, item));
+  ((colaboradoresRes.data || []) as ConversacionColaborador[]).forEach((item) => {
+    const profile = profilesMap.get(item.profile_id) || null;
 
-    const oppMap = new Map<string, LeadOportunidad>();
-    ((oppRes.data || []) as LeadOportunidad[]).forEach((item) =>
-      oppMap.set(item.conversacion_id, item)
-    );
+    const colaborador: ConversacionColaborador = {
+      ...item,
+      profile
+    };
 
-    const colaboradoresByConversation = new Map<string, ConversacionColaborador[]>();
+    const current = colaboradoresByConversation.get(item.conversacion_id) || [];
+    current.push(colaborador);
+    colaboradoresByConversation.set(item.conversacion_id, current);
+  });
 
-    ((colaboradoresRes.data || []) as ConversacionColaborador[]).forEach((item) => {
-      const profile = profilesMap.get(item.profile_id) || null;
+  const allConversaciones = ((convRes.data || []) as Conversacion[]).map((conv) => ({
+    ...conv,
+    contacto: contactosMap.get(conv.contacto_id) || null,
+    vendedor: conv.assigned_to ? profilesMap.get(conv.assigned_to) || null : null,
+    oportunidad: oppMap.get(conv.id) || null,
+    colaboradores: colaboradoresByConversation.get(conv.id) || []
+  })) as ConversationVM[];
 
-      const colaborador: ConversacionColaborador = {
-        ...item,
-        profile
-      };
+  const nextConversaciones = allConversaciones.filter((conv) =>
+    canUserSeeConversation({
+      conv,
+      userId,
+      currentProfile: nextCurrentProfile
+    })
+  );
 
-      const current = colaboradoresByConversation.get(item.conversacion_id) || [];
-      current.push(colaborador);
-      colaboradoresByConversation.set(item.conversacion_id, current);
-    });
+  setConversaciones(nextConversaciones);
+  setProfiles(nextProfiles);
+  setPipeline((pipelineRes.data || []) as PipelineEstado[]);
 
-    const nextConversaciones = ((convRes.data || []) as Conversacion[]).map((conv) => ({
-      ...conv,
-      contacto: contactosMap.get(conv.contacto_id) || null,
-      vendedor: conv.assigned_to ? profilesMap.get(conv.assigned_to) || null : null,
-      oportunidad: oppMap.get(conv.id) || null,
-      colaboradores: colaboradoresByConversation.get(conv.id) || []
-    }));
+  const currentSelectedId = selectedIdRef.current;
 
-    setConversaciones(nextConversaciones);
-    setProfiles((profilesRes.data || []) as ProfileLite[]);
-    setPipeline((pipelineRes.data || []) as PipelineEstado[]);
+  if (currentSelectedId && currentSelectedId !== NIA_INTERNAL_ID) {
+    const stillExists = nextConversaciones.some((conv) => conv.id === currentSelectedId);
 
-    const currentSelectedId = selectedIdRef.current;
-
-    if (currentSelectedId) {
-      const stillExists = nextConversaciones.some((conv) => conv.id === currentSelectedId);
-
-      if (!stillExists) {
-        setSelectedId(null);
-        selectedIdRef.current = null;
-        setMensajes([]);
-        setNotas([]);
-        setReacciones([]);
-      }
+    if (!stillExists) {
+      setSelectedId(null);
+      selectedIdRef.current = null;
+      setMensajes([]);
+      setNotas([]);
+      setReacciones([]);
+      setError("No tenés permiso para ver esa conversación o ya no está disponible.");
     }
-  }, []);
+  }
+}, []);
 
   const loadQuickReplies = useCallback(async () => {
     const { data, error: quickError } = await supabase
@@ -636,6 +834,24 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
         forceBottom?: boolean;
       } = {}
     ) => {
+      if (conversationId === NIA_INTERNAL_ID) return;
+      const allowedConversation = conversaciones.find((conv) => conv.id === conversationId);
+
+if (
+  !allowedConversation ||
+  !canUserSeeConversation({
+    conv: allowedConversation,
+    userId: currentUserId,
+    currentProfile
+  })
+) {
+  setMensajes([]);
+  setNotas([]);
+  setReacciones([]);
+  setError("No tenés permiso para cargar esta conversación.");
+  return;
+}
+
       setError(null);
 
       const shouldAutoScroll =
@@ -684,11 +900,11 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
       setNotas((notesRes.data || []) as NotaConversacion[]);
       setReacciones(nextReacciones);
 
-      if (shouldAutoScroll || options.forceBottom) {
+          if (shouldAutoScroll || options.forceBottom) {
         scrollTimelineToBottom(options.forceBottom ? "smooth" : "auto");
       }
     },
-    []
+    [conversaciones, currentUserId, currentProfile]
   );
 
   useEffect(() => {
@@ -699,11 +915,7 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
     async function initialLoad() {
       setLoading(true);
 
-      await Promise.all([
-        loadData(),
-        loadQuickReplies(),
-        loadWhatsappTemplates()
-      ]);
+      await Promise.all([loadData(), loadQuickReplies(), loadWhatsappTemplates()]);
 
       setLoading(false);
     }
@@ -712,11 +924,20 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
   }, [loadData, loadQuickReplies, loadWhatsappTemplates]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || selectedId === NIA_INTERNAL_ID) return;
 
     shouldStickToBottomRef.current = true;
     void loadConversationDetail(selectedId, { forceBottom: true });
   }, [selectedId, loadConversationDetail]);
+
+  useEffect(() => {
+  async function loadCurrentUser() {
+    const { data } = await supabase.auth.getUser();
+    setCurrentUserId(data.user?.id || null);
+  }
+
+  void loadCurrentUser();
+}, []);
 
   useEffect(() => {
     if (!selectedConversation) return;
@@ -751,7 +972,7 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
     const refreshCurrentConversationSoft = () => {
       const current = selectedIdRef.current;
 
-      if (!current) return;
+      if (!current || current === NIA_INTERNAL_ID) return;
 
       if (refreshDetailTimer) {
         window.clearTimeout(refreshDetailTimer);
@@ -799,7 +1020,7 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
 
           refreshListSoft();
 
-          if (current && newMessage.conversacion_id === current) {
+          if (current && current !== NIA_INTERNAL_ID && newMessage.conversacion_id === current) {
             refreshCurrentConversationSoft();
           }
         }
@@ -817,7 +1038,7 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
 
           refreshListSoft();
 
-          if (current && updatedMessage.conversacion_id === current) {
+          if (current && current !== NIA_INTERNAL_ID && updatedMessage.conversacion_id === current) {
             refreshCurrentConversationSoft();
           }
         }
@@ -864,7 +1085,7 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
 
       const current = selectedIdRef.current;
 
-      if (current) {
+      if (current && current !== NIA_INTERNAL_ID) {
         void loadConversationDetail(current, { preserveScroll: true });
       }
     }, 30000);
@@ -918,98 +1139,96 @@ const audioRecorderRef = useRef<MediaRecorder | null>(null);
   }, [status]);
 
   useEffect(() => {
-  function openConversationFromNotification(event: Event) {
-    const customEvent = event as CustomEvent<{
-      conversationId?: string | null;
-      messageId?: string | null;
-      inbox?: InboxKey | null;
-    }>;
+    function openConversationFromNotification(event: Event) {
+      const customEvent = event as CustomEvent<{
+        conversationId?: string | null;
+        messageId?: string | null;
+        inbox?: InboxKey | null;
+      }>;
 
-    const conversationId = customEvent.detail?.conversationId || null;
-    const messageId = customEvent.detail?.messageId || null;
-    const inbox = customEvent.detail?.inbox || null;
+      const conversationId = customEvent.detail?.conversationId || null;
+      const messageId = customEvent.detail?.messageId || null;
+      const inbox = customEvent.detail?.inbox || null;
 
-    if (inbox) {
-      setActiveInbox(inbox);
-    } else {
-      setActiveInbox("sin_atender");
+      if (inbox) {
+        setActiveInbox(inbox);
+      } else {
+        setActiveInbox("sin_atender");
+      }
+
+      if (messageId) {
+        pendingScrollMessageIdRef.current = messageId;
+        window.localStorage.setItem("nostur_open_livenos_message_id", messageId);
+      }
+
+      if (conversationId) {
+        void selectConversation(conversationId);
+        window.localStorage.removeItem("nostur_open_livenos_conversation_id");
+      }
     }
 
-    if (messageId) {
-      pendingScrollMessageIdRef.current = messageId;
-      window.localStorage.setItem("nostur_open_livenos_message_id", messageId);
+    const pendingInbox = window.localStorage.getItem("nostur_livenos_open_inbox") as InboxKey | null;
+    const pendingConversationId = window.localStorage.getItem("nostur_open_livenos_conversation_id");
+    const pendingMessageId = window.localStorage.getItem("nostur_open_livenos_message_id");
+
+    if (pendingInbox) {
+      setActiveInbox(pendingInbox);
+      window.localStorage.removeItem("nostur_livenos_open_inbox");
     }
 
-    if (conversationId) {
-      void selectConversation(conversationId);
-      window.localStorage.removeItem("nostur_open_livenos_conversation_id");
+    if (pendingMessageId) {
+      pendingScrollMessageIdRef.current = pendingMessageId;
     }
-  }
 
-  const pendingInbox = window.localStorage.getItem("nostur_livenos_open_inbox") as InboxKey | null;
-  const pendingConversationId = window.localStorage.getItem("nostur_open_livenos_conversation_id");
-  const pendingMessageId = window.localStorage.getItem("nostur_open_livenos_message_id");
+    if (pendingConversationId) {
+      window.setTimeout(() => {
+        void selectConversation(pendingConversationId);
+        window.localStorage.removeItem("nostur_open_livenos_conversation_id");
+      }, 400);
+    }
 
-  if (pendingInbox) {
-    setActiveInbox(pendingInbox);
-    window.localStorage.removeItem("nostur_livenos_open_inbox");
-  }
+    window.addEventListener("nostur:open-livenos-conversation", openConversationFromNotification);
 
-  if (pendingMessageId) {
-    pendingScrollMessageIdRef.current = pendingMessageId;
-  }
+    return () => {
+      window.removeEventListener(
+        "nostur:open-livenos-conversation",
+        openConversationFromNotification
+      );
+    };
+  }, []);
 
-  if (pendingConversationId) {
-    window.setTimeout(() => {
-      void selectConversation(pendingConversationId);
-      window.localStorage.removeItem("nostur_open_livenos_conversation_id");
-    }, 400);
-  }
+  useEffect(() => {
+    const messageId = pendingScrollMessageIdRef.current;
 
-  window.addEventListener("nostur:open-livenos-conversation", openConversationFromNotification);
-
-  return () => {
-    window.removeEventListener(
-      "nostur:open-livenos-conversation",
-      openConversationFromNotification
-    );
-  };
-}, []);
-
-useEffect(() => {
-  const messageId = pendingScrollMessageIdRef.current;
-
-  if (!messageId || mensajes.length === 0) return;
-
-  window.setTimeout(() => {
-    const element = document.getElementById(`livenos-message-${messageId}`);
-
-    if (!element) return;
-
-    element.scrollIntoView({
-      behavior: "smooth",
-      block: "center"
-    });
-
-    element.classList.add("ring-4", "ring-red-300", "ring-offset-2");
+    if (!messageId || mensajes.length === 0) return;
 
     window.setTimeout(() => {
-      element.classList.remove("ring-4", "ring-red-300", "ring-offset-2");
-    }, 2200);
+      const element = document.getElementById(`livenos-message-${messageId}`);
 
-    pendingScrollMessageIdRef.current = null;
-    window.localStorage.removeItem("nostur_open_livenos_message_id");
-  }, 450);
-}, [mensajes]);
+      if (!element) return;
 
-    async function getUserId() {
+      element.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+
+      element.classList.add("ring-4", "ring-red-300", "ring-offset-2");
+
+      window.setTimeout(() => {
+        element.classList.remove("ring-4", "ring-red-300", "ring-offset-2");
+      }, 2200);
+
+      pendingScrollMessageIdRef.current = null;
+      window.localStorage.removeItem("nostur_open_livenos_message_id");
+    }, 450);
+  }, [mensajes]);
+
+  async function getUserId() {
     const { data } = await supabase.auth.getUser();
     return data.user?.id || null;
   }
 
-  async function selectConversation(id: string) {
-    setSelectedId(id);
-    selectedIdRef.current = id;
+  function resetConversationUiState() {
     setComposerText("");
     setInternalText("");
     setScheduledText("");
@@ -1048,17 +1267,67 @@ useEffect(() => {
     setIsDraggingFile(false);
     setAudioRecording(false);
     setPreviewMedia(null);
-
-    const selected = conversaciones.find((conv) => conv.id === id);
-
-    setEditingContactName(false);
-    setContactNameDraft(getDisplayName(selected?.contacto, selected || null));
-
-    if (selected && selected.unread_count > 0) {
-      await supabase.from("conversaciones").update({ unread_count: 0 }).eq("id", id);
-      await loadData();
-    }
+    setOpportunityModalOpen(false);
   }
+
+ async function selectConversation(id: string) {
+  if (id === NIA_INTERNAL_ID) {
+    setSelectedId(NIA_INTERNAL_ID);
+    selectedIdRef.current = NIA_INTERNAL_ID;
+
+    setMensajes([]);
+    setNotas([]);
+    setReacciones([]);
+    setEditingContactName(false);
+    setContactNameDraft("");
+
+    resetConversationUiState();
+
+    setStatus("NIA abierta como chat interno.");
+    return;
+  }
+
+  const selected = conversaciones.find((conv) => conv.id === id);
+
+  if (!selected) {
+    setSelectedId(null);
+    selectedIdRef.current = null;
+    setMensajes([]);
+    setNotas([]);
+    setReacciones([]);
+    setError("No tenés permiso para abrir esa conversación o ya no está disponible.");
+    return;
+  }
+
+  if (
+    !canUserSeeConversation({
+      conv: selected,
+      userId: currentUserId,
+      currentProfile
+    })
+  ) {
+    setSelectedId(null);
+    selectedIdRef.current = null;
+    setMensajes([]);
+    setNotas([]);
+    setReacciones([]);
+    setError("No tenés permiso para abrir esa conversación.");
+    return;
+  }
+
+  setSelectedId(id);
+  selectedIdRef.current = id;
+
+  resetConversationUiState();
+
+  setEditingContactName(false);
+  setContactNameDraft(getDisplayName(selected?.contacto, selected || null));
+
+  if (selected && selected.unread_count > 0) {
+    await supabase.from("conversaciones").update({ unread_count: 0 }).eq("id", id);
+    await loadData();
+  }
+}
 
   async function takeConversation() {
     if (!selectedConversation) return;
@@ -1238,8 +1507,7 @@ useEffect(() => {
     await loadData();
     setActionLoading(false);
   }
-
-  async function addTaskItem(tipo: "programar_envio_cliente" | "recordatorio") {
+    async function addTaskItem(tipo: "programar_envio_cliente" | "recordatorio") {
     if (!selectedConversation) return;
 
     const text = tipo === "programar_envio_cliente" ? scheduledText.trim() : reminderText.trim();
@@ -1410,7 +1678,7 @@ useEffect(() => {
     await supabase
       .from("conversaciones")
       .update({
-        inbox: "colaboracion",
+        inbox: selectedConversation.assigned_to ? "vendedor" : "general",
         estado_gestion: "colaboracion",
         updated_at: new Date().toISOString()
       })
@@ -1457,7 +1725,7 @@ useEffect(() => {
       await supabase
         .from("conversaciones")
         .update({
-          inbox: selectedConversation.assigned_to ? "vendedor" : "sin_atender",
+          inbox: selectedConversation.assigned_to ? "vendedor" : "general",
           estado_gestion: selectedConversation.assigned_to ? "en_gestion" : "sin_atender",
           updated_at: new Date().toISOString()
         })
@@ -1472,7 +1740,7 @@ useEffect(() => {
     setActionLoading(false);
   }
 
-    async function saveContactDisplayName() {
+  async function saveContactDisplayName() {
     if (!selectedConversation || !selectedContacto) return;
 
     const cleanName = contactNameDraft.trim();
@@ -1626,8 +1894,13 @@ useEffect(() => {
     setActionLoading(false);
   }
 
-  async function sendLocalMessage() {
-    if (!selectedConversation) return;
+async function sendLocalMessage() {
+  if (!selectedConversation) return;
+
+  if (!canWriteToClient) {
+    setError("Para escribirle al cliente primero tenés que tomar la conversación.");
+    return;
+  }
 
     const hasText = Boolean(composerText.trim());
     const hasAttachment = Boolean(pendingAttachment);
@@ -1842,7 +2115,7 @@ useEffect(() => {
     setActionLoading(false);
   }
 
-    async function handleReaction(message: Mensaje, emoji: string) {
+  async function handleReaction(message: Mensaje, emoji: string) {
     setOpenMessageMenuId(null);
     setError(null);
 
@@ -2027,8 +2300,13 @@ useEffect(() => {
     setNewConversationOpen(true);
   }
 
-  function handleTemplateButton() {
-    if (!selectedConversation) return;
+function handleTemplateButton() {
+  if (!selectedConversation) return;
+
+  if (!canWriteToClient) {
+    setError("Para enviar una plantilla primero tenés que tomar la conversación.");
+    return;
+  }
 
     if (activeWhatsappTemplates.length === 0) {
       setError("No hay plantillas activas sincronizadas desde Meta.");
@@ -2264,8 +2542,13 @@ useEffect(() => {
     setActionLoading(false);
   }
 
-    async function sendTemplateMessage() {
-    if (!selectedConversation || !selectedWhatsappTemplate) return;
+  async function sendTemplateMessage() {
+  if (!selectedConversation || !selectedWhatsappTemplate) return;
+
+  if (!canWriteToClient) {
+    setError("Para enviar una plantilla primero tenés que tomar la conversación.");
+    return;
+  }
 
     setTemplateSending(true);
     setActionLoading(true);
@@ -2559,7 +2842,7 @@ useEffect(() => {
     window.open(mediaUrl, "_blank", "noopener,noreferrer");
   }
 
-    function buildLiveNosNiaContext() {
+  function buildLiveNosNiaContext() {
     if (!selectedConversation) {
       return {
         source: "livenos",
@@ -2610,6 +2893,26 @@ useEffect(() => {
 
       created_at: new Date().toISOString()
     };
+  }
+
+  function getContextConversationIdForNia(context: Record<string, any> | null | undefined) {
+  return context?.conversation_id || context?.conversacion_id || null;
+}
+
+function getContextOpportunityIdForNia(context: Record<string, any> | null | undefined) {
+  return context?.oportunidad_id || context?.opportunity_id || null;
+}
+
+  function getStoredNiaContext() {
+    const raw = window.localStorage.getItem("nostur_nia_context");
+
+    if (!raw) return buildLiveNosNiaContext();
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return buildLiveNosNiaContext();
+    }
   }
 
   function buildOpportunityActionDetail(action: string) {
@@ -2713,16 +3016,12 @@ useEffect(() => {
     window.localStorage.setItem("nostur_nia_context", JSON.stringify(detail));
 
     window.dispatchEvent(
-      new CustomEvent("nostur:open-nia-chat", {
+      new CustomEvent("nostur:nia-context-updated", {
         detail
       })
     );
 
-    setStatus(
-      selectedConversation
-        ? "NIA recibió el contexto de esta conversación."
-        : "NIA abierta sin conversación seleccionada."
-    );
+    void selectConversation(NIA_INTERNAL_ID);
   }
 
   function openCandeFeedback(message: Mensaje, tipo: CandeFeedbackTipo) {
@@ -3049,7 +3348,7 @@ useEffect(() => {
     );
   }
 
-  function renderMessageMenu(message: Mensaje) {
+    function renderMessageMenu(message: Mensaje) {
     const mediaUrl = getMessageMediaUrl(message);
 
     return (
@@ -3128,7 +3427,7 @@ useEffect(() => {
               onClick={() => setOpenMessageMenuId(null)}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-medium text-[#475569] hover:bg-[#f8fafc]"
             >
-              <Download size={14} />
+              <Download size={15} />
               Descargar
             </a>
           </>
@@ -3295,7 +3594,7 @@ useEffect(() => {
     );
   }
 
-    function renderMessageBubble(message: Mensaje) {
+  function renderMessageBubble(message: Mensaje) {
     const role = getMessageRole(message);
     const outbound = role !== "passenger";
     const mediaUrl = getMessageMediaUrl(message);
@@ -3319,10 +3618,10 @@ useEffect(() => {
               : "rounded-bl-sm bg-white text-[#172033] ring-black/5";
 
     return (
-     <article
-  key={message.id}
-  id={`livenos-message-${message.id}`}
-  className={[
+      <article
+        key={message.id}
+        id={`livenos-message-${message.id}`}
+        className={[
           "flex w-full px-1",
           role === "system" ? "justify-center" : outbound ? "justify-end" : "justify-start"
         ].join(" ")}
@@ -4309,6 +4608,11 @@ useEffect(() => {
       {renderMediaPreviewModal()}
       {renderCandeFeedbackModal()}
 
+      <LiveNosAutomationsModal
+        open={automationsOpen}
+        onClose={() => setAutomationsOpen(false)}
+      />
+
       <OportunidadDetalleModal
         open={opportunityModalOpen}
         oportunidad={selectedOportunidad}
@@ -4343,6 +4647,11 @@ useEffect(() => {
               <HeaderButton onClick={loadData} disabled={loading}>
                 {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCcw size={14} />}
                 Actualizar
+              </HeaderButton>
+
+              <HeaderButton onClick={() => setAutomationsOpen(true)}>
+                <Bot size={14} />
+                Automatizaciones
               </HeaderButton>
 
               <HeaderButton onClick={syncWhatsappTemplates} disabled={templateSyncing}>
@@ -4387,12 +4696,24 @@ useEffect(() => {
         <main className="grid min-h-0 flex-1 grid-cols-[255px_325px_minmax(0,1fr)] gap-3 overflow-hidden p-3">
           <aside className="flex min-h-0 flex-col gap-3 overflow-hidden">
             <LiveNosSidebar
-              activeInbox={activeInbox}
-              inboxCounts={inboxCounts}
-              profiles={profiles}
-              onChangeInbox={setActiveInbox}
-              onOpenNia={openNiaFromLiveNos}
-            />
+  activeInbox={activeInbox}
+  inboxCounts={inboxCounts}
+  profiles={profiles}
+  sellerConversationCounts={sellerConversationCounts}
+  selectedSellerId={sellerFilterId}
+  canFilterBySeller={canFilterBySeller}
+  onChangeInbox={(inbox) => {
+  setActiveInbox(inbox);
+  setSelectedId(null);
+}}
+  onOpenNia={openNiaFromLiveNos}
+  onSelectSeller={(sellerId) => {
+    if (!canFilterBySeller) return;
+
+    setSellerFilterId((current) => (current === sellerId ? null : sellerId));
+  }}
+  onClearSellerFilter={() => setSellerFilterId(null)}
+/>
           </aside>
 
           <ConversationsColumn
@@ -4406,7 +4727,31 @@ useEffect(() => {
           />
 
           <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-black/10 bg-white/86 shadow-sm">
-            {!selectedConversation ? (
+            {niaInternalSelected ? (
+              <NiaInternalChat
+  key={
+    getContextOpportunityIdForNia(getStoredNiaContext()) ||
+    getContextConversationIdForNia(getStoredNiaContext()) ||
+    "nia-general"
+  }
+  getContext={getStoredNiaContext}
+  onRefreshNeeded={async (data) => {
+                  await loadData();
+
+                  window.dispatchEvent(
+                    new CustomEvent("nostur:livenos-refresh", {
+                      detail: data
+                    })
+                  );
+
+                  window.dispatchEvent(
+                    new CustomEvent("nostur:oportunidades-refresh", {
+                      detail: data
+                    })
+                  );
+                }}
+              />
+            ) : !selectedConversation ? (
               <div className="flex h-full items-center justify-center p-8">
                 <EmptyState
                   title="Seleccioná una conversación"
@@ -4493,9 +4838,24 @@ useEffect(() => {
                               <StatusPill conv={selectedConversation} />
                             </span>
 
-                            <span className="shrink-0">
-                              <Pill>{getVendedorName(selectedVendedor)}</Pill>
-                            </span>
+                        <span className="shrink-0">
+  <Pill>
+    {selectedConversation.assigned_to
+      ? `Tomado por: ${getVendedorName(selectedVendedor)}`
+      : "Sin tomar"}
+  </Pill>
+</span>
+
+{selectedColaboradores.length > 0 ? (
+  <span className="shrink-0">
+    <Pill>
+      Colaboran:{" "}
+      {selectedColaboradores
+        .map((colaborador) => getProfileFullName(colaborador.profile))
+        .join(", ")}
+    </Pill>
+  </span>
+) : null}
 
                             <span className="shrink-0">
                               <Pill>{getWindowRemainingLabel(selectedConversation)}</Pill>
@@ -4602,7 +4962,16 @@ useEffect(() => {
                     </div>
 
                     <div className="relative z-20 shrink-0 border-t border-black/10 bg-white p-3">
-                      {replyToMessage ? (
+{clientWriteBlocked ? (
+  <div className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-normal text-amber-800">
+    {selectedConversation?.assigned_to
+      ? `Esta conversación está tomada por ${getVendedorName(selectedVendedor)}. Solo ese vendedor puede escribirle al cliente por WhatsApp.`
+      : "Para escribirle al cliente por WhatsApp primero tenés que tomar la conversación."}
+    {" "}Los mensajes internos siguen habilitados.
+  </div>
+) : null}
+
+  {replyToMessage ? (
                         <div className="mb-2 flex items-start justify-between gap-3 rounded-xl border border-[#4f7c90]/20 bg-[#eef6f7] px-3 py-2">
                           <div className="min-w-0">
                             <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#4f7c90]">
@@ -4864,42 +5233,51 @@ useEffect(() => {
                             </div>
                           ) : null}
 
-                          <input
-                            value={composerText}
-                            onPaste={handleComposerPaste}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setComposerText(value);
+                       <input
+  value={composerText}
+  disabled={!canWriteToClient}
+  onPaste={handleComposerPaste}
+  onChange={(event) => {
+    const value = event.target.value;
+    setComposerText(value);
 
-                              if (value.endsWith("/")) {
-                                setShowQuickRepliesPanel(true);
-                                setShowEmojiPanel(false);
-                              }
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" && !event.shiftKey) {
-                                event.preventDefault();
-                                void sendLocalMessage();
-                              }
+    if (value.endsWith("/")) {
+      setShowQuickRepliesPanel(true);
+      setShowEmojiPanel(false);
+    }
+  }}
+  onKeyDown={(event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendLocalMessage();
+    }
 
-                              if (event.key === "Escape") {
-                                setShowEmojiPanel(false);
-                                setShowQuickRepliesPanel(false);
-                              }
-                            }}
-                            placeholder={
-                              pendingAttachment
-                                ? "Comentario opcional..."
-                                : "Escribí un mensaje al pasajero"
-                            }
-                            className="h-10 w-full rounded-full border border-black/10 bg-white px-4 text-[13px] font-normal text-[#142033] outline-none placeholder:text-[#94a3b8] focus:border-[#4f7c90]"
-                          />
+    if (event.key === "Escape") {
+      setShowEmojiPanel(false);
+      setShowQuickRepliesPanel(false);
+    }
+  }}
+  placeholder={
+    !canWriteToClient
+      ? "Tomá la conversación para escribirle al cliente"
+      : pendingAttachment
+        ? "Comentario opcional..."
+        : "Escribí un mensaje al pasajero"
+  }
+  className={[
+    "h-10 w-full rounded-full border border-black/10 px-4 text-[13px] font-normal outline-none placeholder:text-[#94a3b8]",
+    canWriteToClient
+      ? "bg-white text-[#142033] focus:border-[#4f7c90]"
+      : "cursor-not-allowed bg-[#f1f5f9] text-[#94a3b8]"
+  ].join(" ")}
+/>
+                        
                         </div>
 
                         <button
                           type="button"
                           onClick={composerText.trim() || pendingAttachment ? sendLocalMessage : handleMicButtonClick}
-                          disabled={actionLoading}
+                         disabled={actionLoading || !canWriteToClient}
                           className={[
                             "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50",
                             audioRecording

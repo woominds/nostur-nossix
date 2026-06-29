@@ -1058,9 +1058,10 @@ export function CtasCtesPanel() {
               </div>
 
               <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
-                Origen: {filters.origen} · Moneda: {filters.moneda} · Vendedor:{" "}
-                {filters.vendedorId} · Sucursal: {filters.sucursalId}
-              </div>
+  Origen: {filters.origen} · Moneda: {filters.moneda} · Vendedor:{" "}
+  {vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos"} ·
+  Sucursal: {sucursalOptions.find((option) => option.value === filters.sucursalId)?.label || "Todas"}
+</div>
             </button>
 
             <button
@@ -1075,58 +1076,47 @@ export function CtasCtesPanel() {
 
           {filtersOpen ? (
             <>
-              <div
-                className={[
-                  "mt-3 grid gap-2.5",
-                  canManageCtasCtes
-                    ? "lg:grid-cols-[180px_180px_220px_220px]"
-                    : "lg:grid-cols-[180px_180px]"
-                ].join(" ")}
-              >
-                <div>
-                  <FieldLabel>Origen</FieldLabel>
+             <div className="mt-3 grid gap-2.5 lg:grid-cols-[180px_180px_220px_220px]">
+  <div>
+    <FieldLabel>Origen</FieldLabel>
 
-                  <NosturSelect
-                    value={filters.origen}
-                    onChange={(value) => setFilter("origen", value as typeof filters.origen)}
-                    options={ORIGEN_OPTIONS}
-                  />
-                </div>
+    <NosturSelect
+      value={filters.origen}
+      onChange={(value) => setFilter("origen", value as typeof filters.origen)}
+      options={ORIGEN_OPTIONS}
+    />
+  </div>
 
-                <div>
-                  <FieldLabel>Moneda</FieldLabel>
+  <div>
+    <FieldLabel>Moneda</FieldLabel>
 
-                  <NosturSelect
-                    value={filters.moneda}
-                    onChange={(value) => setFilter("moneda", value as typeof filters.moneda)}
-                    options={MONEDA_OPTIONS}
-                  />
-                </div>
+    <NosturSelect
+      value={filters.moneda}
+      onChange={(value) => setFilter("moneda", value as typeof filters.moneda)}
+      options={MONEDA_OPTIONS}
+    />
+  </div>
 
-                {canManageCtasCtes ? (
-                  <>
-                    <div>
-                      <FieldLabel>Vendedor</FieldLabel>
+  <div>
+    <FieldLabel>Vendedor</FieldLabel>
 
-                      <NosturSelect
-                        value={filters.vendedorId}
-                        onChange={(value) => setFilter("vendedorId", value)}
-                        options={vendedorOptions}
-                      />
-                    </div>
+    <NosturSelect
+      value={filters.vendedorId}
+      onChange={(value) => setFilter("vendedorId", value)}
+      options={vendedorOptions}
+    />
+  </div>
 
-                    <div>
-                      <FieldLabel>Sucursal</FieldLabel>
+  <div>
+    <FieldLabel>Sucursal</FieldLabel>
 
-                      <NosturSelect
-                        value={filters.sucursalId}
-                        onChange={(value) => setFilter("sucursalId", value)}
-                        options={sucursalOptions}
-                      />
-                    </div>
-                  </>
-                ) : null}
-              </div>
+    <NosturSelect
+      value={filters.sucursalId}
+      onChange={(value) => setFilter("sucursalId", value)}
+      options={sucursalOptions}
+    />
+  </div>
+</div>
 
               <div className="mt-2.5 flex h-8 items-center gap-2 rounded-[10px] border border-black/10 bg-white px-3">
                 <Search size={14} className="shrink-0 text-[#94a3b8]" />

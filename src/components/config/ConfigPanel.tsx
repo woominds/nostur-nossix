@@ -50,6 +50,7 @@ import {
 } from "../../store/configStore";
 import { ImportadorCatalogosPanel } from "./ImportadorCatalogosPanel";
 import { DeployActionsPanel } from "./DeployActionsPanel";
+import { supabase } from "../../lib/supabase";
 
 type ConfigTab =
   | "sucursales"
@@ -141,6 +142,7 @@ function getInitialForm(tab: ConfigTab): FormState {
       nombre: "",
       apellido: "",
       email: "",
+      password: "",
       sucursal_id: "",
       rol: "vendedor",
       color: "#FF6A00",
@@ -918,6 +920,38 @@ export function ConfigPanel() {
     };
   }, [activeTab, currentItems, filteredItems.length]);
 
+  function buildSucursalOptions(currentSucursalId?: string | null): SelectOption[] {
+    const normalizedCurrentSucursalId = String(currentSucursalId || "");
+
+    const activeSucursales = sucursales.filter((sucursal) =>
+      Boolean(sucursal.activa ?? sucursal.activo)
+    );
+
+    const currentInactiveSucursal = normalizedCurrentSucursalId
+      ? sucursales.find(
+          (sucursal) =>
+            sucursal.id === normalizedCurrentSucursalId &&
+            !Boolean(sucursal.activa ?? sucursal.activo)
+        )
+      : null;
+
+    return [
+      { value: "", label: "Sin sucursal" },
+      ...activeSucursales.map((sucursal) => ({
+        value: sucursal.id,
+        label: sucursal.nombre
+      })),
+      ...(currentInactiveSucursal
+        ? [
+            {
+              value: currentInactiveSucursal.id,
+              label: `${currentInactiveSucursal.nombre} · inactiva`
+            }
+          ]
+        : [])
+    ];
+  }
+
   function showNotice(type: "info" | "error" | "success", title: string, message: string) {
     setNotice({ type, title, message });
 
@@ -1006,39 +1040,94 @@ export function ConfigPanel() {
       ok = await upsertSucursal({
         id: editingId || undefined,
         nombre: asString(form.nombre),
-color: normalizeHexColor(form.color),
+        color: normalizeHexColor(form.color),
         activa: asBoolean(form.activa),
         activo: asBoolean(form.activo)
       });
     }
 
     if (activeTab === "profiles") {
-      if (!editingId && !form.id) {
-        showNotice(
-          "info",
-          "Usuario requerido",
-          "Para crear un usuario/perfil nuevo necesitás primero crear el usuario en Supabase Auth y usar su UUID como ID del perfil."
-        );
+      const nombre = asString(form.nombre).trim();
+      const apellido = asString(form.apellido).trim();
+      const email = asString(form.email).trim().toLowerCase();
+      const password = asString(form.password).trim();
+
+      if (!nombre || !apellido || !email) {
+        showNotice("error", "Datos incompletos", "Nombre, apellido y email son obligatorios.");
         return;
       }
 
-      ok = await upsertProfile({
-        id: editingId || asString(form.id),
-        nombre: asString(form.nombre),
-        apellido: asString(form.apellido),
-        email: asString(form.email),
-        sucursal_id: asString(form.sucursal_id) || null,
-        rol: asString(form.rol) as AppRole,
-color: normalizeHexColor(form.color),
-        activo: asBoolean(form.activo)
-      });
+      if (editingId) {
+        ok = await upsertProfile({
+          id: editingId,
+          nombre,
+          apellido,
+          email,
+          sucursal_id: asString(form.sucursal_id) || null,
+          rol: asString(form.rol) as AppRole,
+          color: normalizeHexColor(form.color),
+          activo: asBoolean(form.activo)
+        });
+      } else {
+        const { data, error: functionError } = await supabase.functions.invoke(
+          "admin-create-user-profile",
+          {
+            body: {
+              nombre,
+              apellido,
+              email,
+              password: password || undefined,
+              sucursal_id: asString(form.sucursal_id) || null,
+              rol: asString(form.rol),
+              color: normalizeHexColor(form.color),
+              activo: asBoolean(form.activo)
+            }
+          }
+        );
+
+        if (functionError) {
+          showNotice(
+            "error",
+            "No se pudo crear el usuario",
+            functionError.message || "Falló la función admin-create-user-profile."
+          );
+          return;
+        }
+
+        if (!data?.ok) {
+          showNotice(
+            "error",
+            "No se pudo crear el usuario",
+            data?.error || "La función no devolvió una respuesta válida."
+          );
+          return;
+        }
+
+        ok = true;
+
+        if (data.temp_password) {
+          showNotice(
+            "success",
+            "Usuario creado correctamente",
+            `Contraseña temporal: ${data.temp_password}`
+          );
+        } else {
+          showNotice(
+            "success",
+            "Usuario creado correctamente",
+            "El usuario y el perfil fueron creados correctamente."
+          );
+        }
+
+        await loadConfig();
+      }
     }
 
     if (activeTab === "metodos_contacto") {
       ok = await upsertMetodoContacto({
         id: editingId || undefined,
         nombre: asString(form.nombre),
-color: normalizeHexColor(form.color),
+        color: normalizeHexColor(form.color),
         activo: asBoolean(form.activo)
       });
     }
@@ -1089,7 +1178,7 @@ color: normalizeHexColor(form.color),
       ok = await upsertOperador({
         id: editingId || undefined,
         nombre: asString(form.nombre),
-color: normalizeHexColor(form.color),
+        color: normalizeHexColor(form.color),
         razon_social: asString(form.razon_social),
         cuit: asString(form.cuit),
         activo: asBoolean(form.activo)
@@ -1111,7 +1200,7 @@ color: normalizeHexColor(form.color),
       ok = await upsertServicio({
         id: editingId || undefined,
         nombre: asString(form.nombre),
-color: normalizeHexColor(form.color),
+        color: normalizeHexColor(form.color),
         activo: asBoolean(form.activo)
       });
     }
@@ -1148,7 +1237,10 @@ color: normalizeHexColor(form.color),
 
     if (ok) {
       resetForm();
-      showNotice("success", "Guardado correctamente", "La configuración fue actualizada.");
+
+      if (activeTab !== "profiles" || editingId) {
+        showNotice("success", "Guardado correctamente", "La configuración fue actualizada.");
+      }
     }
   }
 
@@ -1166,13 +1258,8 @@ color: normalizeHexColor(form.color),
           </div>
 
           <div>
-           <div>
-  <FieldLabel>Color</FieldLabel>
-  <ColorInput
-    value={asString(form.color)}
-    onChange={(value) => setField("color", value)}
-  />
-</div>
+            <FieldLabel>Color</FieldLabel>
+            <ColorInput value={asString(form.color)} onChange={(value) => setField("color", value)} />
           </div>
 
           <BooleanChip
@@ -1188,26 +1275,21 @@ color: normalizeHexColor(form.color),
     }
 
     if (activeTab === "profiles") {
-      const sucursalOptions: SelectOption[] = [
-        { value: "", label: "Sin sucursal" },
-        ...sucursales.map((sucursal) => ({
-          value: sucursal.id,
-          label: sucursal.nombre
-        }))
-      ];
+      const sucursalOptions = buildSucursalOptions(asString(form.sucursal_id));
 
       return (
         <>
           {!editingId ? (
             <div>
-              <FieldLabel>ID usuario Supabase</FieldLabel>
+              <FieldLabel>Contraseña temporal</FieldLabel>
               <TextInput
-                value={asString(form.id)}
-                onChange={(value) => setField("id", value)}
-                placeholder="UUID del usuario de Auth"
+                value={asString(form.password)}
+                onChange={(value) => setField("password", value)}
+                placeholder="Opcional. Si la dejás vacía, el sistema genera una."
+                type="text"
               />
               <p className="mt-1 text-[10px] font-semibold text-[#64748b]">
-                Para crear un perfil nuevo, primero creá el usuario en Supabase Auth.
+                El usuario se crea automáticamente en Supabase Auth y también en perfiles.
               </p>
             </div>
           ) : null}
@@ -1256,13 +1338,9 @@ color: normalizeHexColor(form.color),
           </div>
 
           <div>
-<div>
-  <FieldLabel>Color</FieldLabel>
-  <ColorInput
-    value={asString(form.color)}
-    onChange={(value) => setField("color", value)}
-  />
-</div>          </div>
+            <FieldLabel>Color</FieldLabel>
+            <ColorInput value={asString(form.color)} onChange={(value) => setField("color", value)} />
+          </div>
 
           <BooleanChip
             checked={asBoolean(form.activo)}
@@ -1286,13 +1364,9 @@ color: normalizeHexColor(form.color),
           </div>
 
           <div>
-<div>
-  <FieldLabel>Color</FieldLabel>
-  <ColorInput
-    value={asString(form.color)}
-    onChange={(value) => setField("color", value)}
-  />
-</div>        </div>
+            <FieldLabel>Color</FieldLabel>
+            <ColorInput value={asString(form.color)} onChange={(value) => setField("color", value)} />
+          </div>
 
           <BooleanChip
             checked={asBoolean(form.activo)}
@@ -1361,13 +1435,7 @@ color: normalizeHexColor(form.color),
     }
 
     if (activeTab === "cajas") {
-      const sucursalOptions: SelectOption[] = [
-        { value: "", label: "Sin sucursal" },
-        ...sucursales.map((sucursal) => ({
-          value: sucursal.id,
-          label: sucursal.nombre
-        }))
-      ];
+      const sucursalOptions = buildSucursalOptions(asString(form.sucursal_id));
 
       return (
         <>
@@ -1482,13 +1550,9 @@ color: normalizeHexColor(form.color),
           </div>
 
           <div>
- <div>
-  <FieldLabel>Color</FieldLabel>
-  <ColorInput
-    value={asString(form.color)}
-    onChange={(value) => setField("color", value)}
-  />
-</div>         </div>
+            <FieldLabel>Color</FieldLabel>
+            <ColorInput value={asString(form.color)} onChange={(value) => setField("color", value)} />
+          </div>
 
           <div>
             <FieldLabel>Razón social</FieldLabel>
@@ -1568,13 +1632,9 @@ color: normalizeHexColor(form.color),
           </div>
 
           <div>
-<div>
-  <FieldLabel>Color</FieldLabel>
-  <ColorInput
-    value={asString(form.color)}
-    onChange={(value) => setField("color", value)}
-  />
-</div>         </div>
+            <FieldLabel>Color</FieldLabel>
+            <ColorInput value={asString(form.color)} onChange={(value) => setField("color", value)} />
+          </div>
 
           <BooleanChip
             checked={asBoolean(form.activo)}
@@ -1751,16 +1811,15 @@ color: normalizeHexColor(form.color),
     );
   }
 
-const activeTabMeta = tabs.find((tab) => tab.id === activeTab) || tabs[0];
-const ActiveIcon = activeTabMeta.icon;
-const currentProfileRecord = currentProfile as
-  | (Profile & { is_support_user?: boolean })
-  | null;
+  const activeTabMeta = tabs.find((tab) => tab.id === activeTab) || tabs[0];
+  const ActiveIcon = activeTabMeta.icon;
+  const currentProfileRecord = currentProfile as
+    | (Profile & { is_support_user?: boolean })
+    | null;
 
-const canSeeDeployPanel =
-  currentProfileRecord?.email?.toLowerCase() === "soporte@nostur.com.ar" ||
-  currentProfileRecord?.is_support_user === true;
-
+  const canSeeDeployPanel =
+    currentProfileRecord?.email?.toLowerCase() === "soporte@nostur.com.ar" ||
+    currentProfileRecord?.is_support_user === true;
 
   return (
     <div className="h-full overflow-auto bg-[#edf3f7] px-5 py-4 text-[#172033]">
@@ -1811,11 +1870,11 @@ const canSeeDeployPanel =
           </div>
         </header>
 
-      {canSeeDeployPanel ? (
-  <div className="mb-3">
-    <DeployActionsPanel />
-  </div>
-) : null}
+        {canSeeDeployPanel ? (
+          <div className="mb-3">
+            <DeployActionsPanel />
+          </div>
+        ) : null}
 
         <section className="relative z-[30] mb-3 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

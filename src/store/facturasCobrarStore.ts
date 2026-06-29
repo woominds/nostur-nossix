@@ -46,6 +46,16 @@ export type CarritoDisponible = {
   sucursal_id: string | null;
   vendedor: string | null;
   activo: boolean;
+
+  controlado?: boolean;
+  facturado?: boolean;
+  cobrado?: boolean;
+  cancelado?: boolean;
+  utilidad_neta?: string | number | null;
+  regalias?: string | number | null;
+  utilidad_bruta?: string | number | null;
+  importe_facturar?: string | number | null;
+
   clientes?: ClienteLite | null;
   carritos_control?: ControlCarritoDisponible[] | null;
 };
@@ -236,7 +246,10 @@ type FacturasCobrarState = {
   cobrarFacturasSeleccionadas: (draft: CobroDraft) => Promise<boolean>;
 
   setTab: (tab: FacturasTab) => void;
-  setFilter: <K extends keyof FacturasCobrarFilters>(key: K, value: FacturasCobrarFilters[K]) => void;
+  setFilter: <K extends keyof FacturasCobrarFilters>(
+    key: K,
+    value: FacturasCobrarFilters[K]
+  ) => void;
   setMonth: (mes: number, anio: number) => void;
   goToPreviousMonth: () => void;
   goToNextMonth: () => void;
@@ -265,6 +278,15 @@ type FacturasCobrarState = {
 function getArgentinaDate(): Date {
   const now = new Date();
   return new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Cordoba" }));
+}
+
+function getArgentinaStorageDate(): string {
+  const argentinaNow = getArgentinaDate();
+  const year = argentinaNow.getFullYear();
+  const month = String(argentinaNow.getMonth() + 1).padStart(2, "0");
+  const day = String(argentinaNow.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function getCurrentMonthYear(): { mes: number; anio: number } {
@@ -298,10 +320,32 @@ function getNumber(value: string | number | null | undefined): number {
 function parseMoney(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
 
-  const normalized = String(value || "")
-    .replace(/\./g, "")
-    .replace(",", ".")
-    .replace(/[^\d.-]/g, "");
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+
+  let normalized = raw
+    .replace(/\s/g, "")
+    .replace(/\$/g, "")
+    .replace(/ARS/gi, "")
+    .replace(/USD/gi, "");
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+
+    if (lastComma > lastDot) {
+      normalized = normalized.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  }
+
+  normalized = normalized.replace(/[^\d.-]/g, "");
 
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -320,8 +364,15 @@ function normalizeError(error: unknown): string {
 
   if (typeof error === "object" && "message" in error) {
     const message = String((error as { message?: unknown }).message || "Ocurrió un error.");
-    if (message.toLowerCase().includes("row-level security")) return "No tenés permisos para esta acción.";
-    if (message.toLowerCase().includes("permission denied")) return "Permiso denegado por Supabase/RLS.";
+
+    if (message.toLowerCase().includes("row-level security")) {
+      return "No tenés permisos para esta acción.";
+    }
+
+    if (message.toLowerCase().includes("permission denied")) {
+      return "Permiso denegado por Supabase/RLS.";
+    }
+
     return message;
   }
 
@@ -397,6 +448,27 @@ function getMonthRange(mes: number, anio: number): { from: string; to: string } 
   return { from, to };
 }
 
+function buildVirtualControlFromCarrito(carrito: CarritoDisponible): ControlCarritoDisponible {
+  const utilidadNeta = getNumber(carrito.utilidad_neta);
+  const regalias = getNumber(carrito.regalias);
+  const utilidadBruta = getNumber(carrito.utilidad_bruta);
+  const importeFacturar = getNumber(carrito.importe_facturar);
+
+  return {
+    id: `virtual-control-${carrito.id}`,
+    carrito_id: carrito.id,
+    utilidad_almundo: utilidadNeta,
+    porcentaje_regalia: utilidadNeta > 0 ? (regalias / utilidadNeta) * 100 : 36,
+    importe_regalia: regalias,
+    utilidad_nossix: utilidadBruta,
+    importe_a_facturar: importeFacturar,
+    controlado: Boolean(carrito.controlado),
+    facturado: Boolean(carrito.facturado),
+    cobrado: Boolean(carrito.cobrado),
+    anulado: Boolean(carrito.cancelado)
+  };
+}
+
 export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => ({
   loading: false,
   saving: false,
@@ -439,7 +511,11 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       return;
     }
 
-    const profileRes = await supabase.from("profiles").select("*").eq("id", currentUserId).maybeSingle();
+    const profileRes = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", currentUserId)
+      .maybeSingle();
 
     if (profileRes.error) {
       set({ loading: false, error: normalizeError(profileRes.error) });
@@ -475,8 +551,13 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       .order("moneda", { ascending: true })
       .order("numero_documento", { ascending: true });
 
-    if (filters.moneda !== "todos") facturasQuery = facturasQuery.eq("moneda", filters.moneda);
-    if (filters.sucursalId !== "todos") facturasQuery = facturasQuery.eq("sucursal_id", filters.sucursalId);
+    if (filters.moneda !== "todos") {
+      facturasQuery = facturasQuery.eq("moneda", filters.moneda);
+    }
+
+    if (filters.sucursalId !== "todos") {
+      facturasQuery = facturasQuery.eq("sucursal_id", filters.sucursalId);
+    }
 
     if (filters.estado !== "todos") {
       if (filters.estado === "COBRADA") {
@@ -500,65 +581,62 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       .order("fecha_cobro", { ascending: false })
       .order("created_at", { ascending: false });
 
-    if (filters.moneda !== "todos") retencionesQuery = retencionesQuery.eq("moneda", filters.moneda);
-    if (filters.sucursalId !== "todos") retencionesQuery = retencionesQuery.eq("sucursal_id", filters.sucursalId);
+    if (filters.moneda !== "todos") {
+      retencionesQuery = retencionesQuery.eq("moneda", filters.moneda);
+    }
 
-    const [facturasRes, retencionesRes, controlesDisponiblesRes, sucursalesRes, cajasRes] = await Promise.all([
-      facturasQuery,
-      retencionesQuery,
-      supabase
-        .from("carritos_control")
-        .select("*")
-        .eq("controlado", true)
-        .eq("facturado", false)
-        .eq("anulado", false)
-        .order("updated_at", { ascending: false }),
-      supabase.from("sucursales").select("*").order("nombre"),
-      supabase.from("cajas").select("*").order("nombre")
-    ]);
+    if (filters.sucursalId !== "todos") {
+      retencionesQuery = retencionesQuery.eq("sucursal_id", filters.sucursalId);
+    }
+
+    let carritosDisponiblesQuery = supabase
+      .from("carritos")
+      .select("*, clientes:cliente_id(*)")
+      .eq("controlado", true)
+      .eq("facturado", false)
+      .eq("cancelado", false)
+      .order("fecha_venta", { ascending: false });
+
+    if (filters.moneda !== "todos") {
+      carritosDisponiblesQuery = carritosDisponiblesQuery.eq("moneda", filters.moneda);
+    }
+
+    if (filters.sucursalId !== "todos") {
+      carritosDisponiblesQuery = carritosDisponiblesQuery.eq("sucursal_id", filters.sucursalId);
+    }
+
+    const [facturasRes, retencionesRes, carritosDisponiblesRes, sucursalesRes, cajasRes] =
+      await Promise.all([
+        facturasQuery,
+        retencionesQuery,
+        carritosDisponiblesQuery,
+        supabase.from("sucursales").select("*").order("nombre"),
+        supabase.from("cajas").select("*").order("nombre")
+      ]);
 
     const firstError =
       facturasRes.error ||
       retencionesRes.error ||
-      controlesDisponiblesRes.error ||
+      carritosDisponiblesRes.error ||
       sucursalesRes.error ||
       cajasRes.error;
 
     if (firstError) {
-      set({ loading: false, currentProfile, canManageFacturas, error: normalizeError(firstError) });
+      set({
+        loading: false,
+        currentProfile,
+        canManageFacturas,
+        error: normalizeError(firstError)
+      });
       return;
     }
 
-    const controlesDisponibles = (controlesDisponiblesRes.data || []) as ControlCarritoDisponible[];
-    const carritoIds = controlesDisponibles.map((control) => control.carrito_id).filter(Boolean);
-
-    let carritosDisponibles: CarritoDisponible[] = [];
-
-    if (carritoIds.length > 0) {
-      let carritosQuery = supabase
-        .from("carritos")
-        .select("*, clientes(*)")
-        .in("id", carritoIds)
-        .eq("visible_en_carritos", true)
-        .eq("activo", true)
-        .eq("confirmado_vendedor", true)
-        .order("fecha_venta", { ascending: false });
-
-      if (filters.moneda !== "todos") carritosQuery = carritosQuery.eq("moneda", filters.moneda);
-      if (filters.sucursalId !== "todos") carritosQuery = carritosQuery.eq("sucursal_id", filters.sucursalId);
-
-      const carritosRes = await carritosQuery;
-
-      if (carritosRes.error) {
-        set({ loading: false, currentProfile, canManageFacturas, error: normalizeError(carritosRes.error) });
-        return;
-      }
-
-      carritosDisponibles = ((carritosRes.data || []) as CarritoDisponible[]).map((carrito) => ({
+    const carritosDisponibles = ((carritosDisponiblesRes.data || []) as CarritoDisponible[]).map(
+      (carrito) => ({
         ...carrito,
-        carritos_control: controlesDisponibles.filter((control) => control.carrito_id === carrito.id)
-      }));
-    }
+        carritos_control: [buildVirtualControlFromCarrito(carrito)]
+      })
+    );
 
     set({
       loading: false,
@@ -625,7 +703,9 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
     }
 
     const totals =
-      isPostventa || draft.tipo_documento === "NOTA_CREDITO" || draft.tipo_documento === "NOTA_DEBITO"
+      isPostventa ||
+      draft.tipo_documento === "NOTA_CREDITO" ||
+      draft.tipo_documento === "NOTA_DEBITO"
         ? calculateDocumentTotals(netoGravado, draft.tipo_documento)
         : { neto: netoGravado, iva: 0, total: netoGravado };
 
@@ -638,12 +718,12 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       sucursal,
       mes: draft.mes ? Number(draft.mes) : null,
       anio: draft.anio ? Number(draft.anio) : null,
-      neto_gravado: totals.neto,
+      neto_gravado: Number(totals.neto.toFixed(2)),
       alicuota_iva: isFacturaCarritos ? 0 : 21,
-      iva_importe: totals.iva,
+      iva_importe: Number(totals.iva.toFixed(2)),
       no_gravado: 0,
       exento: 0,
-      total: totals.total,
+      total: Number(totals.total.toFixed(2)),
       estado: "PENDIENTE",
       cobrado: false,
       forma_cobro: null,
@@ -655,7 +735,11 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       created_by: currentUserId
     };
 
-    const facturaRes = await supabase.from("facturas_cobrar").insert(payload).select("*").single();
+    const facturaRes = await supabase
+      .from("facturas_cobrar")
+      .insert(payload)
+      .select("*")
+      .single();
 
     if (facturaRes.error || !facturaRes.data) {
       set({ saving: false, error: normalizeError(facturaRes.error) });
@@ -671,11 +755,11 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
         return {
           factura_id: factura.id,
           carrito_id: carrito.id,
-          control_id: control?.id || null,
+          control_id: null,
           numero_carrito: carrito.numero_carrito,
           pasajero: carrito.clientes?.nombre_completo || null,
           fecha_venta: carrito.fecha_venta,
-          importe_facturado: getNumber(control?.importe_a_facturar),
+          importe_facturado: Number(getNumber(control?.importe_a_facturar).toFixed(2)),
           moneda: carrito.moneda
         };
       });
@@ -687,20 +771,22 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
         return false;
       }
 
-      const controlIds = relaciones.map((item) => item.control_id).filter(Boolean);
+      const carritoIds = relaciones.map((item) => item.carrito_id).filter(Boolean);
 
-      if (controlIds.length > 0) {
-        const controlesRes = await supabase
-          .from("carritos_control")
+      if (carritoIds.length > 0) {
+        const carritosRes = await supabase
+          .from("carritos")
           .update({
             facturado: true,
-            facturado_at: new Date().toISOString(),
-            facturado_by: currentUserId
+            fecha_factura: getArgentinaStorageDate(),
+            numero_factura: factura.numero_documento,
+            estado: "FACTURADO",
+            updated_at: new Date().toISOString()
           })
-          .in("id", controlIds);
+          .in("id", carritoIds);
 
-        if (controlesRes.error) {
-          set({ saving: false, error: normalizeError(controlesRes.error) });
+        if (carritosRes.error) {
+          set({ saving: false, error: normalizeError(carritosRes.error) });
           return false;
         }
       }
@@ -736,18 +822,27 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
 
     const moneda = selectedFacturas[0]?.moneda || "ARS";
     const sucursalId = selectedFacturas[0]?.sucursal_id || null;
-    const sucursal = selectedFacturas[0]?.sucursal || getSucursalName(get().catalogos.sucursales, sucursalId);
+    const sucursal =
+      selectedFacturas[0]?.sucursal || getSucursalName(get().catalogos.sucursales, sucursalId);
 
     const sameMoneda = selectedFacturas.every((factura) => factura.moneda === moneda);
-    const sameSucursal = selectedFacturas.every((factura) => (factura.sucursal_id || null) === sucursalId);
+    const sameSucursal = selectedFacturas.every(
+      (factura) => (factura.sucursal_id || null) === sucursalId
+    );
 
     if (!sameMoneda) {
-      set({ saving: false, error: "Para registrar un cobro agrupado, todas las facturas deben ser de la misma moneda." });
+      set({
+        saving: false,
+        error: "Para registrar un cobro agrupado, todas las facturas deben ser de la misma moneda."
+      });
       return false;
     }
 
     if (!sameSucursal) {
-      set({ saving: false, error: "Para registrar un cobro agrupado, todas las facturas deben ser de la misma sucursal." });
+      set({
+        saving: false,
+        error: "Para registrar un cobro agrupado, todas las facturas deben ser de la misma sucursal."
+      });
       return false;
     }
 
@@ -755,35 +850,51 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
     const caja = get().catalogos.cajas.find((item) => item.id === draft.caja_id) || null;
 
     if (!noImpactaCaja && !caja) {
-      set({ saving: false, error: "Seleccioná una caja/banco para registrar la transferencia." });
+      set({
+        saving: false,
+        error: "Seleccioná una caja/banco para registrar la transferencia."
+      });
       return false;
     }
 
-    const totalFacturas = selectedFacturas.reduce((total, factura) => total + getNumber(factura.total), 0);
-    const importeIngresadoBanco = noImpactaCaja ? totalFacturas : parseMoney(draft.importe_ingresado_banco || totalFacturas);
+    const totalFacturas = selectedFacturas.reduce(
+      (total, factura) => total + getNumber(factura.total),
+      0
+    );
+
+    const importeIngresadoBanco = noImpactaCaja
+      ? totalFacturas
+      : parseMoney(draft.importe_ingresado_banco || totalFacturas);
 
     if (!noImpactaCaja && importeIngresadoBanco <= 0) {
-      set({ saving: false, error: "Ingresá el importe que entró realmente al banco." });
+      set({
+        saving: false,
+        error: "Ingresá el importe que entró realmente al banco."
+      });
       return false;
     }
 
     if (importeIngresadoBanco > totalFacturas) {
-      set({ saving: false, error: "El importe ingresado al banco no puede superar el total de las facturas seleccionadas." });
+      set({
+        saving: false,
+        error: "El importe ingresado al banco no puede superar el total de las facturas seleccionadas."
+      });
       return false;
     }
 
     const totalRetenciones = Math.max(totalFacturas - importeIngresadoBanco, 0);
+    const fechaCobro = getArgentinaStorageDate();
 
     const cobroRes = await supabase
       .from("facturas_cobrar_cobros")
       .insert({
-        fecha_cobro: new Date().toISOString().slice(0, 10),
+        fecha_cobro: fechaCobro,
         moneda,
         sucursal_id: sucursalId,
         sucursal,
-        total_facturas: totalFacturas,
-        importe_ingresado_banco: importeIngresadoBanco,
-        total_retenciones: totalRetenciones,
+        total_facturas: Number(totalFacturas.toFixed(2)),
+        importe_ingresado_banco: Number(importeIngresadoBanco.toFixed(2)),
+        total_retenciones: Number(totalRetenciones.toFixed(2)),
         caja_id: noImpactaCaja ? null : caja?.id || null,
         caja: noImpactaCaja ? null : caja?.nombre || null,
         forma_cobro: draft.forma_cobro,
@@ -824,9 +935,9 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
         factura_id: factura.id,
         numero_documento: factura.numero_documento,
         moneda: factura.moneda,
-        importe_factura: importeFactura,
-        importe_cobrado: importeCobrado,
-        importe_retencion: importeRetencion
+        importe_factura: Number(importeFactura.toFixed(2)),
+        importe_cobrado: Number(importeCobrado.toFixed(2)),
+        importe_retencion: Number(importeRetencion.toFixed(2))
       };
     });
 
@@ -851,7 +962,8 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
         caja: noImpactaCaja ? null : caja?.nombre || null,
         referencia_cobro: draft.referencia_cobro || null,
         no_impacta_caja: noImpactaCaja,
-        observaciones: draft.observaciones || null
+        observaciones: draft.observaciones || null,
+        updated_at: new Date().toISOString()
       })
       .in("id", facturaIds);
 
@@ -860,23 +972,24 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       return false;
     }
 
-    const controlIds = selectedFacturas
+    const carritoIds = selectedFacturas
       .flatMap((factura) => factura.facturas_cobrar_carritos || [])
-      .map((item) => item.control_id)
+      .map((item) => item.carrito_id)
       .filter(Boolean) as string[];
 
-    if (controlIds.length > 0) {
-      const controlesRes = await supabase
-        .from("carritos_control")
+    if (carritoIds.length > 0) {
+      const carritosRes = await supabase
+        .from("carritos")
         .update({
           cobrado: true,
-          cobrado_at: new Date().toISOString(),
-          cobrado_by: currentUserId
+          fecha_cobro: fechaCobro,
+          estado: "COBRADO",
+          updated_at: new Date().toISOString()
         })
-        .in("id", controlIds);
+        .in("id", carritoIds);
 
-      if (controlesRes.error) {
-        set({ saving: false, error: normalizeError(controlesRes.error) });
+      if (carritosRes.error) {
+        set({ saving: false, error: normalizeError(carritosRes.error) });
         return false;
       }
     }
@@ -904,7 +1017,12 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       selectedFacturaIds: [],
       filters: {
         ...state.filters,
-        estado: tab === "COBRADA" ? "COBRADA" : tab === "PENDIENTE" ? "PENDIENTE" : state.filters.estado
+        estado:
+          tab === "COBRADA"
+            ? "COBRADA"
+            : tab === "PENDIENTE"
+              ? "PENDIENTE"
+              : state.filters.estado
       }
     }));
   },
@@ -966,16 +1084,24 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
     if (factura.cobrado || factura.estado === "COBRADA") return;
 
     const selectedFacturas = get().getSelectedFacturas();
-if (selectedFacturas.length > 0) {
-  const base = selectedFacturas[0];
 
-  if (base.moneda !== factura.moneda) {
-    set({
-      error: "Solo podés agrupar facturas de la misma moneda."
-    });
-    return;
-  }
-}
+    if (selectedFacturas.length > 0) {
+      const base = selectedFacturas[0];
+
+      if (base.moneda !== factura.moneda) {
+        set({
+          error: "Solo podés agrupar facturas de la misma moneda."
+        });
+        return;
+      }
+
+      if ((base.sucursal_id || null) !== (factura.sucursal_id || null)) {
+        set({
+          error: "Solo podés agrupar facturas de la misma sucursal."
+        });
+        return;
+      }
+    }
 
     set((state) => {
       const exists = state.selectedFacturaIds.includes(facturaId);
@@ -1061,13 +1187,19 @@ if (selectedFacturas.length > 0) {
   getCarritosDisponiblesForDraft: (draft) => {
     return get().carritosDisponibles.filter((carrito) => {
       const controles = Array.isArray(carrito.carritos_control) ? carrito.carritos_control : [];
+
       const tieneControlFacturable = controles.some(
-        (control) => control.controlado && !control.facturado && !control.anulado
+        (control) =>
+          control.controlado &&
+          !control.facturado &&
+          !control.anulado &&
+          getNumber(control.importe_a_facturar) !== 0
       );
 
       if (!tieneControlFacturable) return false;
       if (draft.moneda !== carrito.moneda) return false;
       if (draft.sucursal_id && carrito.sucursal_id !== draft.sucursal_id) return false;
+
       return true;
     });
   },
@@ -1090,8 +1222,12 @@ if (selectedFacturas.length > 0) {
 
       const buildMoney = (moneda: "ARS" | "USD"): MoneyMetrics => {
         const filtered = items.filter((factura) => factura.moneda === moneda);
-        const pendientes = filtered.filter((factura) => !factura.cobrado && factura.estado !== "COBRADA");
-        const cobradas = filtered.filter((factura) => factura.cobrado || factura.estado === "COBRADA");
+        const pendientes = filtered.filter(
+          (factura) => !factura.cobrado && factura.estado !== "COBRADA"
+        );
+        const cobradas = filtered.filter(
+          (factura) => factura.cobrado || factura.estado === "COBRADA"
+        );
 
         return {
           pendiente: pendientes.reduce((total, factura) => total + getNumber(factura.total), 0),
@@ -1126,8 +1262,20 @@ if (selectedFacturas.length > 0) {
           sucursalId: factura.sucursal_id,
           sucursal: sucursalName,
           monedas: [
-            { moneda: "ARS", facturas: [], total: 0, totalSeleccionado: 0, cantidadSeleccionada: 0 },
-            { moneda: "USD", facturas: [], total: 0, totalSeleccionado: 0, cantidadSeleccionada: 0 }
+            {
+              moneda: "ARS",
+              facturas: [],
+              total: 0,
+              totalSeleccionado: 0,
+              cantidadSeleccionada: 0
+            },
+            {
+              moneda: "USD",
+              facturas: [],
+              total: 0,
+              totalSeleccionado: 0,
+              cantidadSeleccionada: 0
+            }
           ]
         });
       }

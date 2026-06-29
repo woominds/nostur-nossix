@@ -72,6 +72,9 @@ export type MetasFilters = {
 };
 
 export type MetaDraft = {
+  sucursal_id: string;
+  vendedor_id: string;
+  alcance: "TODOS" | "ESPECIFICO";
   fecha_desde: string;
   fecha_hasta: string;
   mes: string;
@@ -115,6 +118,31 @@ type MetasMetrics = {
   almundo: number;
 };
 
+type SavePayload = {
+  tipo: MetaTipo;
+  fecha_desde: string;
+  fecha_hasta: string;
+  mes: number | null;
+  anio: number | null;
+  sucursal_id: string | null;
+  vendedor_id: string | null;
+  moneda: "USD";
+  meta_unica_usd: number;
+  meta_piso_usd: number;
+  meta_medio_usd: number;
+  meta_logrado_usd: number;
+  comision_piso_pct: number;
+  comision_medio_pct: number;
+  comision_logrado_pct: number;
+  es_meta_almundo: boolean;
+  activa: boolean;
+  observaciones: string | null;
+  updated_by: string | null;
+  updated_at?: string;
+  created_by?: string | null;
+  created_at?: string;
+};
+
 type MetasState = {
   loading: boolean;
   saving: boolean;
@@ -132,6 +160,8 @@ type MetasState = {
   loadMetas: () => Promise<void>;
   saveMeta: (meta: Meta, draft: MetaDraft) => Promise<boolean>;
   createMeta: (draft: CreateMetaDraft) => Promise<boolean>;
+  deactivateMeta: (metaId: string) => Promise<boolean>;
+  copyPreviousPeriod: () => Promise<boolean>;
 
   setFilter: <K extends keyof MetasFilters>(key: K, value: MetasFilters[K]) => void;
   setMonth: (mes: string | number, anio: string | number) => void;
@@ -200,9 +230,12 @@ function normalizeError(error: unknown): string {
 
   if (typeof error === "object" && "message" in error) {
     const message = String((error as { message?: unknown }).message || "Ocurrió un error.");
-    if (message.toLowerCase().includes("row-level security")) return "No tenés permisos para esta acción.";
-    if (message.toLowerCase().includes("permission denied")) return "Permiso denegado por Supabase/RLS.";
-    if (message.toLowerCase().includes("duplicate key")) return "Ya existe una meta similar para ese período.";
+    const lower = message.toLowerCase();
+
+    if (lower.includes("row-level security")) return "No tenés permisos para esta acción.";
+    if (lower.includes("permission denied")) return "Permiso denegado por Supabase/RLS.";
+    if (lower.includes("duplicate key")) return "Ya existe una meta similar para ese período.";
+
     return message;
   }
 
@@ -223,11 +256,11 @@ function canProfileManage(profile: ProfileLite | null): boolean {
   );
 }
 
-function monthStart(anio: string, mes: string): string {
+export function monthStart(anio: string, mes: string): string {
   return `${anio}-${mes.padStart(2, "0")}-01`;
 }
 
-function monthEnd(anio: string, mes: string): string {
+export function monthEnd(anio: string, mes: string): string {
   const year = Number(anio);
   const month = Number(mes);
   const last = new Date(year, month, 0).getDate();
@@ -252,6 +285,43 @@ function normalizeMonthYear(mes: string | number, anio: string | number): { mes:
   return {
     mes: String(nextMes).padStart(2, "0"),
     anio: String(nextAnio)
+  };
+}
+
+function parseDateOnly(value: string): Date {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatDateOnly(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+export function getWeekRangeFromDate(value: string): { fecha_desde: string; fecha_hasta: string } {
+  if (!value) {
+    return {
+      fecha_desde: "",
+      fecha_hasta: ""
+    };
+  }
+
+  const base = parseDateOnly(value);
+  const day = base.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+
+  const monday = new Date(base);
+  monday.setDate(base.getDate() + diffToMonday);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  return {
+    fecha_desde: formatDateOnly(monday),
+    fecha_hasta: formatDateOnly(sunday)
   };
 }
 
@@ -304,20 +374,29 @@ function buildResumen(
   });
 }
 
-function validateMetaPayload(tipo: MetaTipo, payload: {
-  fecha_desde: string;
-  fecha_hasta: string;
-  meta_unica_usd: number;
-  meta_piso_usd: number;
-  meta_medio_usd: number;
-  meta_logrado_usd: number;
-}) {
+function validateMetaPayload(
+  tipo: MetaTipo,
+  payload: {
+    fecha_desde: string;
+    fecha_hasta: string;
+    sucursal_id: string | null;
+    vendedor_id: string | null;
+    meta_unica_usd: number;
+    meta_piso_usd: number;
+    meta_medio_usd: number;
+    meta_logrado_usd: number;
+  }
+): string | null {
   if (!payload.fecha_desde || !payload.fecha_hasta) {
     return "Completá fecha desde y fecha hasta.";
   }
 
   if (payload.fecha_hasta < payload.fecha_desde) {
     return "La fecha hasta no puede ser anterior a la fecha desde.";
+  }
+
+  if (tipo === "ALMUNDO_MENSUAL" || tipo === "SUCURSAL_MENSUAL") {
+    if (!payload.sucursal_id) return "Seleccioná una sucursal.";
   }
 
   if (tipo === "VENDEDOR_SEMANAL") {
@@ -341,6 +420,126 @@ function validateMetaPayload(tipo: MetaTipo, payload: {
   }
 
   return null;
+}
+
+function normalizeCreatePayload(
+  draft: CreateMetaDraft,
+  currentUserId: string | null
+): SavePayload {
+  const tipo = draft.tipo;
+  const isAlmundo = tipo === "ALMUNDO_MENSUAL";
+  const isWeekly = tipo === "VENDEDOR_SEMANAL";
+  const isVendedor = tipo === "VENDEDOR_MENSUAL" || tipo === "VENDEDOR_SEMANAL";
+
+  const parsedMetaUnica = parseMoney(draft.meta_unica_usd);
+  const parsedPiso = parseMoney(draft.meta_piso_usd);
+  const parsedMedio = parseMoney(draft.meta_medio_usd);
+  const parsedLogrado = parseMoney(draft.meta_logrado_usd);
+  const metaPrincipal = parsedMetaUnica || parsedLogrado;
+
+  return {
+    tipo,
+    fecha_desde: draft.fecha_desde,
+    fecha_hasta: draft.fecha_hasta,
+    mes: draft.mes ? Number(draft.mes) : null,
+    anio: draft.anio ? Number(draft.anio) : null,
+    sucursal_id: tipo === "ALMUNDO_MENSUAL" || tipo === "SUCURSAL_MENSUAL" ? draft.sucursal_id || null : null,
+    vendedor_id: isVendedor && draft.alcance === "ESPECIFICO" ? draft.vendedor_id || null : null,
+    moneda: "USD",
+    meta_unica_usd: isWeekly || isAlmundo ? metaPrincipal : 0,
+    meta_piso_usd: isAlmundo || isWeekly ? 0 : parsedPiso,
+    meta_medio_usd: isAlmundo || isWeekly ? 0 : parsedMedio,
+    meta_logrado_usd: isAlmundo ? metaPrincipal : isWeekly ? 0 : parsedLogrado,
+    comision_piso_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_piso_pct || 8) : 0,
+    comision_medio_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_medio_pct || 10) : 0,
+    comision_logrado_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_logrado_pct || 12) : 0,
+    es_meta_almundo: isAlmundo,
+    activa: true,
+    observaciones: draft.observaciones || null,
+    created_by: currentUserId,
+    updated_by: currentUserId
+  };
+}
+
+function normalizeEditPayload(
+  meta: Meta,
+  draft: MetaDraft,
+  currentUserId: string | null
+): SavePayload {
+  const tipo = meta.tipo;
+  const isAlmundo = tipo === "ALMUNDO_MENSUAL";
+  const isWeekly = tipo === "VENDEDOR_SEMANAL";
+  const isVendedor = tipo === "VENDEDOR_MENSUAL" || tipo === "VENDEDOR_SEMANAL";
+
+  const parsedMetaUnica = parseMoney(draft.meta_unica_usd);
+  const parsedPiso = parseMoney(draft.meta_piso_usd);
+  const parsedMedio = parseMoney(draft.meta_medio_usd);
+  const parsedLogrado = parseMoney(draft.meta_logrado_usd);
+  const metaPrincipal = parsedMetaUnica || parsedLogrado;
+
+  return {
+    tipo,
+    fecha_desde: draft.fecha_desde,
+    fecha_hasta: draft.fecha_hasta,
+    mes: draft.mes ? Number(draft.mes) : null,
+    anio: draft.anio ? Number(draft.anio) : null,
+    sucursal_id: tipo === "ALMUNDO_MENSUAL" || tipo === "SUCURSAL_MENSUAL" ? draft.sucursal_id || null : null,
+    vendedor_id: isVendedor && draft.alcance === "ESPECIFICO" ? draft.vendedor_id || null : null,
+    moneda: "USD",
+    meta_unica_usd: isWeekly || isAlmundo ? metaPrincipal : 0,
+    meta_piso_usd: isAlmundo || isWeekly ? 0 : parsedPiso,
+    meta_medio_usd: isAlmundo || isWeekly ? 0 : parsedMedio,
+    meta_logrado_usd: isAlmundo ? metaPrincipal : isWeekly ? 0 : parsedLogrado,
+    comision_piso_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_piso_pct || 8) : 0,
+    comision_medio_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_medio_pct || 10) : 0,
+    comision_logrado_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_logrado_pct || 12) : 0,
+    es_meta_almundo: isAlmundo,
+    activa: draft.activa,
+    observaciones: draft.observaciones || null,
+    updated_by: currentUserId
+  };
+}
+
+async function findExistingMeta(payload: SavePayload, excludeId?: string): Promise<Meta | null> {
+  let query = supabase
+    .from("metas")
+    .select("*")
+    .eq("tipo", payload.tipo)
+    .eq("activa", true);
+
+  if (payload.tipo === "VENDEDOR_SEMANAL") {
+    query = query
+      .eq("fecha_desde", payload.fecha_desde)
+      .eq("fecha_hasta", payload.fecha_hasta);
+
+    if (payload.vendedor_id) {
+      query = query.eq("vendedor_id", payload.vendedor_id);
+    } else {
+      query = query.is("vendedor_id", null);
+    }
+  } else {
+    query = query.eq("mes", payload.mes).eq("anio", payload.anio);
+
+    if (payload.sucursal_id) {
+      query = query.eq("sucursal_id", payload.sucursal_id);
+    } else {
+      query = query.is("sucursal_id", null);
+    }
+
+    if (payload.vendedor_id) {
+      query = query.eq("vendedor_id", payload.vendedor_id);
+    } else {
+      query = query.is("vendedor_id", null);
+    }
+  }
+
+  if (excludeId) query = query.neq("id", excludeId);
+
+  const { data, error } = await query.limit(1).maybeSingle();
+
+  if (error) throw error;
+
+  return (data || null) as Meta | null;
 }
 
 export const useMetasStore = create<MetasState>((set, get) => ({
@@ -404,6 +603,7 @@ export const useMetasStore = create<MetasState>((set, get) => ({
 
     if (filters.tipo !== "todos") metasQuery = metasQuery.eq("tipo", filters.tipo);
     if (filters.sucursalId !== "todos") metasQuery = metasQuery.eq("sucursal_id", filters.sucursalId);
+
     if (filters.vendedorId !== "todos") {
       if (filters.vendedorId === "general") {
         metasQuery = metasQuery.is("vendedor_id", null);
@@ -448,63 +648,144 @@ export const useMetasStore = create<MetasState>((set, get) => ({
   saveMeta: async (meta, draft) => {
     set({ saving: true, error: null });
 
-    const currentUserId = await getCurrentUserId();
+    try {
+      const currentUserId = await getCurrentUserId();
 
-    if (!currentUserId) {
-      set({ saving: false, error: "No hay usuario autenticado." });
-      return false;
-    }
+      if (!currentUserId) {
+        set({ saving: false, error: "No hay usuario autenticado." });
+        return false;
+      }
 
-    const parsedMetaUnica = parseMoney(draft.meta_unica_usd);
-    const parsedPiso = parseMoney(draft.meta_piso_usd);
-    const parsedMedio = parseMoney(draft.meta_medio_usd);
-    const parsedLogrado = parseMoney(draft.meta_logrado_usd);
+      const payload = normalizeEditPayload(meta, draft, currentUserId);
 
-    const payload = {
-      fecha_desde: draft.fecha_desde,
-      fecha_hasta: draft.fecha_hasta,
-      mes: draft.mes ? Number(draft.mes) : null,
-      anio: draft.anio ? Number(draft.anio) : null,
-      meta_unica_usd: parsedMetaUnica,
-      meta_piso_usd: parsedPiso,
-      meta_medio_usd: parsedMedio,
-      meta_logrado_usd: parsedLogrado,
-      comision_piso_pct: parseMoney(draft.comision_piso_pct),
-      comision_medio_pct: parseMoney(draft.comision_medio_pct),
-      comision_logrado_pct: parseMoney(draft.comision_logrado_pct),
-      activa: draft.activa,
-      observaciones: draft.observaciones || null,
-      updated_by: currentUserId
-    };
+      const validation = validateMetaPayload(payload.tipo, {
+        fecha_desde: payload.fecha_desde,
+        fecha_hasta: payload.fecha_hasta,
+        sucursal_id: payload.sucursal_id,
+        vendedor_id: payload.vendedor_id,
+        meta_unica_usd: payload.meta_unica_usd,
+        meta_piso_usd: payload.meta_piso_usd,
+        meta_medio_usd: payload.meta_medio_usd,
+        meta_logrado_usd: payload.meta_logrado_usd
+      });
 
-    const validation = validateMetaPayload(meta.tipo, {
-      fecha_desde: payload.fecha_desde,
-      fecha_hasta: payload.fecha_hasta,
-      meta_unica_usd: payload.meta_unica_usd,
-      meta_piso_usd: payload.meta_piso_usd,
-      meta_medio_usd: payload.meta_medio_usd,
-      meta_logrado_usd: payload.meta_logrado_usd
-    });
+      if (validation) {
+        set({ saving: false, error: validation });
+        return false;
+      }
 
-    if (validation) {
-      set({ saving: false, error: validation });
-      return false;
-    }
+      const duplicate = await findExistingMeta(payload, meta.id);
 
-    const { error } = await supabase.from("metas").update(payload).eq("id", meta.id);
+      if (duplicate) {
+        set({
+          saving: false,
+          error: "Ya existe una meta activa igual para ese tipo, período y alcance. Editá esa meta o desactivala."
+        });
+        return false;
+      }
 
-    if (error) {
+      const { error } = await supabase
+        .from("metas")
+        .update({
+          ...payload,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", meta.id);
+
+      if (error) {
+        set({ saving: false, error: normalizeError(error) });
+        return false;
+      }
+
+      await get().loadMetas();
+
+      set({ saving: false });
+      return true;
+    } catch (error) {
       set({ saving: false, error: normalizeError(error) });
       return false;
     }
-
-    await get().loadMetas();
-
-    set({ saving: false });
-    return true;
   },
 
   createMeta: async (draft) => {
+    set({ saving: true, error: null });
+
+    try {
+      const currentUserId = await getCurrentUserId();
+
+      if (!currentUserId) {
+        set({ saving: false, error: "No hay usuario autenticado." });
+        return false;
+      }
+
+      const payload = normalizeCreatePayload(draft, currentUserId);
+
+      const validation = validateMetaPayload(payload.tipo, {
+        fecha_desde: payload.fecha_desde,
+        fecha_hasta: payload.fecha_hasta,
+        sucursal_id: payload.sucursal_id,
+        vendedor_id: payload.vendedor_id,
+        meta_unica_usd: payload.meta_unica_usd,
+        meta_piso_usd: payload.meta_piso_usd,
+        meta_medio_usd: payload.meta_medio_usd,
+        meta_logrado_usd: payload.meta_logrado_usd
+      });
+
+      if (validation) {
+        set({ saving: false, error: validation });
+        return false;
+      }
+
+      const existing = await findExistingMeta(payload);
+
+      if (existing) {
+        const { error } = await supabase
+          .from("metas")
+          .update({
+            ...payload,
+            updated_by: currentUserId,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", existing.id);
+
+        if (error) {
+          set({ saving: false, error: normalizeError(error) });
+          return false;
+        }
+
+        set({ selectedMetaId: existing.id });
+      } else {
+        const { data, error } = await supabase
+          .from("metas")
+          .insert({
+            ...payload,
+            created_by: currentUserId,
+            updated_by: currentUserId,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select("*")
+          .single();
+
+        if (error) {
+          set({ saving: false, error: normalizeError(error) });
+          return false;
+        }
+
+        set({ selectedMetaId: (data as Meta).id });
+      }
+
+      await get().loadMetas();
+
+      set({ saving: false });
+      return true;
+    } catch (error) {
+      set({ saving: false, error: normalizeError(error) });
+      return false;
+    }
+  },
+
+  deactivateMeta: async (metaId) => {
     set({ saving: true, error: null });
 
     const currentUserId = await getCurrentUserId();
@@ -514,80 +795,14 @@ export const useMetasStore = create<MetasState>((set, get) => ({
       return false;
     }
 
-    const tipo = draft.tipo;
-    const isVendedor = tipo === "VENDEDOR_MENSUAL" || tipo === "VENDEDOR_SEMANAL";
-    const isSucursal = tipo === "SUCURSAL_MENSUAL" || tipo === "ALMUNDO_MENSUAL";
-    const isAlmundo = tipo === "ALMUNDO_MENSUAL";
-
-    if (isSucursal && !draft.sucursal_id) {
-      set({ saving: false, error: "Seleccioná una sucursal." });
-      return false;
-    }
-
-    if (isVendedor && draft.alcance === "ESPECIFICO" && !draft.vendedor_id) {
-      set({ saving: false, error: "Seleccioná un vendedor." });
-      return false;
-    }
-
-    const parsedMetaUnica = parseMoney(draft.meta_unica_usd);
-    const parsedPiso = parseMoney(draft.meta_piso_usd);
-    const parsedMedio = parseMoney(draft.meta_medio_usd);
-    const parsedLogrado = parseMoney(draft.meta_logrado_usd);
-
-    const payloadBase = {
-      tipo,
-      fecha_desde: draft.fecha_desde,
-      fecha_hasta: draft.fecha_hasta,
-      mes: draft.mes ? Number(draft.mes) : null,
-      anio: draft.anio ? Number(draft.anio) : null,
-      moneda: "USD",
-      meta_unica_usd: tipo === "VENDEDOR_SEMANAL" || isAlmundo ? parsedMetaUnica || parsedLogrado : 0,
-      meta_piso_usd: isAlmundo ? 0 : parsedPiso,
-      meta_medio_usd: isAlmundo ? 0 : parsedMedio,
-      meta_logrado_usd: isAlmundo ? parsedMetaUnica || parsedLogrado : parsedLogrado,
-      comision_piso_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_piso_pct || 8) : 0,
-      comision_medio_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_medio_pct || 10) : 0,
-      comision_logrado_pct: tipo === "VENDEDOR_MENSUAL" ? parseMoney(draft.comision_logrado_pct || 12) : 0,
-      es_meta_almundo: isAlmundo,
-      activa: true,
-      observaciones: draft.observaciones || null,
-      created_by: currentUserId,
-      updated_by: currentUserId
-    };
-
-    const validation = validateMetaPayload(tipo, {
-      fecha_desde: payloadBase.fecha_desde,
-      fecha_hasta: payloadBase.fecha_hasta,
-      meta_unica_usd: payloadBase.meta_unica_usd,
-      meta_piso_usd: payloadBase.meta_piso_usd,
-      meta_medio_usd: payloadBase.meta_medio_usd,
-      meta_logrado_usd: payloadBase.meta_logrado_usd
-    });
-
-    if (validation) {
-      set({ saving: false, error: validation });
-      return false;
-    }
-
-    const rows = [];
-
-    if (isSucursal) {
-      rows.push({
-        ...payloadBase,
-        sucursal_id: draft.sucursal_id,
-        vendedor_id: null
-      });
-    }
-
-    if (isVendedor) {
-      rows.push({
-        ...payloadBase,
-        sucursal_id: null,
-        vendedor_id: draft.alcance === "ESPECIFICO" ? draft.vendedor_id : null
-      });
-    }
-
-    const { error } = await supabase.from("metas").insert(rows).select("*");
+    const { error } = await supabase
+      .from("metas")
+      .update({
+        activa: false,
+        updated_by: currentUserId,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", metaId);
 
     if (error) {
       set({ saving: false, error: normalizeError(error) });
@@ -596,8 +811,101 @@ export const useMetasStore = create<MetasState>((set, get) => ({
 
     await get().loadMetas();
 
-    set({ saving: false });
+    set({ saving: false, selectedMetaId: null });
     return true;
+  },
+
+  copyPreviousPeriod: async () => {
+    set({ saving: true, error: null });
+
+    try {
+      const currentUserId = await getCurrentUserId();
+
+      if (!currentUserId) {
+        set({ saving: false, error: "No hay usuario autenticado." });
+        return false;
+      }
+
+      const filters = get().filters;
+      const current = normalizeMonthYear(filters.mes, filters.anio);
+      const previous = normalizeMonthYear(Number(current.mes) - 1, current.anio);
+
+      const { data, error } = await supabase
+        .from("metas")
+        .select("*")
+        .eq("anio", Number(previous.anio))
+        .eq("mes", Number(previous.mes))
+        .eq("activa", true)
+        .neq("tipo", "VENDEDOR_SEMANAL");
+
+      if (error) {
+        set({ saving: false, error: normalizeError(error) });
+        return false;
+      }
+
+      const previousMetas = (data || []) as Meta[];
+
+      if (previousMetas.length === 0) {
+        set({ saving: false, error: "No encontré metas activas en el mes anterior para copiar." });
+        return false;
+      }
+
+      for (const meta of previousMetas) {
+        const payload: SavePayload = {
+          tipo: meta.tipo,
+          fecha_desde: monthStart(current.anio, current.mes),
+          fecha_hasta: monthEnd(current.anio, current.mes),
+          mes: Number(current.mes),
+          anio: Number(current.anio),
+          sucursal_id: meta.sucursal_id,
+          vendedor_id: meta.vendedor_id,
+          moneda: "USD",
+          meta_unica_usd: parseMoney(meta.meta_unica_usd),
+          meta_piso_usd: parseMoney(meta.meta_piso_usd),
+          meta_medio_usd: parseMoney(meta.meta_medio_usd),
+          meta_logrado_usd: parseMoney(meta.meta_logrado_usd),
+          comision_piso_pct: parseMoney(meta.comision_piso_pct),
+          comision_medio_pct: parseMoney(meta.comision_medio_pct),
+          comision_logrado_pct: parseMoney(meta.comision_logrado_pct),
+          es_meta_almundo: meta.tipo === "ALMUNDO_MENSUAL",
+          activa: true,
+          observaciones: meta.observaciones,
+          created_by: currentUserId,
+          updated_by: currentUserId
+        };
+
+        const existing = await findExistingMeta(payload);
+
+        if (existing) {
+          await supabase
+            .from("metas")
+            .update({
+              ...payload,
+              updated_by: currentUserId,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", existing.id);
+        } else {
+          await supabase
+            .from("metas")
+            .insert({
+              ...payload,
+              created_by: currentUserId,
+              updated_by: currentUserId,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            });
+        }
+      }
+
+      await get().loadMetas();
+
+      set({ saving: false });
+      return true;
+    } catch (error) {
+      set({ saving: false, error: normalizeError(error) });
+      return false;
+    }
   },
 
   setFilter: (key, value) => {

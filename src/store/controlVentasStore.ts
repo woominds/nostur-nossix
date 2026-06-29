@@ -63,6 +63,22 @@ export type CarritoControlItem = {
   confirmado_vendedor: boolean;
   confirmado_at: string | null;
   enviado_control_at: string | null;
+
+  derivado_control: boolean;
+  controlado: boolean;
+  facturado: boolean;
+  cobrado: boolean;
+  cancelado: boolean;
+  fecha_factura: string | null;
+  fecha_cobro: string | null;
+  numero_factura: string | null;
+  numero_factura_arca: string | null;
+  utilidad_neta: string | number;
+  regalias: string | number;
+  utilidad_bruta: string | number;
+  importe_facturar: string | number;
+  
+
   clientes?: Cliente | null;
 };
 
@@ -247,6 +263,8 @@ function getDefaultFilters(): ControlVentasFilters {
 }
 
 function getNumber(value: string | number | null | undefined): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -254,10 +272,32 @@ function getNumber(value: string | number | null | undefined): number {
 function parseMoney(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
 
-  const normalized = String(value || "")
-    .replace(/\./g, "")
-    .replace(",", ".")
-    .replace(/[^\d.-]/g, "");
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+
+  let normalized = raw
+    .replace(/\s/g, "")
+    .replace(/\$/g, "")
+    .replace(/ARS/gi, "")
+    .replace(/USD/gi, "");
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+
+    if (lastComma > lastDot) {
+      normalized = normalized.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  }
+
+  normalized = normalized.replace(/[^\d.-]/g, "");
 
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -291,19 +331,29 @@ function normalizeError(error: unknown): string {
   return String(error);
 }
 
-function calculateControl(utilidadBruta: number, regalias: number) {
+/**
+ * Regla de negocio Control de Ventas ALMUNDO:
+ * utilidad_neta = utilidad cargada / importada
+ * regalias = utilidad_neta * 36%
+ * utilidad_bruta = utilidad_neta - regalias
+ * importe_facturar = utilidad_bruta * 1.21
+ *
+ * Ojo:
+ * Los nombres utilidadAlmundo/utilidadNossix vienen heredados del panel.
+ */
+function calculateControl(utilidadNeta: number, regalias: number) {
   const normalizedRegalias =
-    regalias > 0 && regalias <= 1 && utilidadBruta > 1 ? utilidadBruta * regalias : regalias;
+    regalias > 0 && regalias <= 1 && utilidadNeta > 1 ? utilidadNeta * regalias : regalias;
 
-  const utilidadNeta = utilidadBruta - normalizedRegalias;
-  const facturacion = utilidadNeta * 1.21;
-  const porcentajeRegalia = utilidadBruta > 0 ? (normalizedRegalias / utilidadBruta) * 100 : 36;
+  const utilidadBruta = utilidadNeta - normalizedRegalias;
+  const importeAFacturar = utilidadBruta * 1.21;
+  const porcentajeRegalia = utilidadNeta > 0 ? (normalizedRegalias / utilidadNeta) * 100 : 36;
 
   return {
     porcentajeRegalia,
     importeRegalia: normalizedRegalias,
-    utilidadNossix: utilidadNeta,
-    importeAFacturar: facturacion
+    utilidadNossix: utilidadBruta,
+    importeAFacturar
   };
 }
 
@@ -331,43 +381,156 @@ function canProfileUse(profile: ProfileLite | null): boolean {
   );
 }
 
+function normalizeCarrito(raw: any): CarritoControlItem {
+  return {
+    id: raw.id,
+    cliente_id: raw.cliente_id,
+    contacto_id: raw.contacto_id || null,
+    numero_carrito: raw.numero_carrito || "",
+    fecha_venta: raw.fecha_venta || raw.created_at?.slice(0, 10) || getToday(),
+    servicio_id: raw.servicio_id || null,
+    servicio: raw.servicio || null,
+    metodo_contacto: raw.metodo_contacto || null,
+    forma_pago_id: raw.forma_pago_id || null,
+    forma_pago: raw.forma_pago || null,
+    destino: raw.destino || null,
+    fecha_in: raw.fecha_in || null,
+    fecha_out: raw.fecha_out || null,
+    solo_ida: Boolean(raw.solo_ida ?? raw.ida_solo),
+    importe: raw.importe || 0,
+    moneda: raw.moneda || "ARS",
+    vendedor: raw.vendedor || null,
+    vendedor_id: raw.vendedor_id || null,
+    sucursal_id: raw.sucursal_id || raw.clientes?.sucursal_id || null,
+    estado: raw.estado || "NUEVO",
+    observaciones: raw.observaciones || null,
+    activo: raw.activo !== false,
+    created_at: raw.created_at || new Date().toISOString(),
+    updated_at: raw.updated_at || raw.created_at || new Date().toISOString(),
+    importe_bruto: raw.importe_bruto ?? raw.importe ?? 0,
+    promocode_aplicado: Boolean(raw.promocode_aplicado ?? raw.promocode),
+    promocode_importe: raw.promocode_importe ?? raw.importe_promocode ?? 0,
+    importe_final: raw.importe_final ?? raw.importe ?? 0,
+    pago_parcial: Boolean(raw.pago_parcial),
+    total_pagado: raw.total_pagado || 0,
+    saldo_cta_cte: raw.saldo_cta_cte || 0,
+    visible_en_carritos: raw.visible_en_carritos !== false,
+    fecha_visible_carritos: raw.fecha_visible_carritos || null,
+    riesgo: Boolean(raw.riesgo ?? raw.impacto_riesgo),
+    riesgo_motivo: raw.riesgo_motivo || null,
+    confirmado_vendedor: raw.confirmado_vendedor !== false,
+    confirmado_at: raw.confirmado_at || null,
+    enviado_control_at: raw.enviado_control_at || null,
+
+    derivado_control: Boolean(raw.derivado_control),
+    controlado: Boolean(raw.controlado),
+    facturado: Boolean(raw.facturado),
+    cobrado: Boolean(raw.cobrado),
+    cancelado: Boolean(raw.cancelado),
+    fecha_factura: raw.fecha_factura || null,
+    fecha_cobro: raw.fecha_cobro || null,
+    numero_factura: raw.numero_factura || null,
+    numero_factura_arca: raw.numero_factura_arca || null,
+    utilidad_neta: raw.utilidad_neta || 0,
+    regalias: raw.regalias || 0,
+    utilidad_bruta: raw.utilidad_bruta || 0,
+    importe_facturar: raw.importe_facturar || 0,
+    
+
+    clientes: raw.clientes || null
+  };
+}
+
+function buildVirtualControl(carrito: CarritoControlItem): ControlVenta | null {
+  const utilidadNeta = getNumber(carrito.utilidad_neta);
+  const regalias = getNumber(carrito.regalias);
+  const utilidadBruta = getNumber(carrito.utilidad_bruta);
+  const importeFacturar = getNumber(carrito.importe_facturar);
+
+  const hasEconomicControl =
+    utilidadNeta !== 0 || regalias !== 0 || utilidadBruta !== 0 || importeFacturar !== 0;
+
+ const hasStatusControl =
+  carrito.controlado ||
+  carrito.estado === "CONTROLADO" ||
+  carrito.facturado ||
+  carrito.cobrado ||
+  carrito.cancelado;
+
+  if (!hasEconomicControl && !hasStatusControl) return null;
+
+  const porcentajeRegalia = utilidadNeta > 0 ? (regalias / utilidadNeta) * 100 : 36;
+
+  return {
+    id: `carrito-control-${carrito.id}`,
+    carrito_id: carrito.id,
+    utilidad_almundo: utilidadNeta,
+    porcentaje_regalia: porcentajeRegalia,
+    importe_regalia: regalias,
+    utilidad_nossix: utilidadBruta,
+    importe_a_facturar: importeFacturar,
+    controlado: carrito.controlado,
+    controlado_at: carrito.enviado_control_at || carrito.updated_at || null,
+    controlado_by: null,
+    facturado: carrito.facturado,
+    facturado_at: carrito.fecha_factura,
+    facturado_by: null,
+    cobrado: carrito.cobrado,
+    cobrado_at: carrito.fecha_cobro,
+    cobrado_by: null,
+    anulado: carrito.cancelado,
+    anulado_at: null,
+    anulado_by: null,
+    motivo_anulacion: null,
+    observaciones: carrito.observaciones,
+    created_by: null,
+    created_at: carrito.created_at,
+    updated_at: carrito.updated_at
+  };
+}
+
 function isCarritoAlreadyControlled(
   carrito: CarritoControlItem,
   control?: ControlVenta | null
 ): boolean {
-  return Boolean(
-    control?.controlado ||
-      carrito.estado === "CONTROLADO" ||
-      carrito.estado === "FACTURADO" ||
-      carrito.estado === "COBRADO"
-  );
+  return Boolean(control?.controlado || carrito.controlado || carrito.estado === "CONTROLADO");
 }
 
 function buildResumen(carritos: CarritoControlItem[], controles: ControlVenta[]): ControlResumen[] {
   return carritos.map((carrito) => {
     const control = controles.find((item) => item.carrito_id === carrito.id) || null;
-    const alreadyControlled = isCarritoAlreadyControlled(carrito, control);
 
-    const utilidadAlmundo = getNumber(control?.utilidad_almundo);
-    const importeRegalia = control ? getNumber(control.importe_regalia) : utilidadAlmundo * 0.36;
-    const calculated = calculateControl(utilidadAlmundo, importeRegalia);
-    const porcentajeRegalia = calculated.porcentajeRegalia;
+    const utilidadNeta = control
+      ? getNumber(control.utilidad_almundo)
+      : getNumber(carrito.utilidad_neta);
 
-    return {
-      carrito,
-      control,
-      utilidadAlmundo,
-      porcentajeRegalia,
-      importeRegalia: calculated.importeRegalia,
-      utilidadNossix: control ? getNumber(control.utilidad_nossix) : calculated.utilidadNossix,
-      importeAFacturar: control ? getNumber(control.importe_a_facturar) : calculated.importeAFacturar,
-      controlado: alreadyControlled,
-      facturado: Boolean(
-        control?.facturado || carrito.estado === "FACTURADO" || carrito.estado === "COBRADO"
-      ),
-      cobrado: Boolean(control?.cobrado || carrito.estado === "COBRADO"),
-      anulado: Boolean(control?.anulado)
-    };
+    const importeRegalia = control
+      ? getNumber(control.importe_regalia)
+      : getNumber(carrito.regalias) || utilidadNeta * 0.36;
+
+    const calculated = calculateControl(utilidadNeta, importeRegalia);
+
+    const utilidadBruta = control
+      ? getNumber(control.utilidad_nossix)
+      : getNumber(carrito.utilidad_bruta) || calculated.utilidadNossix;
+
+    const importeAFacturar = control
+      ? getNumber(control.importe_a_facturar)
+      : getNumber(carrito.importe_facturar) || calculated.importeAFacturar;
+
+  return {
+  carrito,
+  control,
+  utilidadAlmundo: utilidadNeta,
+  porcentajeRegalia: calculated.porcentajeRegalia,
+  importeRegalia: getNumber(carrito.regalias) || calculated.importeRegalia,
+  utilidadNossix: utilidadBruta,
+  importeAFacturar,
+  controlado: Boolean(carrito.controlado || control?.controlado || carrito.estado === "CONTROLADO"),
+  facturado: Boolean(carrito.facturado || control?.facturado),
+  cobrado: Boolean(carrito.cobrado || control?.cobrado),
+  anulado: Boolean(carrito.cancelado || control?.anulado)
+};
   });
 }
 
@@ -437,16 +600,14 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
 
     const filters = get().filters;
 
-    let carritosQuery = supabase
-      .from("carritos")
-      .select("*, clientes(*)")
-      .eq("visible_en_carritos", true)
-      .eq("confirmado_vendedor", true)
-      .in("estado", ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"])
-      .gte("fecha_venta", filters.desde)
-      .lte("fecha_venta", filters.hasta)
-      .order("fecha_venta", { ascending: false })
-      .order("created_at", { ascending: false });
+  let carritosQuery = supabase
+  .from("carritos")
+  .select("*, clientes:cliente_id(*)")
+  .or("derivado_control.eq.true,controlado.eq.true,facturado.eq.true,cobrado.eq.true")
+  .gte("fecha_venta", filters.desde)
+  .lte("fecha_venta", filters.hasta)
+  .order("fecha_venta", { ascending: false })
+  .order("created_at", { ascending: false });
 
     if (!canManageControlVentas) {
       carritosQuery = carritosQuery.eq("vendedor_id", currentUserId);
@@ -464,9 +625,8 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
       carritosQuery = carritosQuery.eq("sucursal_id", filters.sucursalId);
     }
 
-    const [carritosRes, controlesRes, vendedoresRes, sucursalesRes] = await Promise.all([
+    const [carritosRes, vendedoresRes, sucursalesRes] = await Promise.all([
       carritosQuery,
-      supabase.from("carritos_control").select("*").order("updated_at", { ascending: false }),
       supabase
         .from("profiles")
         .select("*")
@@ -476,8 +636,7 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
       supabase.from("sucursales").select("*").order("nombre")
     ]);
 
-    const firstError =
-      carritosRes.error || controlesRes.error || vendedoresRes.error || sucursalesRes.error;
+    const firstError = carritosRes.error || vendedoresRes.error || sucursalesRes.error;
 
     if (firstError) {
       set({
@@ -490,11 +649,10 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
       return;
     }
 
-    const carritos = (carritosRes.data || []) as CarritoControlItem[];
-    const carritoIds = new Set(carritos.map((carrito) => carrito.id));
-    const controles = ((controlesRes.data || []) as ControlVenta[]).filter((control) =>
-      carritoIds.has(control.carrito_id)
-    );
+    const carritos = ((carritosRes.data || []) as any[]).map(normalizeCarrito);
+    const controles = carritos
+      .map(buildVirtualControl)
+      .filter(Boolean) as ControlVenta[];
 
     set({
       loading: false,
@@ -530,72 +688,43 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
     if (isCarritoAlreadyControlled(carrito, existing)) {
       set({
         saving: false,
-        error:
-          "Este carrito ya está controlado. No se puede volver a controlar ni modificar desde esta acción."
+     error:
+  "Este carrito ya está controlado. No se puede volver a controlar desde esta acción."
       });
 
       return false;
     }
 
-    const utilidadAlmundo = parseMoney(draft.utilidad_almundo);
+    const utilidadNeta = parseMoney(draft.utilidad_almundo);
 
-    if (utilidadAlmundo <= 0) {
+    if (utilidadNeta <= 0) {
       set({
         saving: false,
-        error: "Ingresá una utilidad bruta válida antes de guardar el control."
+        error: "Ingresá una utilidad neta válida antes de guardar el control."
       });
 
       return false;
     }
 
-    const importeRegalia = parseMoney(draft.importe_regalia || String(utilidadAlmundo * 0.36));
-    const calculated = calculateControl(utilidadAlmundo, importeRegalia);
-    const porcentajeRegalia = calculated.porcentajeRegalia;
-    const now = new Date().toISOString();
-
-    const payload = {
-      carrito_id: carrito.id,
-      utilidad_almundo: utilidadAlmundo,
-      porcentaje_regalia: porcentajeRegalia,
-      importe_regalia: calculated.importeRegalia,
-      utilidad_nossix: calculated.utilidadNossix,
-      importe_a_facturar: calculated.importeAFacturar,
-      controlado: true,
-      controlado_at: now,
-      controlado_by: currentUserId,
-      facturado: false,
-      facturado_at: null,
-      facturado_by: null,
-      cobrado: false,
-      cobrado_at: null,
-      cobrado_by: null,
-      anulado: false,
-      anulado_at: null,
-      anulado_by: null,
-      motivo_anulacion: null,
-      observaciones: draft.observaciones || null,
-      created_by: currentUserId
-    };
+    const importeRegalia = parseMoney(draft.importe_regalia || String(utilidadNeta * 0.36));
+    const calculated = calculateControl(utilidadNeta, importeRegalia);
 
     const { error } = await supabase
-      .from("carritos_control")
-      .upsert(payload, { onConflict: "carrito_id" });
+      .from("carritos")
+      .update({
+        utilidad_neta: utilidadNeta,
+        regalias: Number(calculated.importeRegalia.toFixed(2)),
+        utilidad_bruta: Number(calculated.utilidadNossix.toFixed(2)),
+        importe_facturar: Number(calculated.importeAFacturar.toFixed(2)),
+        controlado: true,
+        estado: "CONTROLADO",
+        observaciones: draft.observaciones || null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", carrito.id);
 
     if (error) {
       set({ saving: false, error: normalizeError(error) });
-      return false;
-    }
-
-    const updateCarritoRes = await supabase
-      .from("carritos")
-      .update({
-        estado: "CONTROLADO"
-      })
-      .eq("id", carrito.id)
-      .in("estado", ["EN_CONTROL"]);
-
-    if (updateCarritoRes.error) {
-      set({ saving: false, error: normalizeError(updateCarritoRes.error) });
       return false;
     }
 
@@ -625,14 +754,13 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
     }
 
     const { error } = await supabase
-      .from("carritos_control")
+      .from("carritos")
       .update({
-        anulado: true,
-        anulado_at: new Date().toISOString(),
-        anulado_by: currentUserId,
-        motivo_anulacion: motivo || "Anulado desde Control de Ventas"
+        controlado: false,
+        observaciones: motivo || "Control anulado desde Control de Ventas",
+        updated_at: new Date().toISOString()
       })
-      .eq("id", control.id);
+      .eq("id", control.carrito_id);
 
     if (error) {
       set({ saving: false, error: normalizeError(error) });
@@ -786,10 +914,10 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
       utilidadNossix: items.reduce((total, item) => total + item.utilidadNossix, 0),
       aFacturar: items.reduce((total, item) => total + item.importeAFacturar, 0),
       totalFacturado: items
-        .filter((item) => item.facturado)
+        .filter((item) => item.facturado && !item.anulado)
         .reduce((total, item) => total + item.importeAFacturar, 0),
       cobradoMes: items
-        .filter((item) => item.cobrado)
+        .filter((item) => item.cobrado && !item.anulado)
         .reduce((total, item) => total + item.importeAFacturar, 0),
       aCobrarSemana: items
         .filter((item) => item.facturado && !item.cobrado && !item.anulado)

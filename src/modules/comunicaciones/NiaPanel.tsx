@@ -1,40 +1,74 @@
 // src/modules/comunicaciones/NiaPanel.tsx
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  Bell,
   Bot,
   Brain,
   Check,
   Clock3,
+  FileText,
   HelpCircle,
   Loader2,
   MessageSquareText,
   RefreshCcw,
   Save,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Target,
   Trash2,
+  Users,
   X
 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { EmptyState } from "./comunicacionesShared";
 
-type TabKey = "general" | "identidad" | "resumenes" | "faqs" | "keywords" | "chat";
+type TabKey =
+  | "general"
+  | "identidad"
+  | "capacidades"
+  | "reglas"
+  | "alertas"
+  | "reportes"
+  | "conocimiento"
+  | "chat";
 
 type NiaConfig = {
-  id: string;
+  id?: string;
   nombre_ia: string;
+  marca_visible: string;
+  modo: string;
   tono: string;
   prompt_base: string;
   reglas_duras: string;
+  mensaje_inicial: string;
   modelo: string;
   enabled: boolean;
   hora_resumen_diario: string;
   dias_resumen: number[];
   plantilla_resumen_vendedor: string;
   plantilla_resumen_gerencia: string;
-  updated_at: string;
+
+  puede_resumir_oportunidades: boolean;
+  puede_recalificar_leads: boolean;
+  puede_sugerir_acciones: boolean;
+  puede_mover_estados: boolean;
+  puede_activar_cande: boolean;
+  puede_generar_alertas: boolean;
+  puede_generar_reportes: boolean;
+
+  puede_consultar_clientes: boolean;
+  puede_consultar_carritos: boolean;
+  puede_consultar_files: boolean;
+  puede_consultar_caja: boolean;
+  puede_consultar_facturacion: boolean;
+
+  alerta_conversacion_sin_atender_min: number;
+  alerta_oportunidad_caliente_min: number;
+  alerta_sin_seguimiento_horas: number;
+
+  updated_at?: string | null;
 };
 
 type NiaFaq = {
@@ -93,6 +127,13 @@ const DAY_OPTIONS = [
 
 const MODEL_OPTIONS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
 
+const MODE_OPTIONS = [
+  { value: "observador", label: "Observador" },
+  { value: "alertas", label: "Alertas" },
+  { value: "asistente", label: "Asistente" },
+  { value: "operativo", label: "Operativo" }
+];
+
 function toNumber(value: string | number | null | undefined, fallback = 0): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -149,13 +190,62 @@ function emptyKeywordDraft(): KeywordDraft {
   };
 }
 
+function normalizeConfig(raw: Partial<NiaConfig> | null): NiaConfig {
+  return {
+    id: raw?.id,
+    nombre_ia: raw?.nombre_ia || "NIA",
+    marca_visible: raw?.marca_visible || "NOSTUR",
+    modo: raw?.modo || "asistente",
+    tono: raw?.tono || "claro, profesional, directo, comercial y operativo",
+    prompt_base:
+      raw?.prompt_base ||
+      "Sos NIA, asistente comercial interno de NOSTUR. Ayudás a vendedores, gerencia y administración a gestionar oportunidades, conversaciones, alertas, seguimiento comercial y operación interna. No hablás con pasajeros, solo con usuarios internos del sistema.",
+    reglas_duras:
+      raw?.reglas_duras ||
+      "No inventes datos. No envíes mensajes al pasajero. No modifiques estados sensibles sin confirmación. No prometas precios, disponibilidad ni condiciones comerciales. No expongas información sensible innecesaria. Si falta contexto, pedilo.",
+    mensaje_inicial:
+      raw?.mensaje_inicial ||
+      "Hola, soy NIA. Puedo ayudarte a resumir oportunidades, detectar pendientes, sugerir próximos pasos, revisar conversaciones y generar reportes internos.",
+    modelo: raw?.modelo || "gpt-4o",
+    enabled: raw?.enabled ?? true,
+    hora_resumen_diario: normalizeTime(raw?.hora_resumen_diario),
+    dias_resumen: Array.isArray(raw?.dias_resumen) ? raw.dias_resumen : [1, 2, 3, 4, 5],
+    plantilla_resumen_vendedor:
+      raw?.plantilla_resumen_vendedor ||
+      "Prepará un resumen breve para el vendedor con oportunidades abiertas, mensajes pendientes, conversaciones tomadas, derivaciones de Cande y próximos pasos sugeridos.",
+    plantilla_resumen_gerencia:
+      raw?.plantilla_resumen_gerencia ||
+      "Prepará un resumen ejecutivo para gerencia con oportunidades calientes, demoras, conversaciones sin atender, rendimiento comercial y alertas operativas.",
+
+    puede_resumir_oportunidades: raw?.puede_resumir_oportunidades ?? true,
+    puede_recalificar_leads: raw?.puede_recalificar_leads ?? true,
+    puede_sugerir_acciones: raw?.puede_sugerir_acciones ?? true,
+    puede_mover_estados: raw?.puede_mover_estados ?? false,
+    puede_activar_cande: raw?.puede_activar_cande ?? false,
+    puede_generar_alertas: raw?.puede_generar_alertas ?? true,
+    puede_generar_reportes: raw?.puede_generar_reportes ?? true,
+
+    puede_consultar_clientes: raw?.puede_consultar_clientes ?? true,
+    puede_consultar_carritos: raw?.puede_consultar_carritos ?? true,
+    puede_consultar_files: raw?.puede_consultar_files ?? true,
+    puede_consultar_caja: raw?.puede_consultar_caja ?? false,
+    puede_consultar_facturacion: raw?.puede_consultar_facturacion ?? false,
+
+    alerta_conversacion_sin_atender_min: raw?.alerta_conversacion_sin_atender_min ?? 15,
+    alerta_oportunidad_caliente_min: raw?.alerta_oportunidad_caliente_min ?? 30,
+    alerta_sin_seguimiento_horas: raw?.alerta_sin_seguimiento_horas ?? 48,
+
+    updated_at: raw?.updated_at || null
+  };
+}
+
 function MiniMetric({ label, value }: { label: string; value: string | number }) {
   return (
-    <article className="rounded-[14px] border border-black/10 bg-white/62 px-3.5 py-2.5 shadow-sm backdrop-blur-xl">
-      <div className="text-[10.5px] font-medium text-[#64748b]">{label}</div>
-      <div className="mt-0.5 text-[18px] font-semibold tracking-tight text-[#172033]">
-        {value}
+    <article className="rounded-[16px] border border-black/10 bg-white/68 px-3.5 py-2.5 shadow-sm backdrop-blur-xl">
+      <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[#64748b]">
+        {label}
       </div>
+      <div className="mt-1 text-[18px] font-semibold tracking-tight text-[#172033]">{value}</div>
     </article>
   );
 }
@@ -168,23 +258,21 @@ function Card({
 }: {
   title: string;
   subtitle?: string;
-  children: React.ReactNode;
-  icon?: React.ReactNode;
+  children: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
-    <section className="rounded-[16px] border border-black/10 bg-white/58 p-3.5 shadow-sm backdrop-blur-xl">
+    <section className="rounded-[18px] border border-black/10 bg-white/62 p-4 shadow-sm backdrop-blur-xl">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             {icon ? (
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#f3efff] text-[#7c3aed]">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#f3efff] text-[#7c3aed]">
                 {icon}
               </span>
             ) : null}
 
-            <h2 className="text-[14px] font-semibold leading-tight text-[#172033]">
-              {title}
-            </h2>
+            <h2 className="text-[14px] font-semibold leading-tight text-[#172033]">{title}</h2>
           </div>
 
           {subtitle ? (
@@ -200,7 +288,7 @@ function Card({
   );
 }
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
+function FieldLabel({ children }: { children: ReactNode }) {
   return (
     <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.11em] text-[#64748b]">
       {children}
@@ -212,20 +300,23 @@ function TextInput({
   value,
   onChange,
   placeholder,
-  disabled = false
+  disabled = false,
+  type = "text"
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  type?: string;
 }) {
   return (
     <input
       value={value}
+      type={type}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       disabled={disabled}
-      className="h-9 w-full rounded-[10px] border border-black/10 bg-white px-3 text-[12.5px] font-medium text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#7c3aed] disabled:opacity-50"
+      className="h-9 w-full rounded-[11px] border border-black/10 bg-white px-3 text-[12.5px] font-medium text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#7c3aed] disabled:opacity-50"
     />
   );
 }
@@ -250,7 +341,7 @@ function TextArea({
       placeholder={placeholder}
       rows={rows}
       disabled={disabled}
-      className="w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[12.5px] font-medium leading-relaxed text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#7c3aed] disabled:opacity-50"
+      className="w-full resize-none rounded-[11px] border border-black/10 bg-white px-3 py-2 text-[12.5px] font-medium leading-relaxed text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#7c3aed] disabled:opacity-50"
     />
   );
 }
@@ -261,7 +352,7 @@ function ToggleButton({
   onClick
 }: {
   active: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
   onClick: () => void;
 }) {
   return (
@@ -280,13 +371,54 @@ function ToggleButton({
   );
 }
 
+function SwitchRow({
+  title,
+  subtitle,
+  active,
+  onToggle
+}: {
+  title: string;
+  subtitle?: string;
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[13px] border border-black/10 bg-white px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[12.5px] font-semibold text-[#172033]">{title}</div>
+        {subtitle ? (
+          <div className="mt-0.5 text-[11px] font-normal leading-snug text-[#64748b]">
+            {subtitle}
+          </div>
+        ) : null}
+      </div>
+
+      <button
+        type="button"
+        onClick={onToggle}
+        className={[
+          "relative h-6 w-11 shrink-0 rounded-full transition",
+          active ? "bg-[#7c3aed]" : "bg-slate-300"
+        ].join(" ")}
+      >
+        <span
+          className={[
+            "absolute top-1 h-4 w-4 rounded-full bg-white shadow transition",
+            active ? "left-6" : "left-1"
+          ].join(" ")}
+        />
+      </button>
+    </div>
+  );
+}
+
 function ActionButton({
   children,
   onClick,
   disabled = false,
   danger = false
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   danger?: boolean;
@@ -298,9 +430,7 @@ function ActionButton({
       disabled={disabled}
       className={[
         "inline-flex h-8 items-center justify-center gap-1.5 rounded-[10px] px-3 text-[11px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50",
-        danger
-          ? "bg-red-50 text-red-600 hover:bg-red-100"
-          : "bg-[#7c3aed] text-white hover:bg-[#6d28d9]"
+        danger ? "bg-red-50 text-red-600 hover:bg-red-100" : "bg-[#7c3aed] text-white hover:bg-[#6d28d9]"
       ].join(" ")}
     >
       {children}
@@ -308,7 +438,7 @@ function ActionButton({
   );
 }
 
-function SmallPill({ children }: { children: React.ReactNode }) {
+function SmallPill({ children }: { children: ReactNode }) {
   return (
     <span className="inline-flex h-5 items-center rounded-md bg-[#f1f5f9] px-1.5 text-[10px] font-medium text-[#64748b] ring-1 ring-black/5">
       {children}
@@ -342,13 +472,7 @@ export function NiaPanel() {
     setStatus(null);
 
     const [configRes, faqsRes, keywordsRes, conversacionesRes, mensajesRes] = await Promise.all([
-      supabase
-        .from("nia_config")
-        .select(
-          "id,nombre_ia,tono,prompt_base,reglas_duras,modelo,enabled,hora_resumen_diario,dias_resumen,plantilla_resumen_vendedor,plantilla_resumen_gerencia,updated_at"
-        )
-        .limit(1)
-        .maybeSingle(),
+      supabase.from("nia_config").select("*").limit(1).maybeSingle(),
       supabase.from("nia_faqs").select("id,pregunta,respuesta,orden").order("orden", {
         ascending: true
       }),
@@ -381,7 +505,7 @@ export function NiaPanel() {
       return;
     }
 
-    setConfigDraft((configRes.data || null) as NiaConfig | null);
+    setConfigDraft(normalizeConfig((configRes.data || null) as Partial<NiaConfig> | null));
     setFaqs((faqsRes.data || []) as NiaFaq[]);
     setKeywords((keywordsRes.data || []) as NiaPalabraClave[]);
     setConversaciones((conversacionesRes.data || []) as NiaConversacion[]);
@@ -442,25 +566,46 @@ export function NiaPanel() {
 
     const payload = {
       nombre_ia: configDraft.nombre_ia.trim() || "NIA",
+      marca_visible: configDraft.marca_visible.trim() || "NOSTUR",
+      modo: configDraft.modo,
       tono: configDraft.tono.trim(),
       prompt_base: configDraft.prompt_base.trim(),
       reglas_duras: configDraft.reglas_duras.trim(),
-      modelo: configDraft.modelo.trim() || "gpt-4o-mini",
+      mensaje_inicial: configDraft.mensaje_inicial.trim(),
+      modelo: configDraft.modelo.trim() || "gpt-4o",
       enabled: configDraft.enabled,
       hora_resumen_diario: normalizeTime(configDraft.hora_resumen_diario),
       dias_resumen: configDraft.dias_resumen,
       plantilla_resumen_vendedor: configDraft.plantilla_resumen_vendedor.trim(),
       plantilla_resumen_gerencia: configDraft.plantilla_resumen_gerencia.trim(),
-      updated_by: userId
+
+      puede_resumir_oportunidades: configDraft.puede_resumir_oportunidades,
+      puede_recalificar_leads: configDraft.puede_recalificar_leads,
+      puede_sugerir_acciones: configDraft.puede_sugerir_acciones,
+      puede_mover_estados: configDraft.puede_mover_estados,
+      puede_activar_cande: configDraft.puede_activar_cande,
+      puede_generar_alertas: configDraft.puede_generar_alertas,
+      puede_generar_reportes: configDraft.puede_generar_reportes,
+
+      puede_consultar_clientes: configDraft.puede_consultar_clientes,
+      puede_consultar_carritos: configDraft.puede_consultar_carritos,
+      puede_consultar_files: configDraft.puede_consultar_files,
+      puede_consultar_caja: configDraft.puede_consultar_caja,
+      puede_consultar_facturacion: configDraft.puede_consultar_facturacion,
+
+      alerta_conversacion_sin_atender_min: configDraft.alerta_conversacion_sin_atender_min,
+      alerta_oportunidad_caliente_min: configDraft.alerta_oportunidad_caliente_min,
+      alerta_sin_seguimiento_horas: configDraft.alerta_sin_seguimiento_horas,
+      updated_by: userId,
+      updated_at: new Date().toISOString()
     };
 
-    const { error: saveError } = await supabase
-      .from("nia_config")
-      .update(payload)
-      .eq("id", configDraft.id);
+    const response = configDraft.id
+      ? await supabase.from("nia_config").update(payload).eq("id", configDraft.id)
+      : await supabase.from("nia_config").insert(payload);
 
-    if (saveError) {
-      setError(saveError.message || "No se pudo guardar NIA.");
+    if (response.error) {
+      setError(response.error.message || "No se pudo guardar NIA.");
       setSaving(false);
       return;
     }
@@ -478,7 +623,7 @@ export function NiaPanel() {
       respuesta: faq.respuesta,
       orden: String(faq.orden || 0)
     });
-    setActiveTab("faqs");
+    setActiveTab("conocimiento");
   }
 
   function resetFaqDraft() {
@@ -502,7 +647,8 @@ export function NiaPanel() {
     const payload = {
       pregunta,
       respuesta,
-      orden: toNumber(faqDraft.orden, faqs.length + 1)
+      orden: toNumber(faqDraft.orden, faqs.length + 1),
+      updated_at: new Date().toISOString()
     };
 
     const response = editingFaqId
@@ -546,7 +692,7 @@ export function NiaPanel() {
       palabra: item.palabra,
       significado: item.significado || ""
     });
-    setActiveTab("keywords");
+    setActiveTab("conocimiento");
   }
 
   function resetKeywordDraft() {
@@ -568,7 +714,8 @@ export function NiaPanel() {
 
     const payload = {
       palabra,
-      significado: keywordDraft.significado.trim() || null
+      significado: keywordDraft.significado.trim() || null,
+      updated_at: new Date().toISOString()
     };
 
     const response = editingKeywordId
@@ -605,13 +752,15 @@ export function NiaPanel() {
     setSaving(false);
   }
 
-  const tabs: { id: TabKey; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: TabKey; label: string; icon: ReactNode }[] = [
     { id: "general", label: "General", icon: <Settings2 size={13} /> },
     { id: "identidad", label: "Identidad", icon: <Sparkles size={13} /> },
-    { id: "resumenes", label: "Resúmenes", icon: <Clock3 size={13} /> },
-    { id: "faqs", label: "FAQs", icon: <HelpCircle size={13} /> },
-    { id: "keywords", label: "Keywords", icon: <Target size={13} /> },
-    { id: "chat", label: "Chat", icon: <MessageSquareText size={13} /> }
+    { id: "capacidades", label: "Capacidades", icon: <Brain size={13} /> },
+    { id: "reglas", label: "Reglas", icon: <ShieldCheck size={13} /> },
+    { id: "alertas", label: "Alertas", icon: <Bell size={13} /> },
+    { id: "reportes", label: "Reportes", icon: <FileText size={13} /> },
+    { id: "conocimiento", label: "Conocimiento", icon: <HelpCircle size={13} /> },
+    { id: "chat", label: "Chat / historial", icon: <MessageSquareText size={13} /> }
   ];
 
   return (
@@ -620,7 +769,7 @@ export function NiaPanel() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">NIA</h1>
+              <h1 className="text-[18px] font-semibold tracking-tight text-[#172033]">NIA</h1>
 
               <span className="rounded-md bg-purple-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-purple-700 ring-1 ring-purple-100">
                 IA equipo interno
@@ -628,28 +777,35 @@ export function NiaPanel() {
             </div>
 
             <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-              Configuración editable de la asistente comercial interna.
+              Configuración editable de la asistente comercial interna. NIA no habla con pasajeros.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={loadData}
-            disabled={loading}
-            className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-white px-2.5 text-[11px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
-          >
-            <RefreshCcw size={13} className={loading ? "animate-spin" : ""} />
-            Actualizar
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={loadData}
+              disabled={loading}
+              className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[11px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
+            >
+              <RefreshCcw size={13} className={loading ? "animate-spin" : ""} />
+              Actualizar
+            </button>
+
+            <ActionButton onClick={saveConfig} disabled={saving || !configDraft}>
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+              Guardar
+            </ActionButton>
+          </div>
         </div>
       </header>
 
       <main className="min-h-0 flex-1 overflow-auto p-3.5">
         <div className="grid gap-2.5 md:grid-cols-4">
           <MiniMetric label="Estado" value={configDraft?.enabled ? "Activa" : "Apagada"} />
+          <MiniMetric label="Modo" value={configDraft?.modo || "—"} />
           <MiniMetric label="Modelo" value={configDraft?.modelo || "—"} />
-          <MiniMetric label="FAQs" value={faqs.length} />
-          <MiniMetric label="Keywords" value={keywords.length} />
+          <MiniMetric label="Conocimiento" value={faqs.length + keywords.length} />
         </div>
 
         {error ? (
@@ -675,7 +831,7 @@ export function NiaPanel() {
               type="button"
               onClick={() => setActiveTab(tab.id)}
               className={[
-                "flex h-7 items-center gap-1.5 rounded-[9px] px-2.5 text-[11px] font-medium transition",
+                "flex h-8 items-center gap-1.5 rounded-[10px] px-2.5 text-[11px] font-medium transition",
                 activeTab === tab.id
                   ? "bg-[#7c3aed] text-white shadow-sm"
                   : "text-[#475569] hover:bg-white hover:text-[#172033]"
@@ -695,20 +851,20 @@ export function NiaPanel() {
 
         {!loading && !configDraft ? (
           <div className="mt-3">
-            <EmptyState title="No hay configuración de NIA" subtitle="Revisá el seed inicial de nia_config." />
+            <EmptyState title="No hay configuración de NIA" subtitle="Ejecutá el SQL inicial de nia_config." />
           </div>
         ) : null}
 
         {!loading && configDraft ? (
           <div className="mt-3">
             {activeTab === "general" ? (
-              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_360px]">
                 <Card
                   title="Estado operativo"
-                  subtitle="NIA es la asistente interna del equipo. No habla con pasajeros."
+                  subtitle="NIA es la asistente interna del equipo. No responde a pasajeros."
                   icon={<Bot size={15} />}
                 >
-                  <div className="flex items-center justify-between gap-3 rounded-[12px] bg-white px-3 py-2.5 ring-1 ring-black/5">
+                  <div className="flex items-center justify-between gap-3 rounded-[13px] bg-white px-3 py-2.5 ring-1 ring-black/5">
                     <div>
                       <div className="text-[12.5px] font-semibold text-[#172033]">
                         NIA está {configDraft.enabled ? "activa" : "apagada"}
@@ -725,7 +881,6 @@ export function NiaPanel() {
                         "relative h-6 w-11 rounded-full transition",
                         configDraft.enabled ? "bg-emerald-500" : "bg-slate-300"
                       ].join(" ")}
-                      aria-label="Activar o apagar NIA"
                     >
                       <span
                         className={[
@@ -747,52 +902,69 @@ export function NiaPanel() {
                     </div>
 
                     <div>
-                      <FieldLabel>Modelo</FieldLabel>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {MODEL_OPTIONS.map((model) => (
-                          <ToggleButton
-                            key={model}
-                            active={configDraft.modelo === model}
-                            onClick={() => updateDraft("modelo", model)}
-                          >
-                            {model}
-                          </ToggleButton>
-                        ))}
-                      </div>
+                      <FieldLabel>Marca visible</FieldLabel>
+                      <TextInput
+                        value={configDraft.marca_visible}
+                        onChange={(value) => updateDraft("marca_visible", value)}
+                        placeholder="NOSTUR"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <FieldLabel>Modo de trabajo</FieldLabel>
+                    <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4">
+                      {MODE_OPTIONS.map((mode) => (
+                        <ToggleButton
+                          key={mode.value}
+                          active={configDraft.modo === mode.value}
+                          onClick={() => updateDraft("modo", mode.value)}
+                        >
+                          {mode.label}
+                        </ToggleButton>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <FieldLabel>Modelo</FieldLabel>
+                    <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4">
+                      {MODEL_OPTIONS.map((model) => (
+                        <ToggleButton
+                          key={model}
+                          active={configDraft.modelo === model}
+                          onClick={() => updateDraft("modelo", model)}
+                        >
+                          {model}
+                        </ToggleButton>
+                      ))}
                     </div>
                   </div>
                 </Card>
 
-                <Card title="Qué debe hacer NIA" icon={<Brain size={15} />}>
+                <Card title="Rol de NIA" icon={<Users size={15} />}>
                   <div className="grid gap-2 text-[12px] font-normal leading-relaxed text-[#475569]">
                     <div className="rounded-[12px] bg-white px-3 py-2.5 ring-1 ring-black/5">
-                      Habla con vendedores, gerentes y administradores.
+                      Habla con vendedores, gerencia, administración y soporte.
                     </div>
 
                     <div className="rounded-[12px] bg-white px-3 py-2.5 ring-1 ring-black/5">
-                      Resume oportunidades, detecta demoras y puede coordinar con Cande.
+                      Ayuda a detectar oportunidades sin atender, demoras y pendientes.
                     </div>
 
                     <div className="rounded-[12px] bg-white px-3 py-2.5 ring-1 ring-black/5">
-                      Debe pedir confirmación antes de acciones sensibles.
+                      Puede sugerir acciones, pero las acciones sensibles requieren confirmación.
                     </div>
                   </div>
                 </Card>
-
-                <div className="xl:col-span-2 flex justify-end">
-                  <ActionButton onClick={saveConfig} disabled={saving}>
-                    {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-                    Guardar configuración general
-                  </ActionButton>
-                </div>
               </div>
             ) : null}
 
             {activeTab === "identidad" ? (
-              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_360px]">
                 <Card
-                  title="Identidad, tono y reglas"
-                  subtitle="Definí cómo responde NIA y qué límites tiene."
+                  title="Identidad, tono y contexto"
+                  subtitle="Esto define cómo piensa y cómo responde NIA."
                   icon={<Sparkles size={15} />}
                 >
                   <div>
@@ -805,57 +977,221 @@ export function NiaPanel() {
                   </div>
 
                   <div className="mt-2.5">
-                    <FieldLabel>Prompt base</FieldLabel>
+                    <FieldLabel>Mensaje inicial</FieldLabel>
                     <TextArea
-                      value={configDraft.prompt_base}
-                      onChange={(value) => updateDraft("prompt_base", value)}
-                      rows={8}
+                      value={configDraft.mensaje_inicial}
+                      onChange={(value) => updateDraft("mensaje_inicial", value)}
+                      rows={4}
                     />
                   </div>
 
                   <div className="mt-2.5">
-                    <FieldLabel>Reglas duras</FieldLabel>
+                    <FieldLabel>Prompt base</FieldLabel>
                     <TextArea
-                      value={configDraft.reglas_duras}
-                      onChange={(value) => updateDraft("reglas_duras", value)}
-                      rows={6}
+                      value={configDraft.prompt_base}
+                      onChange={(value) => updateDraft("prompt_base", value)}
+                      rows={9}
                     />
                   </div>
                 </Card>
 
-                <Card title="Acciones permitidas" icon={<Target size={15} />}>
-                  <div className="grid gap-1.5">
+                <Card title="Preview de personalidad" icon={<MessageSquareText size={15} />}>
+                  <div className="rounded-[14px] border border-purple-100 bg-purple-50 p-3 text-[12px] font-normal leading-relaxed text-[#4c1d95]">
+                    <div className="mb-1 flex items-center gap-1.5 font-semibold">
+                      <Sparkles size={13} />
+                      {configDraft.nombre_ia || "NIA"}
+                    </div>
+                    <div className="whitespace-pre-wrap">{configDraft.mensaje_inicial}</div>
+                  </div>
+                </Card>
+              </div>
+            ) : null}
+
+            {activeTab === "capacidades" ? (
+              <div className="grid gap-3.5 xl:grid-cols-2">
+                <Card
+                  title="Qué puede hacer"
+                  subtitle="Capacidades operativas de NIA dentro del sistema."
+                  icon={<Brain size={15} />}
+                >
+                  <div className="grid gap-2">
+                    <SwitchRow
+                      title="Resumir oportunidades"
+                      subtitle="Puede explicar estado, faltantes y próximos pasos."
+                      active={configDraft.puede_resumir_oportunidades}
+                      onToggle={() =>
+                        updateDraft("puede_resumir_oportunidades", !configDraft.puede_resumir_oportunidades)
+                      }
+                    />
+
+                    <SwitchRow
+                      title="Recalificar leads"
+                      subtitle="Puede sugerir temperatura o score comercial."
+                      active={configDraft.puede_recalificar_leads}
+                      onToggle={() => updateDraft("puede_recalificar_leads", !configDraft.puede_recalificar_leads)}
+                    />
+
+                    <SwitchRow
+                      title="Sugerir acciones"
+                      subtitle="Puede recomendar tomar, derivar, cerrar, seguir o presupuestar."
+                      active={configDraft.puede_sugerir_acciones}
+                      onToggle={() => updateDraft("puede_sugerir_acciones", !configDraft.puede_sugerir_acciones)}
+                    />
+
+                    <SwitchRow
+                      title="Mover estados"
+                      subtitle="Recomendado solo con confirmación explícita."
+                      active={configDraft.puede_mover_estados}
+                      onToggle={() => updateDraft("puede_mover_estados", !configDraft.puede_mover_estados)}
+                    />
+
+                    <SwitchRow
+                      title="Activar / pausar CANDE"
+                      subtitle="Permite coordinar atención automática del pasajero."
+                      active={configDraft.puede_activar_cande}
+                      onToggle={() => updateDraft("puede_activar_cande", !configDraft.puede_activar_cande)}
+                    />
+                  </div>
+                </Card>
+
+                <Card
+                  title="Qué puede consultar"
+                  subtitle="Módulos que NIA puede usar como contexto interno."
+                  icon={<Target size={15} />}
+                >
+                  <div className="grid gap-2">
+                    <SwitchRow
+                      title="Clientes"
+                      active={configDraft.puede_consultar_clientes}
+                      onToggle={() => updateDraft("puede_consultar_clientes", !configDraft.puede_consultar_clientes)}
+                    />
+
+                    <SwitchRow
+                      title="Carritos"
+                      active={configDraft.puede_consultar_carritos}
+                      onToggle={() => updateDraft("puede_consultar_carritos", !configDraft.puede_consultar_carritos)}
+                    />
+
+                    <SwitchRow
+                      title="Files"
+                      active={configDraft.puede_consultar_files}
+                      onToggle={() => updateDraft("puede_consultar_files", !configDraft.puede_consultar_files)}
+                    />
+
+                    <SwitchRow
+                      title="Caja"
+                      subtitle="Información sensible. Dejar apagado salvo gerencia/admin."
+                      active={configDraft.puede_consultar_caja}
+                      onToggle={() => updateDraft("puede_consultar_caja", !configDraft.puede_consultar_caja)}
+                    />
+
+                    <SwitchRow
+                      title="Facturación"
+                      subtitle="Información sensible. Dejar apagado salvo necesidad real."
+                      active={configDraft.puede_consultar_facturacion}
+                      onToggle={() =>
+                        updateDraft("puede_consultar_facturacion", !configDraft.puede_consultar_facturacion)
+                      }
+                    />
+                  </div>
+                </Card>
+              </div>
+            ) : null}
+
+            {activeTab === "reglas" ? (
+              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <Card
+                  title="Reglas duras"
+                  subtitle="Límites que NIA no debe romper."
+                  icon={<ShieldCheck size={15} />}
+                >
+                  <TextArea
+                    value={configDraft.reglas_duras}
+                    onChange={(value) => updateDraft("reglas_duras", value)}
+                    rows={12}
+                  />
+                </Card>
+
+                <Card title="Reglas recomendadas" icon={<ShieldCheck size={15} />}>
+                  <div className="space-y-2 text-[12px] font-normal leading-relaxed text-[#475569]">
                     {[
-                      "Resumir oportunidades abiertas",
-                      "Activar Cande en una conversación",
-                      "Desactivar Cande en una conversación",
-                      "Reasignar oportunidades con confirmación",
-                      "Actualizar datos de una oportunidad",
-                      "Generar reporte comercial para gerencia"
-                    ].map((item) => (
-                      <div
-                        key={item}
-                        className="rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[11.5px] font-medium text-[#475569]"
-                      >
-                        {item}
+                      "No enviar mensajes al pasajero.",
+                      "No modificar estados sensibles sin confirmación.",
+                      "No inventar datos comerciales.",
+                      "No prometer precios, cupos ni disponibilidad.",
+                      "No exponer datos sensibles si no corresponde.",
+                      "No tocar caja ni facturación sin permiso."
+                    ].map((rule) => (
+                      <div key={rule} className="rounded-[12px] bg-white px-3 py-2 ring-1 ring-black/5">
+                        {rule}
                       </div>
                     ))}
                   </div>
                 </Card>
-
-                <div className="xl:col-span-2 flex justify-end">
-                  <ActionButton onClick={saveConfig} disabled={saving}>
-                    {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-                    Guardar identidad y reglas
-                  </ActionButton>
-                </div>
               </div>
             ) : null}
 
-            {activeTab === "resumenes" ? (
+            {activeTab === "alertas" ? (
+              <div className="grid gap-3.5 xl:grid-cols-[360px_minmax(0,1fr)]">
+                <Card title="Alertas habilitadas" icon={<Bell size={15} />}>
+                  <div className="grid gap-2">
+                    <SwitchRow
+                      title="Generar alertas"
+                      active={configDraft.puede_generar_alertas}
+                      onToggle={() => updateDraft("puede_generar_alertas", !configDraft.puede_generar_alertas)}
+                    />
+                  </div>
+                </Card>
+
+                <Card title="Umbrales operativos" subtitle="Cuándo NIA debe considerar que algo requiere atención.">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <FieldLabel>Sin atender min.</FieldLabel>
+                      <TextInput
+                        type="number"
+                        value={String(configDraft.alerta_conversacion_sin_atender_min)}
+                        onChange={(value) =>
+                          updateDraft("alerta_conversacion_sin_atender_min", toNumber(value, 15))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Oportunidad caliente min.</FieldLabel>
+                      <TextInput
+                        type="number"
+                        value={String(configDraft.alerta_oportunidad_caliente_min)}
+                        onChange={(value) =>
+                          updateDraft("alerta_oportunidad_caliente_min", toNumber(value, 30))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Sin seguimiento horas</FieldLabel>
+                      <TextInput
+                        type="number"
+                        value={String(configDraft.alerta_sin_seguimiento_horas)}
+                        onChange={(value) =>
+                          updateDraft("alerta_sin_seguimiento_horas", toNumber(value, 48))
+                        }
+                      />
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            ) : null}
+
+            {activeTab === "reportes" ? (
               <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                <Card title="Programación de resúmenes" icon={<Clock3 size={15} />}>
-                  <div>
+                <Card title="Programación" icon={<Clock3 size={15} />}>
+                  <SwitchRow
+                    title="Generar reportes"
+                    active={configDraft.puede_generar_reportes}
+                    onToggle={() => updateDraft("puede_generar_reportes", !configDraft.puede_generar_reportes)}
+                  />
+
+                  <div className="mt-3">
                     <FieldLabel>Hora resumen diario</FieldLabel>
                     <TextInput
                       value={normalizeTime(configDraft.hora_resumen_diario)}
@@ -864,7 +1200,7 @@ export function NiaPanel() {
                     />
                   </div>
 
-                  <div className="mt-2.5">
+                  <div className="mt-3">
                     <FieldLabel>Días de resumen</FieldLabel>
                     <div className="grid grid-cols-4 gap-1.5">
                       {DAY_OPTIONS.map((day) => (
@@ -884,236 +1220,209 @@ export function NiaPanel() {
                   </div>
                 </Card>
 
-                <Card
-                  title="Plantillas"
-                  subtitle="Textos base que NIA usa para resúmenes internos."
-                  icon={<MessageSquareText size={15} />}
-                >
+                <Card title="Plantillas de reporte" icon={<FileText size={15} />}>
                   <div>
                     <FieldLabel>Resumen para vendedor</FieldLabel>
                     <TextArea
                       value={configDraft.plantilla_resumen_vendedor}
                       onChange={(value) => updateDraft("plantilla_resumen_vendedor", value)}
-                      rows={5}
+                      rows={6}
                     />
                   </div>
 
-                  <div className="mt-2.5">
+                  <div className="mt-3">
                     <FieldLabel>Resumen para gerencia</FieldLabel>
                     <TextArea
                       value={configDraft.plantilla_resumen_gerencia}
                       onChange={(value) => updateDraft("plantilla_resumen_gerencia", value)}
-                      rows={5}
+                      rows={6}
                     />
                   </div>
-
-                  <div className="mt-3 flex justify-end">
-                    <ActionButton onClick={saveConfig} disabled={saving}>
-                      <Save size={13} />
-                      Guardar resúmenes
-                    </ActionButton>
-                  </div>
                 </Card>
               </div>
             ) : null}
 
-            {activeTab === "faqs" ? (
-              <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                <Card
-                  title={editingFaqId ? "Editar FAQ interna" : "Nueva FAQ interna"}
-                  subtitle="Conocimiento que NIA puede usar con el equipo."
-                  icon={<HelpCircle size={15} />}
-                >
-                  <div className="grid gap-2.5">
-                    <div>
-                      <FieldLabel>Pregunta</FieldLabel>
-                      <TextArea
-                        value={faqDraft.pregunta}
-                        onChange={(value) => setFaqDraft((current) => ({ ...current, pregunta: value }))}
-                        rows={3}
-                        placeholder="¿Cómo priorizo oportunidades calientes?"
-                      />
-                    </div>
+            {activeTab === "conocimiento" ? (
+              <div className="grid gap-3.5 xl:grid-cols-[360px_minmax(0,1fr)]">
+                <div className="space-y-3.5">
+                  <Card title={editingFaqId ? "Editar FAQ" : "Nueva FAQ"} icon={<HelpCircle size={15} />}>
+                    <div className="grid gap-2.5">
+                      <div>
+                        <FieldLabel>Pregunta</FieldLabel>
+                        <TextArea
+                          value={faqDraft.pregunta}
+                          onChange={(value) => setFaqDraft((current) => ({ ...current, pregunta: value }))}
+                          rows={3}
+                          placeholder="¿Cómo priorizo oportunidades calientes?"
+                        />
+                      </div>
 
-                    <div>
-                      <FieldLabel>Respuesta</FieldLabel>
-                      <TextArea
-                        value={faqDraft.respuesta}
-                        onChange={(value) => setFaqDraft((current) => ({ ...current, respuesta: value }))}
-                        rows={6}
-                        placeholder="Priorizá por score, último mensaje del pasajero..."
-                      />
-                    </div>
+                      <div>
+                        <FieldLabel>Respuesta</FieldLabel>
+                        <TextArea
+                          value={faqDraft.respuesta}
+                          onChange={(value) => setFaqDraft((current) => ({ ...current, respuesta: value }))}
+                          rows={5}
+                          placeholder="Priorizá por score, último mensaje del pasajero..."
+                        />
+                      </div>
 
-                    <div>
-                      <FieldLabel>Orden</FieldLabel>
-                      <TextInput
-                        value={faqDraft.orden}
-                        onChange={(value) => setFaqDraft((current) => ({ ...current, orden: value }))}
-                        placeholder="1"
-                      />
-                    </div>
+                      <div>
+                        <FieldLabel>Orden</FieldLabel>
+                        <TextInput
+                          value={faqDraft.orden}
+                          onChange={(value) => setFaqDraft((current) => ({ ...current, orden: value }))}
+                        />
+                      </div>
 
-                    <div className="flex gap-2">
-                      <ActionButton onClick={saveFaq} disabled={saving}>
-                        <Save size={13} />
-                        {editingFaqId ? "Guardar" : "Agregar"}
-                      </ActionButton>
-
-                      {editingFaqId ? (
-                        <ActionButton onClick={resetFaqDraft} disabled={saving} danger>
-                          <X size={13} />
-                          Cancelar
+                      <div className="flex gap-2">
+                        <ActionButton onClick={saveFaq} disabled={saving}>
+                          <Save size={13} />
+                          {editingFaqId ? "Guardar" : "Agregar"}
                         </ActionButton>
-                      ) : null}
+
+                        {editingFaqId ? (
+                          <ActionButton onClick={resetFaqDraft} disabled={saving} danger>
+                            <X size={13} />
+                            Cancelar
+                          </ActionButton>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                </Card>
+                  </Card>
 
-                <Card title="FAQs cargadas" subtitle="Base de conocimiento interna de NIA.">
-                  <div className="space-y-2">
-                    {sortedFaqs.length === 0 ? (
-                      <EmptyState title="Sin FAQs" subtitle="Agregá la primera FAQ interna." />
-                    ) : null}
+                  <Card title={editingKeywordId ? "Editar keyword" : "Nueva keyword"} icon={<Target size={15} />}>
+                    <div className="grid gap-2.5">
+                      <div>
+                        <FieldLabel>Palabra o frase</FieldLabel>
+                        <TextInput
+                          value={keywordDraft.palabra}
+                          onChange={(value) => setKeywordDraft((current) => ({ ...current, palabra: value }))}
+                          placeholder="activar cande"
+                        />
+                      </div>
 
-                    {sortedFaqs.map((faq) => (
-                      <article key={faq.id} className="rounded-[12px] border border-black/10 bg-white p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <h3 className="text-[12.5px] font-semibold text-[#172033]">
-                                {faq.pregunta}
-                              </h3>
-                              <SmallPill>Orden {faq.orden}</SmallPill>
+                      <div>
+                        <FieldLabel>Significado / intención</FieldLabel>
+                        <TextArea
+                          value={keywordDraft.significado}
+                          onChange={(value) =>
+                            setKeywordDraft((current) => ({ ...current, significado: value }))
+                          }
+                          rows={4}
+                        />
+                      </div>
+
+                      <div className="flex gap-2">
+                        <ActionButton onClick={saveKeyword} disabled={saving}>
+                          <Save size={13} />
+                          {editingKeywordId ? "Guardar" : "Agregar"}
+                        </ActionButton>
+
+                        {editingKeywordId ? (
+                          <ActionButton onClick={resetKeywordDraft} disabled={saving} danger>
+                            <X size={13} />
+                            Cancelar
+                          </ActionButton>
+                        ) : null}
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+
+                <div className="grid gap-3.5">
+                  <Card title="FAQs cargadas">
+                    <div className="space-y-2">
+                      {sortedFaqs.length === 0 ? (
+                        <EmptyState title="Sin FAQs" subtitle="Agregá la primera FAQ interna." />
+                      ) : null}
+
+                      {sortedFaqs.map((faq) => (
+                        <article key={faq.id} className="rounded-[12px] border border-black/10 bg-white p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <h3 className="text-[12.5px] font-semibold text-[#172033]">
+                                  {faq.pregunta}
+                                </h3>
+                                <SmallPill>Orden {faq.orden}</SmallPill>
+                              </div>
+
+                              <p className="mt-2 text-[11px] font-normal leading-relaxed text-[#64748b]">
+                                {faq.respuesta}
+                              </p>
                             </div>
 
-                            <p className="mt-2 text-[11px] font-normal leading-relaxed text-[#64748b]">
-                              {faq.respuesta}
-                            </p>
+                            <div className="flex shrink-0 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => editFaq(faq)}
+                                className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-[#f3efff] text-[#7c3aed] hover:bg-[#ede9fe]"
+                              >
+                                <Settings2 size={13} />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => deleteFaq(faq.id)}
+                                className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-red-50 text-red-600 hover:bg-red-100"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </div>
-
-                          <div className="flex shrink-0 gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => editFaq(faq)}
-                              className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-[#f3efff] text-[#7c3aed] hover:bg-[#ede9fe]"
-                              aria-label="Editar"
-                            >
-                              <Settings2 size={13} />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => deleteFaq(faq.id)}
-                              className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-red-50 text-red-600 hover:bg-red-100"
-                              aria-label="Eliminar"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </Card>
-              </div>
-            ) : null}
-
-            {activeTab === "keywords" ? (
-              <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                <Card
-                  title={editingKeywordId ? "Editar keyword" : "Nueva keyword"}
-                  subtitle="Palabras que ayudan a NIA a detectar intención interna."
-                  icon={<Target size={15} />}
-                >
-                  <div className="grid gap-2.5">
-                    <div>
-                      <FieldLabel>Palabra o frase</FieldLabel>
-                      <TextInput
-                        value={keywordDraft.palabra}
-                        onChange={(value) =>
-                          setKeywordDraft((current) => ({ ...current, palabra: value }))
-                        }
-                        placeholder="activar cande"
-                      />
+                        </article>
+                      ))}
                     </div>
+                  </Card>
 
-                    <div>
-                      <FieldLabel>Significado / intención</FieldLabel>
-                      <TextArea
-                        value={keywordDraft.significado}
-                        onChange={(value) =>
-                          setKeywordDraft((current) => ({ ...current, significado: value }))
-                        }
-                        rows={4}
-                        placeholder="Ej: el usuario quiere que NIA active Cande en una conversación o tome una acción operativa."
-                      />
-                    </div>
-
-                    <div className="flex gap-2">
-                      <ActionButton onClick={saveKeyword} disabled={saving}>
-                        <Save size={13} />
-                        {editingKeywordId ? "Guardar" : "Agregar"}
-                      </ActionButton>
-
-                      {editingKeywordId ? (
-                        <ActionButton onClick={resetKeywordDraft} disabled={saving} danger>
-                          <X size={13} />
-                          Cancelar
-                        </ActionButton>
+                  <Card title="Keywords cargadas">
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {keywords.length === 0 ? (
+                        <EmptyState title="Sin keywords" subtitle="Agregá palabras clave internas." />
                       ) : null}
+
+                      {keywords.map((item) => (
+                        <article key={item.id} className="rounded-[12px] border border-black/10 bg-white p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="text-[12.5px] font-semibold text-[#172033]">
+                                {item.palabra}
+                              </h3>
+
+                              <p className="mt-1 text-[11px] font-normal leading-relaxed text-[#64748b]">
+                                {item.significado || "Sin significado configurado"}
+                              </p>
+                            </div>
+
+                            <div className="flex shrink-0 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => editKeyword(item)}
+                                className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-[#f3efff] text-[#7c3aed] hover:bg-[#ede9fe]"
+                              >
+                                <Settings2 size={13} />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => deleteKeyword(item.id)}
+                                className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-red-50 text-red-600 hover:bg-red-100"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                  </div>
-                </Card>
-
-                <Card title="Keywords cargadas" subtitle="Señales internas para acciones de NIA.">
-                  <div className="grid gap-2 md:grid-cols-2">
-                    {keywords.length === 0 ? (
-                      <EmptyState title="Sin keywords" subtitle="Agregá palabras clave internas." />
-                    ) : null}
-
-                    {keywords.map((item) => (
-                      <article key={item.id} className="rounded-[12px] border border-black/10 bg-white p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h3 className="text-[12.5px] font-semibold text-[#172033]">
-                              {item.palabra}
-                            </h3>
-
-                            <p className="mt-1 text-[11px] font-normal leading-relaxed text-[#64748b]">
-                              {item.significado || "Sin significado configurado"}
-                            </p>
-                          </div>
-
-                          <div className="flex shrink-0 gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => editKeyword(item)}
-                              className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-[#f3efff] text-[#7c3aed] hover:bg-[#ede9fe]"
-                              aria-label="Editar"
-                            >
-                              <Settings2 size={13} />
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => deleteKeyword(item.id)}
-                              className="flex h-7 w-7 items-center justify-center rounded-[9px] bg-red-50 text-red-600 hover:bg-red-100"
-                              aria-label="Eliminar"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </Card>
+                  </Card>
+                </div>
               </div>
             ) : null}
 
             {activeTab === "chat" ? (
-              <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
+              <div className="grid gap-3.5 xl:grid-cols-[360px_minmax(0,1fr)]">
                 <Card title="Conversaciones recientes" icon={<MessageSquareText size={15} />}>
                   <div className="space-y-2">
                     {conversaciones.length === 0 ? (
@@ -1144,7 +1453,7 @@ export function NiaPanel() {
                   </div>
                 </Card>
 
-                <Card title="Mensajes recientes" subtitle="Vista de control, todavía sin composer activo.">
+                <Card title="Mensajes recientes" subtitle="Vista de control e historial de uso.">
                   <div className="space-y-2">
                     {mensajes.length === 0 ? (
                       <EmptyState title="Sin mensajes" subtitle="Todavía no hay historial de NIA." />
@@ -1182,3 +1491,5 @@ export function NiaPanel() {
     </section>
   );
 }
+
+export default NiaPanel;

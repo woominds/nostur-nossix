@@ -1468,93 +1468,93 @@ function FileWizard({
             <WizardError message={wizardError} onClose={() => setWizardError(null)} />
 
             <div className="grid gap-3">
-          <main className="rounded-[16px] border border-black/10 bg-white p-3">
-            {step === 1 ? (
-              <section>
-                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Paso 1 · Cliente</h3>
+              <main className="rounded-[16px] border border-black/10 bg-white p-3">
+                {step === 1 ? (
+                  <section>
+                    <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
+                      Paso 1 · Cliente
+                    </h3>
 
-                <div className="grid gap-3 lg:grid-cols-[110px_1fr]">
-                  <div>
-                    <FieldLabel>Prefijo</FieldLabel>
-                    <TextInput
-                      value={draft.phonePrefix}
-                      onChange={(value) => setPhone(value, draft.phoneLocal)}
-                      placeholder="+549"
-                    />
-                  </div>
+                    <div className="grid gap-3 lg:grid-cols-[110px_1fr]">
+                      <div>
+                        <FieldLabel>Prefijo</FieldLabel>
+                        <TextInput
+                          value={draft.phonePrefix}
+                          onChange={(value) => setPhone(value, draft.phoneLocal)}
+                          placeholder="+549"
+                        />
+                      </div>
 
-                  <div>
-                    <FieldLabel>Teléfono</FieldLabel>
-                    <TextInput
-                      value={draft.phoneLocal}
-                      onChange={(value) => setPhone(draft.phonePrefix, value)}
-                      placeholder="3516892764"
-                      inputMode="tel"
-                    />
-                  </div>
-                </div>
-
-                {clientesSearch.length > 0 ? (
-                  <div className="mt-3">
-                    <FieldLabel>Clientes encontrados</FieldLabel>
-
-                    <div className="grid gap-1.5">
-                      {clientesSearch.map((cliente) => (
-                        <button
-                          key={cliente.id}
-                          type="button"
-                          onClick={() => selectCliente(cliente)}
-                          className={[
-                            "rounded-[12px] border px-3 py-2 text-left transition",
-                            draft.cliente.id === cliente.id
-                              ? "border-[#4f7c90]/50 bg-[#eef6f7]"
-                              : "border-black/10 bg-[#f8fafc] hover:bg-white"
-                          ].join(" ")}
-                        >
-                          <div className="text-[12px] font-semibold text-[#172033]">
-                            {cliente.nombre_completo}
-                          </div>
-
-                          <div className="text-[11.5px] font-normal text-[#64748b]">
-                            {cliente.telefono} · {cliente.email || "sin email"}
-                          </div>
-                        </button>
-                      ))}
+                      <div>
+                        <FieldLabel>Teléfono</FieldLabel>
+                        <TextInput
+                          value={draft.phoneLocal}
+                          onChange={(value) => setPhone(draft.phonePrefix, value)}
+                          placeholder="3516892764"
+                          inputMode="tel"
+                        />
+                      </div>
                     </div>
-                  </div>
-                ) : null}
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <div>
-                    <FieldLabel>Nombre completo *</FieldLabel>
-                    <TextInput
-                      value={draft.cliente.nombre_completo}
-                      onChange={(value) => setCliente("nombre_completo", value)}
-                      placeholder="Nombre y apellido"
-                    />
-                  </div>
+                    {clientesSearch.length > 0 ? (
+                      <div className="mt-3">
+                        <FieldLabel>Clientes encontrados</FieldLabel>
 
-                  <div>
-                    <FieldLabel>Email</FieldLabel>
-                    <TextInput
-                      value={draft.cliente.email}
-                      onChange={(value) => setCliente("email", value)}
-                      placeholder="cliente@email.com"
-                      inputMode="email"
-                    />
-                  </div>
+                        <div className="grid gap-1.5">
+                          {clientesSearch.map((cliente) => (
+                            <button
+                              key={cliente.id}
+                              type="button"
+                              onClick={() => selectCliente(cliente)}
+                              className={[
+                                "rounded-[12px] border px-3 py-2 text-left transition",
+                                draft.cliente.id === cliente.id
+                                  ? "border-[#4f7c90]/50 bg-[#eef6f7]"
+                                  : "border-black/10 bg-[#f8fafc] hover:bg-white"
+                              ].join(" ")}
+                            >
+                              <div className="text-[12px] font-semibold text-[#172033]">
+                                {cliente.nombre_completo}
+                              </div>
 
-                  <div>
-                    <FieldLabel>Método de contacto</FieldLabel>
-                    <TextInput
-                      value={draft.cliente.origen}
-                      onChange={(value) => setCliente("origen", value)}
-                      placeholder="Retail, referido, web..."
-                    />
-                  </div>
+                              <div className="text-[11.5px] font-normal text-[#64748b]">
+                                {cliente.telefono} · {cliente.email || "sin email"}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
 
-                  {canManageFiles ? (
-                    <>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <div>
+                        <FieldLabel>Nombre completo *</FieldLabel>
+                        <TextInput
+                          value={draft.cliente.nombre_completo}
+                          onChange={(value) => setCliente("nombre_completo", value)}
+                          placeholder="Nombre y apellido"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Email</FieldLabel>
+                        <TextInput
+                          value={draft.cliente.email}
+                          onChange={(value) => setCliente("email", value)}
+                          placeholder="cliente@email.com"
+                          inputMode="email"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Método de contacto</FieldLabel>
+                        <TextInput
+                          value={draft.cliente.origen}
+                          onChange={(value) => setCliente("origen", value)}
+                          placeholder="Retail, referido, web..."
+                        />
+                      </div>
+
                       <div>
                         <FieldLabel>Vendedor</FieldLabel>
                         <NosturSelect
@@ -1572,597 +1572,627 @@ function FileWizard({
                           options={sucursalOptions}
                         />
                       </div>
-                    </>
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
-
-            {step === 2 ? (
-              <section>
-                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Paso 2 · File / Operador</h3>
-
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div>
-                    <FieldLabel>Número file *</FieldLabel>
-                    <TextInput
-                      value={draft.venta.numero_file}
-                      onChange={(value) => setVenta("numero_file", maskFile(value))}
-                      placeholder="123456"
-                      inputMode="numeric"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Fecha venta</FieldLabel>
-                    <NosturDateInput
-                      value={draft.venta.fecha_venta}
-                      onChange={(value) => setVenta("fecha_venta", value)}
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Operador responsable</FieldLabel>
-                    <NosturSelect
-                      value={draft.venta.operador_id}
-                      onChange={(value) => {
-                        const selected = catalogos.operadores.find((item) => item.id === value);
-                        setVenta("operador_id", value);
-                        setVenta("operador", selected?.nombre || "");
-                      }}
-                      options={operadorOptions}
-                      placeholder="Seleccionar operador"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Neto operador</FieldLabel>
-                    <TextInput
-                      value={draft.venta.neto_operador}
-                      onChange={(value) => setVenta("neto_operador", value)}
-                      placeholder="0,00"
-                      inputMode="decimal"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Fecha IN</FieldLabel>
-                    <NosturDateInput
-                      value={draft.venta.fecha_in}
-                      onChange={(value) => {
-                        setVenta("fecha_in", value);
-
-                        if (
-                          draft.venta.fecha_out &&
-                          value &&
-                          isDateBefore(draft.venta.fecha_out, value)
-                        ) {
-                          setVenta("fecha_out", value);
-                        }
-                      }}
-                      min={getToday()}
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Fecha OUT</FieldLabel>
-                    {draft.venta.solo_ida ? (
-                      <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-[#f8fafc] px-3 text-[12px] font-normal text-[#94a3b8]">
-                        Solo ida
-                      </div>
-                    ) : (
-                      <NosturDateInput
-                        value={draft.venta.fecha_out}
-                        onChange={(value) => setVenta("fecha_out", value)}
-                        min={draft.venta.fecha_in || getToday()}
-                      />
-                    )}
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <BooleanChip
-                      checked={draft.venta.solo_ida}
-                      onChange={(value) => {
-                        setVenta("solo_ida", value);
-                        if (value) setVenta("fecha_out", "");
-                      }}
-                      label="Solo ida"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Tipo de servicio</FieldLabel>
-                    <NosturSelect
-                      value={draft.venta.servicio}
-                      onChange={(value) => setVenta("servicio", value)}
-                      options={servicioOptions}
-                      placeholder="Seleccionar servicio"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Destino / destinos</FieldLabel>
-                    <DestinosInlineMultiSelect
-                      values={draft.venta.destinos}
-                      onChange={(values) => setVenta("destinos", values)}
-                      options={destinoOptions}
-                      onCreate={createDestinoInline}
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Importe bruto</FieldLabel>
-                    <TextInput
-                      value={draft.venta.importe_bruto}
-                      onChange={(value) => setVenta("importe_bruto", value)}
-                      placeholder="61.148,00"
-                      inputMode="decimal"
-                    />
-                  </div>
-
-                  <div>
-                    <FieldLabel>Moneda</FieldLabel>
-                    <NosturSelect
-                      value={draft.venta.moneda}
-                      onChange={(value) => {
-                        setVenta("moneda", value);
-                        setDraft((current) => ({
-                          ...current,
-                          pagosComerciales: current.pagosComerciales.map((pago) => ({
-                            ...pago,
-                            moneda: value
-                          })),
-                          movimientosTesoreria: current.movimientosTesoreria.map((movimiento) => ({
-                            ...movimiento,
-                            moneda: value
-                          }))
-                        }));
-                      }}
-                      options={MONEDA_OPTIONS}
-                    />
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <FieldLabel>Observaciones</FieldLabel>
-                    <TextArea
-                      value={draft.venta.observaciones}
-                      onChange={(value) => setVenta("observaciones", value)}
-                      placeholder="Notas comerciales o de control..."
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
-                  <div className="flex justify-between">
-                    <span className="text-[#64748b]">Importe bruto</span>
-                    <strong className="font-semibold">{formatMoneyAR(bruto, draft.venta.moneda)}</strong>
-                  </div>
-
-                  <div className="flex justify-between">
-                    <span className="text-[#64748b]">Neto operador</span>
-                    <strong className="font-semibold">{formatMoneyAR(netoOperador, draft.venta.moneda)}</strong>
-                  </div>
-
-                  <div className="mt-2 flex justify-between border-t border-black/10 pt-2">
-                    <span className="font-semibold text-[#172033]">Margen estimado</span>
-                    <strong className="font-semibold text-[#172033]">
-                      {formatMoneyAR(margenEstimado, draft.venta.moneda)}
-                    </strong>
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
-            {step === 3 ? (
-              <section>
-                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
-                  Paso 3 · Pagos comerciales
-                </h3>
-
-                <div className="mb-3 rounded-[14px] border border-black/10 bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#334155]">
-                  Total cliente: {formatMoneyAR(totalFinal, draft.venta.moneda)}
-                </div>
-
-                <div className="grid gap-2">
-                  {draft.pagosComerciales.map((pago, index) => (
-                    <div
-                      key={`pago-comercial-${index}`}
-                      className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:grid-cols-[1fr_110px_1fr_auto]"
-                    >
-                      <div>
-                        <FieldLabel>Importe</FieldLabel>
-                        <TextInput
-                          value={pago.importe ? String(pago.importe).replace(".", ",") : ""}
-                          onChange={(value) => updatePago(index, { importe: parseMoney(value) })}
-                          placeholder="0,00"
-                          inputMode="decimal"
-                        />
-                      </div>
-
-                      <div>
-                        <FieldLabel>Moneda</FieldLabel>
-                        <NosturSelect
-                          value={pago.moneda || draft.venta.moneda}
-                          onChange={(value) => updatePago(index, { moneda: value })}
-                          options={MONEDA_OPTIONS}
-                        />
-                      </div>
-
-                      <div>
-                        <FieldLabel>Forma pago</FieldLabel>
-                        <NosturSelect
-                          value={pago.forma_pago || ""}
-                          onChange={(value) => updatePago(index, { forma_pago: value })}
-                          options={formaPagoOptions}
-                        />
-                      </div>
-
-                      <div className="flex items-end">
-                        <LineButton
-                          onClick={() =>
-                            setDraft((current) => ({
-                              ...current,
-                              pagosComerciales: current.pagosComerciales.filter(
-                                (_, itemIndex) => itemIndex !== index
-                              )
-                            }))
-                          }
-                        >
-                          Eliminar
-                        </LineButton>
-                      </div>
                     </div>
-                  ))}
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <LineButton
-                    onClick={() =>
-                      setDraft((current) => ({
-                        ...current,
-                        pagosComerciales: [
-                          ...current.pagosComerciales,
-                          { importe: 0, moneda: current.venta.moneda, forma_pago: "" }
-                        ]
-                      }))
-                    }
-                  >
-                    + Agregar pago comercial
-                  </LineButton>
-
-                  <BooleanChip
-                    checked={draft.pagoParcial}
-                    onChange={(value) => {
-                      setWizardError(null);
-                      setDraft((current) => ({ ...current, pagoParcial: value }));
-                    }}
-                    label="Pago parcial / enviar saldo a Cta Cte"
-                  />
-
-                  <BooleanChip
-                    checked={draft.riesgo}
-                    onChange={(value) => {
-                      setWizardError(null);
-                      setDraft((current) => ({
-                        ...current,
-                        riesgo: value,
-                        importe_riesgo: value
-                          ? current.importe_riesgo ||
-                            String(Math.max(totalFinal - totalPagosComerciales, 0)).replace(
-                              ".",
-                              ","
-                            )
-                          : "",
-                        riesgo_motivo: value ? current.riesgo_motivo : ""
-                      }));
-                    }}
-                    label="Imputar a riesgo operador"
-                  />
-                </div>
-
-                {draft.riesgo ? (
-                  <div className="mt-3 grid gap-3 rounded-[14px] border border-red-200 bg-red-50 p-3 md:grid-cols-[210px_minmax(0,1fr)]">
-                    <div>
-                      <FieldLabel>Importe riesgo operador</FieldLabel>
-                      <TextInput
-                        value={draft.importe_riesgo}
-                        onChange={(value) => {
-                          setWizardError(null);
-                          setDraft((current) => ({ ...current, importe_riesgo: value }));
-                        }}
-                        placeholder="0,00"
-                        inputMode="decimal"
-                      />
-                    </div>
-
-                    <div>
-                      <FieldLabel>Motivo / observación riesgo</FieldLabel>
-                      <TextInput
-                        value={draft.riesgo_motivo}
-                        onChange={(value) => {
-                          setWizardError(null);
-                          setDraft((current) => ({ ...current, riesgo_motivo: value }));
-                        }}
-                        placeholder="Ej: saldo con operador a cancelar luego"
-                      />
-                    </div>
-
-                    <div className="rounded-[12px] border border-red-200 bg-white/70 p-2.5 text-[11.5px] font-medium text-red-700 md:col-span-2">
-                      Riesgo operador significa que el cliente nos paga a NOSSIX, pero la deuda
-                      con el operador queda pendiente para cancelarla luego.
-                    </div>
-                  </div>
+                  </section>
                 ) : null}
 
-                <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
-                  <div className="flex justify-between">
-                    <span className="text-[#64748b]">Imputación comercial</span>
-                    <strong className="font-semibold">{formatMoneyAR(totalComercial, draft.venta.moneda)}</strong>
-                  </div>
+                                {step === 2 ? (
+                  <section>
+                    <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
+                      Paso 2 · File / Operador
+                    </h3>
 
-                  <div className="flex justify-between">
-                    <span className="text-[#64748b]">Pago comercial</span>
-                    <strong className="font-semibold">{formatMoneyAR(totalPagosComerciales, draft.venta.moneda)}</strong>
-                  </div>
-
-                  {draft.riesgo ? (
-                    <div className="flex justify-between">
-                      <span className="text-[#64748b]">Riesgo operador</span>
-                      <strong className="font-semibold text-red-700">
-                        {formatMoneyAR(importeRiesgo, draft.venta.moneda)}
-                      </strong>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-2 flex justify-between border-t border-black/10 pt-2">
-                    <span className="text-[#64748b]">Saldo comercial</span>
-                    <strong className={saldoComercial > 0 ? "font-semibold text-red-600" : "font-semibold text-emerald-700"}>
-                      {formatMoneyAR(saldoComercial, draft.venta.moneda)}
-                    </strong>
-                  </div>
-
-                  {saldoComercial > 0 ? (
-                    <div className="mt-3 rounded-[12px] bg-amber-50 p-2.5 font-medium text-amber-700">
-                      Si este saldo corresponde a deuda del pasajero, marcá pago parcial. Si
-                      corresponde a deuda con el operador, usá riesgo operador.
-                    </div>
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
-
-            {step === 4 ? (
-              <section>
-                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
-                  Paso 4 · Tesorería real
-                </h3>
-
-                <div className="mb-3 rounded-[14px] border border-black/10 bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#334155]">
-                  Total cliente a cobrar hoy: {formatMoneyAR(totalFinal, draft.venta.moneda)}
-                </div>
-
-                <div className="grid gap-2">
-                  {draft.movimientosTesoreria.map((movimiento, index) => (
-                    <div
-                      key={`movimiento-${index}`}
-                      className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:grid-cols-[1fr_1fr_100px_1fr_100px_auto]"
-                    >
+                    <div className="grid gap-3 md:grid-cols-2">
                       <div>
-                        <FieldLabel>Caja</FieldLabel>
-                        <NosturSelect
-                          value={movimiento.caja || ""}
-                          onChange={(value) => updateMovimiento(index, { caja: value })}
-                          options={cajaOptions}
-                        />
-                      </div>
-
-                      <div>
-                        <FieldLabel>Forma real</FieldLabel>
-                        <NosturSelect
-                          value={movimiento.forma_pago || ""}
-                          onChange={(value) => updateMovimiento(index, { forma_pago: value })}
-                          options={formaPagoOptions}
-                        />
-                      </div>
-
-                      <div>
-                        <FieldLabel>Moneda</FieldLabel>
-                        <NosturSelect
-                          value={movimiento.moneda || draft.venta.moneda}
-                          onChange={(value) => updateMovimiento(index, { moneda: value })}
-                          options={MONEDA_OPTIONS}
-                        />
-                      </div>
-
-                      <div>
-                        <FieldLabel>Importe</FieldLabel>
+                        <FieldLabel>Número file *</FieldLabel>
                         <TextInput
-                          value={
-                            movimiento.importe
-                              ? String(movimiento.importe).replace(".", ",")
-                              : ""
-                          }
-                          onChange={(value) =>
-                            updateMovimiento(index, { importe: parseMoney(value) })
-                          }
+                          value={draft.venta.numero_file}
+                          onChange={(value) => setVenta("numero_file", maskFile(value))}
+                          placeholder="123456"
+                          inputMode="numeric"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Fecha venta</FieldLabel>
+                        <NosturDateInput
+                          value={draft.venta.fecha_venta}
+                          onChange={(value) => setVenta("fecha_venta", value)}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Operador responsable</FieldLabel>
+                        <NosturSelect
+                          value={draft.venta.operador_id}
+                          onChange={(value) => {
+                            const selected = catalogos.operadores.find((item) => item.id === value);
+                            setVenta("operador_id", value);
+                            setVenta("operador", selected?.nombre || "");
+                          }}
+                          options={operadorOptions}
+                          placeholder="Seleccionar operador"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Neto operador</FieldLabel>
+                        <TextInput
+                          value={draft.venta.neto_operador}
+                          onChange={(value) => setVenta("neto_operador", value)}
                           placeholder="0,00"
                           inputMode="decimal"
                         />
                       </div>
 
                       <div>
-                        <FieldLabel>TC</FieldLabel>
+                        <FieldLabel>Fecha IN</FieldLabel>
+                        <NosturDateInput
+                          value={draft.venta.fecha_in}
+                          onChange={(value) => {
+                            setVenta("fecha_in", value);
+
+                            if (
+                              draft.venta.fecha_out &&
+                              value &&
+                              isDateBefore(draft.venta.fecha_out, value)
+                            ) {
+                              setVenta("fecha_out", value);
+                            }
+                          }}
+                          min={getToday()}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Fecha OUT</FieldLabel>
+                        {draft.venta.solo_ida ? (
+                          <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-[#f8fafc] px-3 text-[12px] font-normal text-[#94a3b8]">
+                            Solo ida
+                          </div>
+                        ) : (
+                          <NosturDateInput
+                            value={draft.venta.fecha_out}
+                            onChange={(value) => setVenta("fecha_out", value)}
+                            min={draft.venta.fecha_in || getToday()}
+                          />
+                        )}
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <BooleanChip
+                          checked={draft.venta.solo_ida}
+                          onChange={(value) => {
+                            setVenta("solo_ida", value);
+                            if (value) setVenta("fecha_out", "");
+                          }}
+                          label="Solo ida"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Tipo de servicio</FieldLabel>
+                        <NosturSelect
+                          value={draft.venta.servicio}
+                          onChange={(value) => setVenta("servicio", value)}
+                          options={servicioOptions}
+                          placeholder="Seleccionar servicio"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Destino / destinos</FieldLabel>
+                        <DestinosInlineMultiSelect
+                          values={draft.venta.destinos}
+                          onChange={(values) => setVenta("destinos", values)}
+                          options={destinoOptions}
+                          onCreate={createDestinoInline}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Importe bruto</FieldLabel>
                         <TextInput
-                          value={
-                            movimiento.tipo_cambio
-                              ? String(movimiento.tipo_cambio).replace(".", ",")
-                              : ""
-                          }
-                          onChange={(value) =>
-                            updateMovimiento(index, { tipo_cambio: parseMoney(value) })
-                          }
-                          placeholder="—"
+                          value={draft.venta.importe_bruto}
+                          onChange={(value) => setVenta("importe_bruto", value)}
+                          placeholder="61.148,00"
                           inputMode="decimal"
                         />
                       </div>
 
-                      <div className="flex items-end">
-                        <LineButton
-                          onClick={() =>
+                      <div>
+                        <FieldLabel>Moneda</FieldLabel>
+                        <NosturSelect
+                          value={draft.venta.moneda}
+                          onChange={(value) => {
+                            setVenta("moneda", value);
                             setDraft((current) => ({
                               ...current,
-                              movimientosTesoreria: current.movimientosTesoreria.filter(
-                                (_, itemIndex) => itemIndex !== index
-                              )
-                            }))
-                          }
-                        >
-                          Eliminar
-                        </LineButton>
+                              pagosComerciales: current.pagosComerciales.map((pago) => ({
+                                ...pago,
+                                moneda: value
+                              })),
+                              movimientosTesoreria: current.movimientosTesoreria.map((movimiento) => ({
+                                ...movimiento,
+                                moneda: value
+                              }))
+                            }));
+                          }}
+                          options={MONEDA_OPTIONS}
+                        />
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <FieldLabel>Observaciones</FieldLabel>
+                        <TextArea
+                          value={draft.venta.observaciones}
+                          onChange={(value) => setVenta("observaciones", value)}
+                          placeholder="Notas comerciales o de control..."
+                        />
                       </div>
                     </div>
-                  ))}
-                </div>
 
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <LineButton
-                    onClick={() =>
-                      setDraft((current) => ({
-                        ...current,
-                        movimientosTesoreria: [
-                          ...current.movimientosTesoreria,
-                          { importe: 0, moneda: current.venta.moneda, forma_pago: "", caja: "" }
-                        ]
-                      }))
-                    }
-                  >
-                    + Agregar movimiento
-                  </LineButton>
-                </div>
+                    <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
+                      <div className="flex justify-between">
+                        <span className="text-[#64748b]">Importe bruto</span>
+                        <strong className="font-semibold">
+                          {formatMoneyAR(bruto, draft.venta.moneda)}
+                        </strong>
+                      </div>
 
-                <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
-                  <div className="flex justify-between">
-                    <span className="text-[#64748b]">Total imputado</span>
-                    <strong className="font-semibold">{formatMoneyAR(totalTesoreria, draft.venta.moneda)}</strong>
-                  </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#64748b]">Neto operador</span>
+                        <strong className="font-semibold">
+                          {formatMoneyAR(netoOperador, draft.venta.moneda)}
+                        </strong>
+                      </div>
 
-                  <div className="flex justify-between">
-                    <span className="text-[#64748b]">Diferencia contra total cliente</span>
-                    <strong
-                      className={
-                        Math.abs(totalTesoreria - totalFinal) > 0.009
-                          ? "font-semibold text-red-600"
-                          : "font-semibold text-emerald-700"
-                      }
-                    >
-                      {formatMoneyAR(totalTesoreria - totalFinal, draft.venta.moneda)}
-                    </strong>
-                  </div>
+                      <div className="mt-2 flex justify-between border-t border-black/10 pt-2">
+                        <span className="font-semibold text-[#172033]">Margen estimado</span>
+                        <strong className="font-semibold text-[#172033]">
+                          {formatMoneyAR(margenEstimado, draft.venta.moneda)}
+                        </strong>
+                      </div>
+                    </div>
+                  </section>
+                ) : null}
 
-                  {draft.riesgo ? (
-                    <div className="mt-3 rounded-[12px] border border-red-200 bg-red-50 p-2.5 font-medium text-red-700">
-                      Este file tiene riesgo operador: el ingreso del cliente entra ahora a Caja;
-                      la deuda con el operador se cancelará luego desde Riesgos.
-                    </div>
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
+                {step === 3 ? (
+                  <section>
+                    <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
+                      Paso 3 · Pagos comerciales
+                    </h3>
 
-            {step === 5 ? (
-              <section>
-                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
-                  Paso 5 · Confirmación final
-                </h3>
+                    <div className="mb-3 rounded-[14px] border border-black/10 bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#334155]">
+                      Total cliente: {formatMoneyAR(totalFinal, draft.venta.moneda)}
+                    </div>
 
-                <div className="grid gap-3 text-[12px] md:grid-cols-2">
-                  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
-                    <FieldLabel>Cliente</FieldLabel>
-                    <div className="font-semibold text-[#172033]">
-                      {draft.cliente.nombre_completo}
-                    </div>
-                    <div className="font-normal text-[#64748b]">{draft.cliente.telefono}</div>
-                    <div className="font-normal text-[#64748b]">{draft.cliente.email || "Sin email"}</div>
-                  </div>
+                    <div className="grid gap-2">
+                      {draft.pagosComerciales.map((pago, index) => (
+                        <div
+                          key={`pago-comercial-${index}`}
+                          className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:grid-cols-[1fr_110px_1fr_auto]"
+                        >
+                          <div>
+                            <FieldLabel>Importe</FieldLabel>
+                            <TextInput
+                              value={pago.importe ? String(pago.importe).replace(".", ",") : ""}
+                              onChange={(value) => updatePago(index, { importe: parseMoney(value) })}
+                              placeholder="0,00"
+                              inputMode="decimal"
+                            />
+                          </div>
 
-                  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
-                    <FieldLabel>File / Operador</FieldLabel>
-                    <div className="font-semibold text-[#172033]">{draft.venta.numero_file}</div>
-                    <div className="font-normal text-[#64748b]">
-                      {draft.venta.servicio} · {joinDestinos(draft.venta.destinos)}
-                    </div>
-                    <div className="font-normal text-[#64748b]">
-                      {formatDateAR(draft.venta.fecha_in)} →{" "}
-                      {draft.venta.solo_ida ? "Solo ida" : formatDateAR(draft.venta.fecha_out)}
-                    </div>
-                  </div>
+                          <div>
+                            <FieldLabel>Moneda</FieldLabel>
+                            <NosturSelect
+                              value={pago.moneda || draft.venta.moneda}
+                              onChange={(value) => updatePago(index, { moneda: value })}
+                              options={MONEDA_OPTIONS}
+                            />
+                          </div>
 
-                  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
-                    <FieldLabel>Importes</FieldLabel>
-                    <div className="flex justify-between">
-                      <span>Bruto</span>
-                      <strong className="font-semibold">{formatMoneyAR(bruto, draft.venta.moneda)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Neto operador</span>
-                      <strong className="font-semibold">{formatMoneyAR(netoOperador, draft.venta.moneda)}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Margen estimado</span>
-                      <strong className="font-semibold">{formatMoneyAR(margenEstimado, draft.venta.moneda)}</strong>
-                    </div>
-                  </div>
+                          <div>
+                            <FieldLabel>Forma pago</FieldLabel>
+                            <NosturSelect
+                              value={pago.forma_pago || ""}
+                              onChange={(value) => updatePago(index, { forma_pago: value })}
+                              options={formaPagoOptions}
+                            />
+                          </div>
 
-                  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
-                    <FieldLabel>Resultado</FieldLabel>
-                    <div className="flex justify-between">
-                      <span>Comercial</span>
-                      <strong className="font-semibold">{formatMoneyAR(totalComercial, draft.venta.moneda)}</strong>
+                          <div className="flex items-end">
+                            <LineButton
+                              onClick={() =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  pagosComerciales: current.pagosComerciales.filter(
+                                    (_, itemIndex) => itemIndex !== index
+                                  )
+                                }))
+                              }
+                            >
+                              Eliminar
+                            </LineButton>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="flex justify-between">
-                      <span>Tesorería</span>
-                      <strong className="font-semibold">{formatMoneyAR(totalTesoreria, draft.venta.moneda)}</strong>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <LineButton
+                        onClick={() =>
+                          setDraft((current) => ({
+                            ...current,
+                            pagosComerciales: [
+                              ...current.pagosComerciales,
+                              { importe: 0, moneda: current.venta.moneda, forma_pago: "" }
+                            ]
+                          }))
+                        }
+                      >
+                        + Agregar pago comercial
+                      </LineButton>
+
+                      <BooleanChip
+                        checked={draft.pagoParcial}
+                        onChange={(value) => {
+                          setWizardError(null);
+                          setDraft((current) => ({ ...current, pagoParcial: value }));
+                        }}
+                        label="Pago parcial / enviar saldo a Cta Cte"
+                      />
+
+                      <BooleanChip
+                        checked={draft.riesgo}
+                        onChange={(value) => {
+                          setWizardError(null);
+                          setDraft((current) => ({
+                            ...current,
+                            riesgo: value,
+                            importe_riesgo: value
+                              ? current.importe_riesgo ||
+                                String(Math.max(totalFinal - totalPagosComerciales, 0)).replace(
+                                  ".",
+                                  ","
+                                )
+                              : "",
+                            riesgo_motivo: value ? current.riesgo_motivo : ""
+                          }));
+                        }}
+                        label="Imputar a riesgo operador"
+                      />
                     </div>
-                    <div className="flex justify-between">
-                      <span>Saldo Cta Cte</span>
-                      <strong className="font-semibold">{formatMoneyAR(saldo, draft.venta.moneda)}</strong>
-                    </div>
-                    <div className="mt-2 font-semibold text-[#172033]">
-                      Queda en Files: {visibleEnFiles ? "SÍ" : "NO · Va a Cta Cte"}
-                    </div>
-                    <div className="font-semibold text-[#172033]">
-                      Riesgo operador: {draft.riesgo ? "SÍ" : "NO"}
-                    </div>
+
                     {draft.riesgo ? (
-                      <div className="font-semibold text-red-700">
-                        Importe riesgo: {formatMoneyAR(importeRiesgo, draft.venta.moneda)}
+                      <div className="mt-3 grid gap-3 rounded-[14px] border border-red-200 bg-red-50 p-3 md:grid-cols-[210px_minmax(0,1fr)]">
+                        <div>
+                          <FieldLabel>Importe riesgo operador</FieldLabel>
+                          <TextInput
+                            value={draft.importe_riesgo}
+                            onChange={(value) => {
+                              setWizardError(null);
+                              setDraft((current) => ({ ...current, importe_riesgo: value }));
+                            }}
+                            placeholder="0,00"
+                            inputMode="decimal"
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel>Motivo / observación riesgo</FieldLabel>
+                          <TextInput
+                            value={draft.riesgo_motivo}
+                            onChange={(value) => {
+                              setWizardError(null);
+                              setDraft((current) => ({ ...current, riesgo_motivo: value }));
+                            }}
+                            placeholder="Ej: saldo con operador a cancelar luego"
+                          />
+                        </div>
+
+                        <div className="rounded-[12px] border border-red-200 bg-white/70 p-2.5 text-[11.5px] font-medium text-red-700 md:col-span-2">
+                          Riesgo operador significa que el cliente nos paga a NOSSIX, pero la deuda
+                          con el operador queda pendiente para cancelarla luego.
+                        </div>
                       </div>
                     ) : null}
-                  </div>
-                </div>
 
-                <div className="mt-3">
-                  <BooleanChip
-                    checked={draft.confirmado}
-                    onChange={(value) => {
-                      setWizardError(null);
-                      setDraft((current) => ({ ...current, confirmado: value }));
-                    }}
-                    label="Confirmo que los datos son correctos"
-                  />
-                </div>
-              </section>
-            ) : null}
-          </main>
+                    <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
+                      <div className="flex justify-between">
+                        <span className="text-[#64748b]">Imputación comercial</span>
+                        <strong className="font-semibold">
+                          {formatMoneyAR(totalComercial, draft.venta.moneda)}
+                        </strong>
+                      </div>
 
-          <WizardSummary
-            draft={draft}
-            totalFinal={totalFinal}
-            totalComercial={totalComercial}
-            totalTesoreria={totalTesoreria}
-            saldo={saldo}
-          />
-        </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#64748b]">Pago comercial</span>
+                        <strong className="font-semibold">
+                          {formatMoneyAR(totalPagosComerciales, draft.venta.moneda)}
+                        </strong>
+                      </div>
+
+                      {draft.riesgo ? (
+                        <div className="flex justify-between">
+                          <span className="text-[#64748b]">Riesgo operador</span>
+                          <strong className="font-semibold text-red-700">
+                            {formatMoneyAR(importeRiesgo, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                      ) : null}
+
+                      <div className="mt-2 flex justify-between border-t border-black/10 pt-2">
+                        <span className="text-[#64748b]">Saldo comercial</span>
+                        <strong
+                          className={
+                            saldoComercial > 0
+                              ? "font-semibold text-red-600"
+                              : "font-semibold text-emerald-700"
+                          }
+                        >
+                          {formatMoneyAR(saldoComercial, draft.venta.moneda)}
+                        </strong>
+                      </div>
+
+                      {saldoComercial > 0 ? (
+                        <div className="mt-3 rounded-[12px] bg-amber-50 p-2.5 font-medium text-amber-700">
+                          Si este saldo corresponde a deuda del pasajero, marcá pago parcial. Si
+                          corresponde a deuda con el operador, usá riesgo operador.
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+
+                {step === 4 ? (
+                  <section>
+                    <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
+                      Paso 4 · Tesorería real
+                    </h3>
+
+                    <div className="mb-3 rounded-[14px] border border-black/10 bg-[#f8fafc] px-3 py-2 text-[12px] font-medium text-[#334155]">
+                      Total cliente a cobrar hoy: {formatMoneyAR(totalFinal, draft.venta.moneda)}
+                    </div>
+
+                    <div className="grid gap-2">
+                      {draft.movimientosTesoreria.map((movimiento, index) => (
+                        <div
+                          key={`movimiento-${index}`}
+                          className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:grid-cols-[1fr_1fr_100px_1fr_100px_auto]"
+                        >
+                          <div>
+                            <FieldLabel>Caja</FieldLabel>
+                            <NosturSelect
+                              value={movimiento.caja || ""}
+                              onChange={(value) => updateMovimiento(index, { caja: value })}
+                              options={cajaOptions}
+                            />
+                          </div>
+
+                          <div>
+                            <FieldLabel>Forma real</FieldLabel>
+                            <NosturSelect
+                              value={movimiento.forma_pago || ""}
+                              onChange={(value) => updateMovimiento(index, { forma_pago: value })}
+                              options={formaPagoOptions}
+                            />
+                          </div>
+
+                          <div>
+                            <FieldLabel>Moneda</FieldLabel>
+                            <NosturSelect
+                              value={movimiento.moneda || draft.venta.moneda}
+                              onChange={(value) => updateMovimiento(index, { moneda: value })}
+                              options={MONEDA_OPTIONS}
+                            />
+                          </div>
+
+                          <div>
+                            <FieldLabel>Importe</FieldLabel>
+                            <TextInput
+                              value={
+                                movimiento.importe
+                                  ? String(movimiento.importe).replace(".", ",")
+                                  : ""
+                              }
+                              onChange={(value) =>
+                                updateMovimiento(index, { importe: parseMoney(value) })
+                              }
+                              placeholder="0,00"
+                              inputMode="decimal"
+                            />
+                          </div>
+
+                          <div>
+                            <FieldLabel>TC</FieldLabel>
+                            <TextInput
+                              value={
+                                movimiento.tipo_cambio
+                                  ? String(movimiento.tipo_cambio).replace(".", ",")
+                                  : ""
+                              }
+                              onChange={(value) =>
+                                updateMovimiento(index, { tipo_cambio: parseMoney(value) })
+                              }
+                              placeholder="—"
+                              inputMode="decimal"
+                            />
+                          </div>
+
+                          <div className="flex items-end">
+                            <LineButton
+                              onClick={() =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  movimientosTesoreria: current.movimientosTesoreria.filter(
+                                    (_, itemIndex) => itemIndex !== index
+                                  )
+                                }))
+                              }
+                            >
+                              Eliminar
+                            </LineButton>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <LineButton
+                        onClick={() =>
+                          setDraft((current) => ({
+                            ...current,
+                            movimientosTesoreria: [
+                              ...current.movimientosTesoreria,
+                              { importe: 0, moneda: current.venta.moneda, forma_pago: "", caja: "" }
+                            ]
+                          }))
+                        }
+                      >
+                        + Agregar movimiento
+                      </LineButton>
+                    </div>
+
+                    <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
+                      <div className="flex justify-between">
+                        <span className="text-[#64748b]">Total imputado</span>
+                        <strong className="font-semibold">
+                          {formatMoneyAR(totalTesoreria, draft.venta.moneda)}
+                        </strong>
+                      </div>
+
+                      <div className="flex justify-between">
+                        <span className="text-[#64748b]">Diferencia contra total cliente</span>
+                        <strong
+                          className={
+                            Math.abs(totalTesoreria - totalFinal) > 0.009
+                              ? "font-semibold text-red-600"
+                              : "font-semibold text-emerald-700"
+                          }
+                        >
+                          {formatMoneyAR(totalTesoreria - totalFinal, draft.venta.moneda)}
+                        </strong>
+                      </div>
+
+                      {draft.riesgo ? (
+                        <div className="mt-3 rounded-[12px] border border-red-200 bg-red-50 p-2.5 font-medium text-red-700">
+                          Este file tiene riesgo operador: el ingreso del cliente entra ahora a Caja;
+                          la deuda con el operador se cancelará luego desde Riesgos.
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+
+                {step === 5 ? (
+                  <section>
+                    <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
+                      Paso 5 · Confirmación final
+                    </h3>
+
+                    <div className="grid gap-3 text-[12px] md:grid-cols-2">
+                      <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                        <FieldLabel>Cliente</FieldLabel>
+                        <div className="font-semibold text-[#172033]">
+                          {draft.cliente.nombre_completo}
+                        </div>
+                        <div className="font-normal text-[#64748b]">{draft.cliente.telefono}</div>
+                        <div className="font-normal text-[#64748b]">
+                          {draft.cliente.email || "Sin email"}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                        <FieldLabel>File / Operador</FieldLabel>
+                        <div className="font-semibold text-[#172033]">{draft.venta.numero_file}</div>
+                        <div className="font-normal text-[#64748b]">
+                          {draft.venta.servicio} · {joinDestinos(draft.venta.destinos)}
+                        </div>
+                        <div className="font-normal text-[#64748b]">
+                          {formatDateAR(draft.venta.fecha_in)} →{" "}
+                          {draft.venta.solo_ida ? "Solo ida" : formatDateAR(draft.venta.fecha_out)}
+                        </div>
+                      </div>
+
+                      <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                        <FieldLabel>Importes</FieldLabel>
+                        <div className="flex justify-between">
+                          <span>Bruto</span>
+                          <strong className="font-semibold">
+                            {formatMoneyAR(bruto, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Neto operador</span>
+                          <strong className="font-semibold">
+                            {formatMoneyAR(netoOperador, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Margen estimado</span>
+                          <strong className="font-semibold">
+                            {formatMoneyAR(margenEstimado, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                        <FieldLabel>Resultado</FieldLabel>
+                        <div className="flex justify-between">
+                          <span>Comercial</span>
+                          <strong className="font-semibold">
+                            {formatMoneyAR(totalComercial, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Tesorería</span>
+                          <strong className="font-semibold">
+                            {formatMoneyAR(totalTesoreria, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Saldo Cta Cte</span>
+                          <strong className="font-semibold">
+                            {formatMoneyAR(saldo, draft.venta.moneda)}
+                          </strong>
+                        </div>
+                        <div className="mt-2 font-semibold text-[#172033]">
+                          Queda en Files: {visibleEnFiles ? "SÍ" : "NO · Va a Cta Cte"}
+                        </div>
+                        <div className="font-semibold text-[#172033]">
+                          Riesgo operador: {draft.riesgo ? "SÍ" : "NO"}
+                        </div>
+                        {draft.riesgo ? (
+                          <div className="font-semibold text-red-700">
+                            Importe riesgo: {formatMoneyAR(importeRiesgo, draft.venta.moneda)}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="mt-3">
+                      <BooleanChip
+                        checked={draft.confirmado}
+                        onChange={(value) => {
+                          setWizardError(null);
+                          setDraft((current) => ({ ...current, confirmado: value }));
+                        }}
+                        label="Confirmo que los datos son correctos"
+                      />
+                    </div>
+                  </section>
+                ) : null}
+              </main>
+
+              <WizardSummary
+                draft={draft}
+                totalFinal={totalFinal}
+                totalComercial={totalComercial}
+                totalTesoreria={totalTesoreria}
+                saldo={saldo}
+              />
+            </div>
 
             <div className="sticky bottom-0 mt-4 flex justify-between gap-2 border-t border-black/10 bg-[#edf3f7]/95 pt-3 backdrop-blur">
               <button
@@ -2226,7 +2256,9 @@ function FileDetailModal({
       <div className="max-h-[calc(100vh-72px)] w-full max-w-4xl overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="truncate text-[17px] font-semibold text-[#172033]">File {file.numero_file}</h2>
+            <h2 className="truncate text-[17px] font-semibold text-[#172033]">
+              File {file.numero_file}
+            </h2>
             <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">
               {file.clientes?.nombre_completo || "Sin cliente"} · {file.destino || "Sin destino"}
             </p>
@@ -2247,7 +2279,9 @@ function FileDetailModal({
             <div className="text-[13px] font-semibold text-[#172033]">
               {file.clientes?.nombre_completo || "—"}
             </div>
-            <div className="text-[12px] font-normal text-[#64748b]">{file.clientes?.telefono || "—"}</div>
+            <div className="text-[12px] font-normal text-[#64748b]">
+              {file.clientes?.telefono || "—"}
+            </div>
           </div>
 
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
@@ -2289,16 +2323,28 @@ function FileDetailModal({
 
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px] font-normal text-[#475569]">
             <div className="mb-1.5">
-              Bruto: <strong className="font-semibold">{formatMoneyAR(file.importe_bruto, file.moneda)}</strong>
+              Bruto:{" "}
+              <strong className="font-semibold">
+                {formatMoneyAR(file.importe_bruto, file.moneda)}
+              </strong>
             </div>
             <div className="mb-1.5">
-              Neto operador: <strong className="font-semibold">{formatMoneyAR(file.neto_operador, file.moneda)}</strong>
+              Neto operador:{" "}
+              <strong className="font-semibold">
+                {formatMoneyAR(file.neto_operador, file.moneda)}
+              </strong>
             </div>
             <div className="mb-1.5">
-              Pagado: <strong className="font-semibold">{formatMoneyAR(file.total_pagado, file.moneda)}</strong>
+              Pagado:{" "}
+              <strong className="font-semibold">
+                {formatMoneyAR(file.total_pagado, file.moneda)}
+              </strong>
             </div>
             <div>
-              Saldo: <strong className="font-semibold">{formatMoneyAR(file.saldo_cta_cte, file.moneda)}</strong>
+              Saldo:{" "}
+              <strong className="font-semibold">
+                {formatMoneyAR(file.saldo_cta_cte, file.moneda)}
+              </strong>
             </div>
           </div>
         </div>
@@ -2327,8 +2373,6 @@ export function FilesPanel() {
   const loading = useFilesStore((state) => state.loading);
   const saving = useFilesStore((state) => state.saving);
   const error = useFilesStore((state) => state.error);
-  const currentProfile = useFilesStore((state) => state.currentProfile);
-  const canManageFiles = useFilesStore((state) => state.canManageFiles);
   const filters = useFilesStore((state) => state.filters);
   const catalogos = useFilesStore((state) => state.catalogos);
   const selectedFileId = useFilesStore((state) => state.selectedFileId);
@@ -2422,6 +2466,9 @@ export function FilesPanel() {
     { value: "todos", label: "Todos" }
   ];
 
+  const selectedVendedorFilterLabel =
+    vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos";
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
       <header className="shrink-0 border-b border-black/10 bg-white/78 px-5 py-3 backdrop-blur-xl">
@@ -2436,9 +2483,7 @@ export function FilesPanel() {
             </div>
 
             <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-              {canManageFiles
-                ? "Carga de files / operadores."
-                : `Files asignados a ${currentProfile?.nombre || "tu usuario"}.`}
+              Carga de files / operadores. Por defecto cada vendedor ve sus files, pero puede filtrar por todos.
             </p>
           </div>
 
@@ -2494,7 +2539,8 @@ export function FilesPanel() {
 
               <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
                 {selectedMonthLabel} · {filters.desde} → {filters.hasta} · Estado:{" "}
-                {filters.estado === "todos" ? "Todos" : filters.estado}
+                {filters.estado === "todos" ? "Todos" : filters.estado} · Vendedor:{" "}
+                {selectedVendedorFilterLabel}
               </div>
             </button>
 
@@ -2547,7 +2593,7 @@ export function FilesPanel() {
 
           {filtersOpen ? (
             <>
-              <div className="mt-3 grid gap-2.5 lg:grid-cols-[1fr_1.15fr_1fr_1fr_1fr_1fr]">
+              <div className="mt-3 grid gap-2.5 lg:grid-cols-[1fr_1.15fr_1fr_1fr_1fr_1fr_1fr]">
                 <div className="rounded-[14px] border border-[#4f7c90]/20 bg-white/70 p-2">
                   <FieldLabel>Mes operativo</FieldLabel>
                   <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-[#172033] px-3 text-[12px] font-medium text-white">
@@ -2593,16 +2639,14 @@ export function FilesPanel() {
                   />
                 </div>
 
-                {canManageFiles ? (
-                  <div>
-                    <FieldLabel>Vendedor</FieldLabel>
-                    <NosturSelect
-                      value={filters.vendedorId}
-                      onChange={(value) => setFilter("vendedorId", value)}
-                      options={vendedorOptions}
-                    />
-                  </div>
-                ) : null}
+                <div>
+                  <FieldLabel>Vendedor</FieldLabel>
+                  <NosturSelect
+                    value={filters.vendedorId}
+                    onChange={(value) => setFilter("vendedorId", value)}
+                    options={vendedorOptions}
+                  />
+                </div>
 
                 <div>
                   <FieldLabel>Sucursal</FieldLabel>
@@ -2841,7 +2885,9 @@ export function FilesPanel() {
                     <div className="font-semibold text-[#172033]">
                       {selectedFile.operador || "Sin operador"}
                     </div>
-                    <div className="font-normal text-[#64748b]">{selectedFile.servicio || "Sin servicio"}</div>
+                    <div className="font-normal text-[#64748b]">
+                      {selectedFile.servicio || "Sin servicio"}
+                    </div>
                   </div>
 
                   <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">

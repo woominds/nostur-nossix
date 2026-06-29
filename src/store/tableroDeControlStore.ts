@@ -1,3 +1,5 @@
+// src/store/tableroDeControlStore.ts
+
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 
@@ -193,6 +195,26 @@ type MetaRow = {
   activa: boolean;
 };
 
+type CalendarioPaxEventoHome = {
+  id: string;
+  cliente_id: string | null;
+  pasajero: string | null;
+  telefono: string | null;
+  email: string | null;
+  fecha: string;
+  tipo_evento: "IN" | "OUT";
+  vendedor_id: string | null;
+  vendedor: string | null;
+  sucursal_id: string | null;
+  cantidad_servicios: number;
+  origenes: string | null;
+  numeros: string | null;
+  destinos: string | null;
+  servicios: string | null;
+  primer_created_at: string | null;
+  ultimo_created_at: string | null;
+};
+
 type TableroControlState = {
   loading: boolean;
   error: string | null;
@@ -242,9 +264,39 @@ const emptyKpis: KpiPrincipal = {
   ticketPromedioUsd: 0
 };
 
+function getArgentinaTodayISO(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Cordoba",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
+function addDaysToISODate(dateISO: string, days: number): string {
+  const [year, month, day] = dateISO.split("-").map(Number);
+
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + days);
+
+  const nextYear = date.getFullYear();
+  const nextMonth = String(date.getMonth() + 1).padStart(2, "0");
+  const nextDay = String(date.getDate()).padStart(2, "0");
+
+  return `${nextYear}-${nextMonth}-${nextDay}`;
+}
+
 function getArgentinaDate(): Date {
-  const now = new Date();
-  return new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Cordoba" }));
+  const today = getArgentinaTodayISO();
+  return new Date(`${today}T00:00:00`);
+}
+
+function formatDateLocalISO(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
 }
 
 function getDefaultFilters(): TableroFilters {
@@ -298,6 +350,7 @@ function getNumber(value: string | number | null | undefined): number {
     .replace(/[^\d.-]/g, "");
 
   const parsed = Number(normalized);
+
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -335,8 +388,12 @@ function normalizeError(error: unknown): string {
 
   if (typeof error === "object" && "message" in error) {
     const message = String((error as { message?: unknown }).message || "Ocurrió un error.");
-    if (message.toLowerCase().includes("row-level security")) return "No tenés permisos para esta acción.";
-    if (message.toLowerCase().includes("permission denied")) return "Permiso denegado por Supabase/RLS.";
+    const lower = message.toLowerCase();
+
+    if (lower.includes("row-level security")) return "No tenés permisos para esta acción.";
+    if (lower.includes("permission denied")) return "Permiso denegado por Supabase/RLS.";
+    if (lower.includes("does not exist")) return "Falta crear la vista o tabla necesaria en Supabase.";
+
     return message;
   }
 
@@ -431,10 +488,14 @@ function getNextMeta(
 
 function getSucursalName(sucursales: SucursalLite[], sucursalId: string | null): string {
   if (!sucursalId) return "Sin sucursal";
+
   return sucursales.find((item) => item.id === sucursalId)?.nombre || "Sin sucursal";
 }
 
-function getWeekBuckets(desde: string, hasta: string): Array<{ label: string; desde: string; hasta: string }> {
+function getWeekBuckets(
+  desde: string,
+  hasta: string
+): Array<{ label: string; desde: string; hasta: string }> {
   const start = new Date(`${desde}T00:00:00`);
   const end = new Date(`${hasta}T00:00:00`);
   const buckets: Array<{ label: string; desde: string; hasta: string }> = [];
@@ -451,8 +512,8 @@ function getWeekBuckets(desde: string, hasta: string): Array<{ label: string; de
 
     buckets.push({
       label: `Sem ${index}`,
-      desde: bucketStart.toISOString().slice(0, 10),
-      hasta: bucketEnd.toISOString().slice(0, 10)
+      desde: formatDateLocalISO(bucketStart),
+      hasta: formatDateLocalISO(bucketEnd)
     });
 
     cursor.setDate(cursor.getDate() + 7);
@@ -463,7 +524,7 @@ function getWeekBuckets(desde: string, hasta: string): Array<{ label: string; de
 }
 
 function getCurrentWeekRange(monthStart: string, monthEnd: string): { desde: string; hasta: string } {
-  const today = getArgentinaDate().toISOString().slice(0, 10);
+  const today = getArgentinaTodayISO();
 
   if (today < monthStart || today > monthEnd) {
     const buckets = getWeekBuckets(monthStart, monthEnd);
@@ -480,8 +541,8 @@ function getCurrentWeekRange(monthStart: string, monthEnd: string): { desde: str
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekStart.getDate() + 6);
 
-  const weekStartStr = weekStart.toISOString().slice(0, 10);
-  const weekEndStr = weekEnd.toISOString().slice(0, 10);
+  const weekStartStr = formatDateLocalISO(weekStart);
+  const weekEndStr = formatDateLocalISO(weekEnd);
 
   return {
     desde: weekStartStr < monthStart ? monthStart : weekStartStr,
@@ -622,7 +683,9 @@ function buildAlertas(
     });
   }
 
-  const almundoSinAvance = metasAlmundo.filter((item) => item.objetivoUsd > 0 && item.avancePct < 50);
+  const almundoSinAvance = metasAlmundo.filter(
+    (item) => item.objetivoUsd > 0 && item.avancePct < 50
+  );
 
   if (almundoSinAvance.length > 0) {
     alertas.push({
@@ -684,7 +747,11 @@ export const useTableroDeControlStore = create<TableroControlState>((set, get) =
       return;
     }
 
-    const profileRes = await supabase.from("profiles").select("*").eq("id", currentUserId).maybeSingle();
+    const profileRes = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", currentUserId)
+      .maybeSingle();
 
     if (profileRes.error) {
       set({ loading: false, error: normalizeError(profileRes.error) });
@@ -701,35 +768,50 @@ export const useTableroDeControlStore = create<TableroControlState>((set, get) =
     const hasta = getDateEndForQuery(filters.anio, filters.mes);
     const semanaActual = getCurrentWeekRange(desde, hasta);
 
-    const [mensualRes, ventasMesRes, ventasHistoricoRes, metasRes, sucursalesRes] =
-      await Promise.all([
-        supabase
-          .from("vw_comisiones_vendedores_mensual")
-          .select("*")
-          .eq("mes", mesNumber)
-          .eq("anio", anioNumber)
-          .order("utilidad_total_usd", { ascending: false }),
+    const today = getArgentinaTodayISO();
+    const next30Str = addDaysToISODate(today, 30);
 
-        supabase
-          .from("vw_comisiones_ventas_base")
-          .select("*")
-          .gte("fecha", desde)
-          .lte("fecha", hasta)
-          .order("fecha", { ascending: false }),
+    const [
+      mensualRes,
+      ventasMesRes,
+      ventasHistoricoRes,
+      metasRes,
+      sucursalesRes,
+      paxCalendarioRes
+    ] = await Promise.all([
+      supabase
+        .from("vw_comisiones_vendedores_mensual")
+        .select("*")
+        .eq("mes", mesNumber)
+        .eq("anio", anioNumber)
+        .order("utilidad_total_usd", { ascending: false }),
 
-        supabase
-          .from("vw_comisiones_ventas_base")
-          .select("*")
-          .order("fecha", { ascending: false })
-          .limit(2500),
+      supabase
+        .from("vw_comisiones_ventas_base")
+        .select("*")
+        .gte("fecha", desde)
+        .lte("fecha", hasta)
+        .order("fecha", { ascending: false }),
 
-        supabase
-          .from("metas")
-          .select("*")
-          .eq("activa", true),
+      supabase
+        .from("vw_comisiones_ventas_base")
+        .select("*")
+        .order("fecha", { ascending: false })
+        .limit(2500),
 
-        supabase.from("sucursales").select("*").order("nombre")
-      ]);
+      supabase.from("metas").select("*").eq("activa", true),
+
+      supabase.from("sucursales").select("*").order("nombre"),
+
+      supabase
+        .from("vw_calendario_pax")
+        .select("*")
+        .gte("fecha", today)
+        .lte("fecha", next30Str)
+        .order("fecha", { ascending: true })
+        .order("pasajero", { ascending: true })
+        .limit(80)
+    ]);
 
     const firstError =
       mensualRes.error ||
@@ -748,10 +830,22 @@ export const useTableroDeControlStore = create<TableroControlState>((set, get) =
       return;
     }
 
+    if (paxCalendarioRes.error) {
+      console.warn("[Home/PAX] No se pudo cargar vw_calendario_pax", paxCalendarioRes.error);
+    }
+
     const mensual = (mensualRes.data || []) as ComisionMensualView[];
     const ventasMes = (ventasMesRes.data || []) as VentaBase[];
     const ventasHistorico = (ventasHistoricoRes.data || []) as VentaBase[];
     const sucursales = (sucursalesRes.data || []) as SucursalLite[];
+    const paxCalendario = (paxCalendarioRes.data || []) as CalendarioPaxEventoHome[];
+
+    console.warn("[Home/PAX]", {
+      today,
+      next30Str,
+      count: paxCalendario.length,
+      sample: paxCalendario.slice(0, 3)
+    });
 
     const metasRows = ((metasRes.data || []) as MetaRow[]).filter((meta) => {
       const coincideMesAnio = isSameMonthMeta(meta, mesNumber, anioNumber);
@@ -761,75 +855,83 @@ export const useTableroDeControlStore = create<TableroControlState>((set, get) =
       return coincideMesAnio || cruzaMes || cruzaSemanaActual;
     });
 
-   const facturacionCarritosMesUsd = ventasMes
-  .filter((venta) => venta.origen === "CARRITO")
-  .reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
+    const facturacionCarritosMesUsd = ventasMes
+      .filter((venta) => venta.origen === "CARRITO")
+      .reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
 
-const facturacionFilesMesUsd = ventasMes
-  .filter((venta) => venta.origen === "FILE")
-  .reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
+    const facturacionFilesMesUsd = ventasMes
+      .filter((venta) => venta.origen === "FILE")
+      .reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
 
-const facturacionMesUsd = facturacionCarritosMesUsd + facturacionFilesMesUsd;
+    const facturacionMesUsd = facturacionCarritosMesUsd + facturacionFilesMesUsd;
 
-const facturacionMesArs = ventasMes.reduce(
-  (total, venta) => total + getVentaFacturacionArs(venta),
-  0
-);
+    const facturacionMesArs = ventasMes.reduce(
+      (total, venta) => total + getVentaFacturacionArs(venta),
+      0
+    );
 
-const facturacionHistoricaUsd = ventasHistorico.reduce(
-  (total, venta) => total + getNumber(venta.facturacion_usd),
-  0
-);
+    const facturacionHistoricaUsd = ventasHistorico.reduce(
+      (total, venta) => total + getNumber(venta.facturacion_usd),
+      0
+    );
 
-const facturacionHistoricaArs = ventasHistorico.reduce(
-  (total, venta) => total + getVentaFacturacionArs(venta),
-  0
-);
+    const facturacionHistoricaArs = ventasHistorico.reduce(
+      (total, venta) => total + getVentaFacturacionArs(venta),
+      0
+    );
 
-const utilidadCarritosUsd = ventasMes
-  .filter((venta) => venta.origen === "CARRITO")
-  .reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
+    const utilidadCarritosUsd = ventasMes
+      .filter((venta) => venta.origen === "CARRITO")
+      .reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
 
-const utilidadFilesUsd = ventasMes
-  .filter((venta) => venta.origen === "FILE")
-  .reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
+    const utilidadFilesUsd = ventasMes
+      .filter((venta) => venta.origen === "FILE")
+      .reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
 
-const utilidadTotalUsd = utilidadCarritosUsd + utilidadFilesUsd;
+    const utilidadTotalUsd = utilidadCarritosUsd + utilidadFilesUsd;
 
-const kpis: KpiPrincipal = {
-  facturacionHistoricaUsd,
-  facturacionHistoricaArs,
+    const kpis: KpiPrincipal = {
+      facturacionHistoricaUsd,
+      facturacionHistoricaArs,
 
-  facturacionMesUsd,
-  facturacionMesArs,
+      facturacionMesUsd,
+      facturacionMesArs,
 
-  facturacionTotalUsd: facturacionMesUsd,
-  facturacionTotalArs: facturacionMesArs,
+      facturacionTotalUsd: facturacionMesUsd,
+      facturacionTotalArs: facturacionMesArs,
 
-  facturacionAlmundoUsd: facturacionCarritosMesUsd,
-  facturacionFilesUsd: facturacionFilesMesUsd,
+      facturacionAlmundoUsd: facturacionCarritosMesUsd,
+      facturacionFilesUsd: facturacionFilesMesUsd,
 
-  utilidadTotalUsd,
-  utilidadCarritosUsd,
-  utilidadFilesUsd,
+      utilidadTotalUsd,
+      utilidadCarritosUsd,
+      utilidadFilesUsd,
 
-  ventasConfirmadas: ventasMes.length,
-  carritosConfirmados: ventasMes.filter((venta) => venta.origen === "CARRITO").length,
-  filesConfirmados: ventasMes.filter((venta) => venta.origen === "FILE").length,
-  ticketPromedioUsd: ventasMes.length > 0 ? facturacionMesUsd / ventasMes.length : 0
-};
+      ventasConfirmadas: ventasMes.length,
+      carritosConfirmados: ventasMes.filter((venta) => venta.origen === "CARRITO").length,
+      filesConfirmados: ventasMes.filter((venta) => venta.origen === "FILE").length,
+      ticketPromedioUsd: ventasMes.length > 0 ? facturacionMesUsd / ventasMes.length : 0
+    };
 
     const weeks = getWeekBuckets(desde, hasta);
 
     const serieSemanal: SerieSemana[] = weeks.map((week) => {
-      const ventasSemana = ventasMes.filter((venta) => venta.fecha >= week.desde && venta.fecha <= week.hasta);
+      const ventasSemana = ventasMes.filter(
+        (venta) => venta.fecha >= week.desde && venta.fecha <= week.hasta
+      );
 
       return {
         semana: week.label,
         desde: week.desde,
         hasta: week.hasta,
-        facturacionUsd: ventasSemana.reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0),
-        utilidadUsd: ventasSemana.reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0),
+        facturacionUsd: ventasSemana.reduce(
+          (total, venta) => total + getNumber(venta.facturacion_usd),
+          0
+        ),
+        utilidadUsd: ventasSemana.reduce(
+          (total, venta) => total + getNumber(venta.utilidad_usd),
+          0
+        ),
         cantidadVentas: ventasSemana.length
       };
     });
@@ -870,12 +972,18 @@ const kpis: KpiPrincipal = {
 
       const utilidadMensual =
         mensualDelVendedor.length > 0
-          ? mensualDelVendedor.reduce((total, item) => total + getNumber(item.utilidad_total_usd), 0)
+          ? mensualDelVendedor.reduce(
+              (total, item) => total + getNumber(item.utilidad_total_usd),
+              0
+            )
           : ventasDelVendedor.reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
 
       const facturacionMensual =
         mensualDelVendedor.length > 0
-          ? mensualDelVendedor.reduce((total, item) => total + getNumber(item.facturacion_total_usd), 0)
+          ? mensualDelVendedor.reduce(
+              (total, item) => total + getNumber(item.facturacion_total_usd),
+              0
+            )
           : ventasDelVendedor.reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
 
       const utilidadSemanalUsd = ventasSemanaActual.reduce(
@@ -895,7 +1003,10 @@ const kpis: KpiPrincipal = {
 
       const metaLogrado =
         getNumber(metaMensual?.meta_logrado_usd) ||
-        mensualDelVendedor.reduce((max, item) => Math.max(max, getNumber(item.meta_logrado_usd)), 0);
+        mensualDelVendedor.reduce(
+          (max, item) => Math.max(max, getNumber(item.meta_logrado_usd)),
+          0
+        );
 
       const next = getNextMeta(utilidadMensual, metaPiso, metaMedio, metaLogrado);
 
@@ -965,7 +1076,9 @@ const kpis: KpiPrincipal = {
     );
 
     const metasSucursal: MetaSucursalResumen[] = sucursales.map((sucursal) => {
-      const actual = rankingSucursales.find((item) => item.sucursalId === sucursal.id)?.utilidadUsd || 0;
+      const actual =
+        rankingSucursales.find((item) => item.sucursalId === sucursal.id)?.utilidadUsd || 0;
+
       const meta = getMetaUtilidadSucursal(metasRows, sucursal.id, mesNumber, anioNumber);
 
       const piso = getNumber(meta?.meta_piso_usd);
@@ -1010,38 +1123,27 @@ const kpis: KpiPrincipal = {
     const serviciosMensual = buildRankingSimpleFromVentas(ventasMes, "servicio");
     const serviciosHistorico = buildRankingSimpleFromVentas(ventasHistorico, "servicio");
 
-    const today = getArgentinaDate().toISOString().slice(0, 10);
-    const next30 = new Date(getArgentinaDate());
-    next30.setDate(next30.getDate() + 30);
-    const next30Str = next30.toISOString().slice(0, 10);
-
-    const paxSaliendo: PaxMovimiento[] = ventasHistorico
-      .filter((venta) => {
-        const fechaIn = String((venta as unknown as Record<string, unknown>).fecha_in || "");
-        return fechaIn >= today && fechaIn <= next30Str;
-      })
+    const paxSaliendo: PaxMovimiento[] = paxCalendario
+      .filter((evento) => evento.tipo_evento === "IN")
       .slice(0, 6)
-      .map((venta) => ({
-        id: `${venta.origen}-${venta.origen_id}-sale`,
-        pasajero: venta.pasajero || "Sin pasajero",
-        destino: String((venta as unknown as Record<string, unknown>).destino || "Sin destino"),
-        fecha: String((venta as unknown as Record<string, unknown>).fecha_in || ""),
-        vendedor: venta.vendedor || "Sin vendedor",
+      .map((evento) => ({
+        id: `${evento.id}-sale`,
+        pasajero: evento.pasajero || "Sin pasajero",
+        destino: evento.destinos || "Sin destino",
+        fecha: evento.fecha,
+        vendedor: evento.vendedor || "Sin vendedor",
         tipo: "SALE"
       }));
 
-    const paxRegresando: PaxMovimiento[] = ventasHistorico
-      .filter((venta) => {
-        const fechaOut = String((venta as unknown as Record<string, unknown>).fecha_out || "");
-        return fechaOut >= today && fechaOut <= next30Str;
-      })
+    const paxRegresando: PaxMovimiento[] = paxCalendario
+      .filter((evento) => evento.tipo_evento === "OUT")
       .slice(0, 6)
-      .map((venta) => ({
-        id: `${venta.origen}-${venta.origen_id}-regresa`,
-        pasajero: venta.pasajero || "Sin pasajero",
-        destino: String((venta as unknown as Record<string, unknown>).destino || "Sin destino"),
-        fecha: String((venta as unknown as Record<string, unknown>).fecha_out || ""),
-        vendedor: venta.vendedor || "Sin vendedor",
+      .map((evento) => ({
+        id: `${evento.id}-regresa`,
+        pasajero: evento.pasajero || "Sin pasajero",
+        destino: evento.destinos || "Sin destino",
+        fecha: evento.fecha,
+        vendedor: evento.vendedor || "Sin vendedor",
         tipo: "REGRESA"
       }));
 

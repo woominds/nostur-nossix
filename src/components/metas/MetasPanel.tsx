@@ -1,5 +1,3 @@
-// src/components/metas/MetasPanel.tsx
-
 import { useEffect, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
@@ -7,16 +5,21 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronsUpDown,
+  Copy,
   Edit3,
   Plus,
   RefreshCcw,
   Search,
   Target,
+  Trash2,
   Trophy,
   UsersRound,
   X
 } from "lucide-react";
 import {
+  getWeekRangeFromDate,
+  monthEnd,
+  monthStart,
   useMetasStore,
   type CreateMetaDraft,
   type MetaDraft,
@@ -29,7 +32,7 @@ import { NosturDateInput } from "../ui/NosturDateInput";
 
 /* =========================================================
    NOSSIX / NOSTUR — METAS
-   Rediseño visual compacto premium
+   Editables + upsert + memoria período anterior
 ========================================================= */
 
 type SelectOption = {
@@ -83,18 +86,6 @@ const ESTADO_OPTIONS: SelectOption[] = [
 /* =========================================================
    HELPERS
 ========================================================= */
-
-function monthStart(anio: string, mes: string): string {
-  return `${anio}-${mes.padStart(2, "0")}-01`;
-}
-
-function monthEnd(anio: string, mes: string): string {
-  const year = Number(anio);
-  const month = Number(mes);
-  const last = new Date(year, month, 0).getDate();
-
-  return `${anio}-${mes.padStart(2, "0")}-${String(last).padStart(2, "0")}`;
-}
 
 function parseMoney(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -150,10 +141,10 @@ function getTipoLabel(tipo: string): string {
 }
 
 function getBaseLabel(tipo: MetaTipo): string {
-  if (tipo === "ALMUNDO_MENSUAL") return "Facturación de Carritos Almundo · sin Files";
-  if (tipo === "VENDEDOR_SEMANAL") return "Utilidad USD · incentivo sin comisión";
-  if (tipo === "VENDEDOR_MENSUAL") return "Utilidad USD · comisiones 8% / 10% / 12%";
-  return "Utilidad USD de sucursal · Carritos + Files";
+  if (tipo === "ALMUNDO_MENSUAL") return "Facturación total Almundo · Carritos";
+  if (tipo === "VENDEDOR_SEMANAL") return "Meta semanal general o por vendedor";
+  if (tipo === "VENDEDOR_MENSUAL") return "Comisiones vendedores 8% / 10% / 12%";
+  return "Importe a facturar mensual por sucursal";
 }
 
 function getEstadoType(estado: string): "ok" | "pending" | "danger" | "neutral" {
@@ -161,6 +152,15 @@ function getEstadoType(estado: string): "ok" | "pending" | "danger" | "neutral" 
   if (estado === "FUTURA") return "neutral";
   if (estado === "VENCIDA") return "pending";
   return "danger";
+}
+
+function applyMonthlyPeriod(mes: string, anio: string) {
+  return {
+    mes,
+    anio,
+    fecha_desde: monthStart(anio, mes),
+    fecha_hasta: monthEnd(anio, mes)
+  };
 }
 
 /* =========================================================
@@ -406,8 +406,12 @@ function MetricCard({
 
 function buildInitialDraft(selected: MetaResumen | null): MetaDraft {
   const meta = selected?.meta;
+  const isVendedor = meta?.tipo === "VENDEDOR_MENSUAL" || meta?.tipo === "VENDEDOR_SEMANAL";
 
   return {
+    sucursal_id: meta?.sucursal_id || "",
+    vendedor_id: meta?.vendedor_id || "",
+    alcance: isVendedor && meta?.vendedor_id ? "ESPECIFICO" : "TODOS",
     fecha_desde: meta?.fecha_desde || "",
     fecha_hasta: meta?.fecha_hasta || "",
     mes: meta?.mes ? String(meta.mes).padStart(2, "0") : "",
@@ -446,7 +450,7 @@ function buildInitialCreateDraft(mes: string, anio: string): CreateMetaDraft {
 }
 
 /* =========================================================
-   MODAL CREAR META
+   MODAL CREAR / ACTUALIZAR META
 ========================================================= */
 
 function MetaCreateModal({
@@ -486,18 +490,34 @@ function MetaCreateModal({
   }
 
   function setPeriodo(mes: string, anio: string) {
+    const period = applyMonthlyPeriod(mes, anio);
+
     setDraft((current) => ({
       ...current,
+      ...period
+    }));
+  }
+
+  function handleWeeklyStart(value: string) {
+    const range = getWeekRangeFromDate(value);
+    const mes = range.fecha_desde ? range.fecha_desde.slice(5, 7) : draft.mes;
+    const anio = range.fecha_desde ? range.fecha_desde.slice(0, 4) : draft.anio;
+
+    setDraft((current) => ({
+      ...current,
+      ...range,
       mes,
-      anio,
-      fecha_desde: monthStart(anio, mes),
-      fecha_hasta: monthEnd(anio, mes)
+      anio
     }));
   }
 
   function handleTipoChange(value: string) {
     const tipo = value as MetaTipo;
     const nextIsVendedor = tipo === "VENDEDOR_MENSUAL" || tipo === "VENDEDOR_SEMANAL";
+    const nextIsWeekly = tipo === "VENDEDOR_SEMANAL";
+
+    const monthlyPeriod = applyMonthlyPeriod(draft.mes, draft.anio);
+    const weeklyPeriod = getWeekRangeFromDate(monthlyPeriod.fecha_desde);
 
     setDraft((current) => ({
       ...current,
@@ -505,6 +525,10 @@ function MetaCreateModal({
       alcance: nextIsVendedor ? "TODOS" : "ESPECIFICO",
       sucursal_id: "",
       vendedor_id: "",
+      fecha_desde: nextIsWeekly ? weeklyPeriod.fecha_desde : monthlyPeriod.fecha_desde,
+      fecha_hasta: nextIsWeekly ? weeklyPeriod.fecha_hasta : monthlyPeriod.fecha_hasta,
+      mes: nextIsWeekly ? weeklyPeriod.fecha_desde.slice(5, 7) : monthlyPeriod.mes,
+      anio: nextIsWeekly ? weeklyPeriod.fecha_desde.slice(0, 4) : monthlyPeriod.anio,
       meta_unica_usd: "",
       meta_piso_usd: "",
       meta_medio_usd: "",
@@ -524,10 +548,10 @@ function MetaCreateModal({
       <div className="max-h-[calc(100vh-56px)] w-full max-w-4xl overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-[17px] font-semibold text-[#172033]">Configurar metas</h2>
+            <h2 className="text-[17px] font-semibold text-[#172033]">Crear o actualizar meta</h2>
 
             <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">
-              Carga metas en USD para sucursales, vendedores y Almundo.
+              Si ya existe una meta igual para ese período, se actualiza. No duplica.
             </p>
           </div>
 
@@ -570,15 +594,21 @@ function MetaCreateModal({
               </div>
 
               <div>
-                <FieldLabel>Desde</FieldLabel>
+                <FieldLabel>{isWeekly ? "Lunes de la semana" : "Desde"}</FieldLabel>
                 <NosturDateInput
                   value={draft.fecha_desde}
-                  onChange={(value) => setField("fecha_desde", value)}
+                  onChange={(value) => {
+                    if (isWeekly) {
+                      handleWeeklyStart(value);
+                    } else {
+                      setField("fecha_desde", value);
+                    }
+                  }}
                 />
               </div>
 
               <div>
-                <FieldLabel>Hasta</FieldLabel>
+                <FieldLabel>{isWeekly ? "Domingo automático" : "Hasta"}</FieldLabel>
                 <NosturDateInput
                   value={draft.fecha_hasta}
                   onChange={(value) => setField("fecha_hasta", value)}
@@ -768,8 +798,8 @@ function MetaCreateModal({
               </div>
 
               <div className="rounded-[14px] border border-amber-200 bg-amber-50 p-3 text-[11px] font-medium leading-relaxed text-amber-700">
-                Todas las metas quedan expresadas en USD. Para métricas en pesos, el sistema usará
-el tipo de cambio promedio mensual.             </div>
+                Las metas se expresan en USD. Si ya existía una meta igual, este guardado la actualiza.
+              </div>
             </div>
           </aside>
         </div>
@@ -789,7 +819,7 @@ el tipo de cambio promedio mensual.             </div>
             onClick={submit}
             className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
           >
-            {saving ? "Guardando..." : "Crear meta"}
+            {saving ? "Guardando..." : "Guardar meta"}
           </button>
         </div>
       </div>
@@ -804,12 +834,15 @@ el tipo de cambio promedio mensual.             </div>
 function MetaSidePanel({
   selected,
   saving,
-  onSave
+  onSave,
+  onDeactivate
 }: {
   selected: MetaResumen | null;
   saving: boolean;
   onSave: (draft: MetaDraft) => Promise<void>;
+  onDeactivate: () => Promise<void>;
 }) {
+  const catalogos = useMetasStore((state) => state.catalogos);
   const [draft, setDraft] = useState<MetaDraft>(() => buildInitialDraft(selected));
 
   useEffect(() => {
@@ -830,9 +863,34 @@ function MetaSidePanel({
   const isWeekly = meta.tipo === "VENDEDOR_SEMANAL";
   const isAlmundo = meta.tipo === "ALMUNDO_MENSUAL";
   const isMonthlySeller = meta.tipo === "VENDEDOR_MENSUAL";
+  const isVendedor = meta.tipo === "VENDEDOR_MENSUAL" || meta.tipo === "VENDEDOR_SEMANAL";
+  const isSucursal = meta.tipo === "SUCURSAL_MENSUAL" || meta.tipo === "ALMUNDO_MENSUAL";
+
+  const sucursalOptions: SelectOption[] = catalogos.sucursales.map((item) => ({
+    value: item.id,
+    label: item.nombre
+  }));
+
+  const vendedorOptions: SelectOption[] = catalogos.vendedores.map((item) => ({
+    value: item.id,
+    label: getNombreCompleto(item)
+  }));
 
   function setField<K extends keyof MetaDraft>(key: K, value: MetaDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function handleWeeklyStart(value: string) {
+    const range = getWeekRangeFromDate(value);
+    const mes = range.fecha_desde ? range.fecha_desde.slice(5, 7) : draft.mes;
+    const anio = range.fecha_desde ? range.fecha_desde.slice(0, 4) : draft.anio;
+
+    setDraft((current) => ({
+      ...current,
+      ...range,
+      mes,
+      anio
+    }));
   }
 
   return (
@@ -840,7 +898,7 @@ function MetaSidePanel({
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="truncate text-[14px] font-semibold text-[#172033]">
-            {getTipoLabel(meta.tipo)}
+            Editar {getTipoLabel(meta.tipo)}
           </h2>
 
           <p className="mt-0.5 truncate text-[11.5px] font-normal text-[#64748b]">
@@ -858,21 +916,71 @@ function MetaSidePanel({
           <div className="font-semibold text-[#172033]">{getBaseLabel(meta.tipo)}</div>
 
           <div className="mt-1 font-normal leading-relaxed text-[#64748b]">
-            Todas las metas se expresan en USD. Los importes en pesos se convertirán por tipo de
-cambio promedio mensual.          </div>
+            Esta edición actualiza el registro seleccionado. No crea una meta nueva.
+          </div>
         </div>
+
+        {isSucursal ? (
+          <div>
+            <FieldLabel>Sucursal</FieldLabel>
+            <NosturSelect
+              value={draft.sucursal_id}
+              onChange={(value) => setField("sucursal_id", value)}
+              options={sucursalOptions}
+              placeholder="Seleccionar sucursal"
+            />
+          </div>
+        ) : null}
+
+        {isVendedor ? (
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <FieldLabel>Alcance</FieldLabel>
+              <NosturSelect
+                value={draft.alcance}
+                onChange={(value) =>
+                  setDraft((current) => ({
+                    ...current,
+                    alcance: value as MetaDraft["alcance"],
+                    vendedor_id: ""
+                  }))
+                }
+                options={[
+                  { value: "TODOS", label: "Todos" },
+                  { value: "ESPECIFICO", label: "Vendedor" }
+                ]}
+              />
+            </div>
+
+            <div>
+              <FieldLabel>Vendedor</FieldLabel>
+              <NosturSelect
+                value={draft.vendedor_id}
+                onChange={(value) => setField("vendedor_id", value)}
+                options={vendedorOptions}
+                placeholder={draft.alcance === "TODOS" ? "Aplica a todos" : "Seleccionar"}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <FieldLabel>Desde</FieldLabel>
+            <FieldLabel>{isWeekly ? "Lunes de la semana" : "Desde"}</FieldLabel>
             <NosturDateInput
               value={draft.fecha_desde}
-              onChange={(value) => setField("fecha_desde", value)}
+              onChange={(value) => {
+                if (isWeekly) {
+                  handleWeeklyStart(value);
+                } else {
+                  setField("fecha_desde", value);
+                }
+              }}
             />
           </div>
 
           <div>
-            <FieldLabel>Hasta</FieldLabel>
+            <FieldLabel>{isWeekly ? "Domingo automático" : "Hasta"}</FieldLabel>
             <NosturDateInput
               value={draft.fecha_hasta}
               onChange={(value) => setField("fecha_hasta", value)}
@@ -925,7 +1033,7 @@ cambio promedio mensual.          </div>
           </div>
         )}
 
-                {isMonthlySeller ? (
+        {isMonthlySeller ? (
           <div className="grid grid-cols-3 gap-2 rounded-[14px] border border-orange-200 bg-orange-50 p-3">
             <div>
               <FieldLabel>% Piso</FieldLabel>
@@ -981,14 +1089,26 @@ cambio promedio mensual.          </div>
           {draft.activa ? "Meta activa" : "Meta inactiva"}
         </button>
 
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => onSave(draft)}
-          className="h-9 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
-        >
-          {saving ? "Guardando..." : "Guardar meta"}
-        </button>
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onSave(draft)}
+            className="h-9 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
+          >
+            {saving ? "Guardando..." : "Guardar cambios"}
+          </button>
+
+          <button
+            type="button"
+            disabled={saving}
+            onClick={onDeactivate}
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-50"
+            title="Desactivar meta"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
       </div>
     </aside>
   );
@@ -1008,6 +1128,8 @@ export function MetasPanel() {
 
   const loadMetas = useMetasStore((state) => state.loadMetas);
   const saveMeta = useMetasStore((state) => state.saveMeta);
+  const deactivateMeta = useMetasStore((state) => state.deactivateMeta);
+  const copyPreviousPeriod = useMetasStore((state) => state.copyPreviousPeriod);
   const setFilter = useMetasStore((state) => state.setFilter);
   const clearError = useMetasStore((state) => state.clearError);
   const selectMeta = useMetasStore((state) => state.selectMeta);
@@ -1056,6 +1178,20 @@ export function MetasPanel() {
     if (ok) showToast("Meta guardada correctamente.");
   }
 
+  async function handleDeactivate() {
+    if (!selectedResumen) return;
+
+    const ok = await deactivateMeta(selectedResumen.meta.id);
+
+    if (ok) showToast("Meta desactivada correctamente.");
+  }
+
+  async function handleCopyPrevious() {
+    const ok = await copyPreviousPeriod();
+
+    if (ok) showToast("Metas copiadas del mes anterior.");
+  }
+
   const sucursalOptions: SelectOption[] = [
     { value: "todos", label: "Todas" },
     ...catalogos.sucursales.map((item) => ({
@@ -1087,7 +1223,7 @@ export function MetasPanel() {
             </div>
 
             <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-              Objetivos en USD para vendedores, sucursales y Almundo.
+              Objetivos editables en USD para vendedores, sucursales y Almundo.
             </p>
           </div>
 
@@ -1104,11 +1240,21 @@ export function MetasPanel() {
 
             <button
               type="button"
+              onClick={handleCopyPrevious}
+              disabled={saving}
+              className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-white px-2.5 text-[11px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
+            >
+              <Copy size={13} />
+              Copiar mes anterior
+            </button>
+
+            <button
+              type="button"
               onClick={() => setCreateModalOpen(true)}
               className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-2.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#406b7d]"
             >
               <Plus size={13} />
-              Configurar metas
+              Nueva / actualizar
             </button>
           </div>
         </div>
@@ -1248,7 +1394,7 @@ export function MetasPanel() {
           <MetricCard label="Almundo" value={metrics.almundo} icon={Trophy} tone="amber" />
         </section>
 
-                <div className="relative z-0 grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="relative z-0 grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
           <section className="min-w-0 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
             <div className="mb-2.5 flex items-center justify-between gap-3">
               <div>
@@ -1333,7 +1479,7 @@ export function MetasPanel() {
                         {isWeekly || isAlmundo ? (
                           <>
                             <div className="text-[12px] font-semibold text-[#172033]">
-                              {formatMoneyAR(meta.meta_unica_usd || meta.meta_logrado_usd, "USD")}
+                              {formatMoneyAR(Number(meta.meta_unica_usd || meta.meta_logrado_usd || 0), "USD")}
                             </div>
 
                             <div className="text-[11px] font-normal text-[#64748b]">
@@ -1343,9 +1489,9 @@ export function MetasPanel() {
                         ) : (
                           <>
                             <div className="truncate text-[12px] font-semibold text-[#172033]">
-                              P {formatMoneyAR(meta.meta_piso_usd, "USD")} · M{" "}
-                              {formatMoneyAR(meta.meta_medio_usd, "USD")} · L{" "}
-                              {formatMoneyAR(meta.meta_logrado_usd, "USD")}
+                              P {formatMoneyAR(Number(meta.meta_piso_usd || 0), "USD")} · M{" "}
+                              {formatMoneyAR(Number(meta.meta_medio_usd || 0), "USD")} · L{" "}
+                              {formatMoneyAR(Number(meta.meta_logrado_usd || 0), "USD")}
                             </div>
 
                             <div className="text-[11px] font-normal text-[#64748b]">
@@ -1385,7 +1531,7 @@ export function MetasPanel() {
                             </div>
 
                             <div className="text-[11px] font-normal text-[#64748b]">
-                              Carritos únicamente
+                              Carritos
                             </div>
                           </>
                         ) : (
@@ -1395,7 +1541,7 @@ export function MetasPanel() {
                             </div>
 
                             <div className="text-[11px] font-normal text-[#64748b]">
-                              Utilidad total
+                              Importe a facturar
                             </div>
                           </>
                         )}
@@ -1425,7 +1571,12 @@ export function MetasPanel() {
             )}
           </section>
 
-          <MetaSidePanel selected={selectedResumen} saving={saving} onSave={handleSave} />
+          <MetaSidePanel
+            selected={selectedResumen}
+            saving={saving}
+            onSave={handleSave}
+            onDeactivate={handleDeactivate}
+          />
         </div>
       </main>
 
@@ -1436,7 +1587,7 @@ export function MetasPanel() {
           onClose={() => setCreateModalOpen(false)}
           onSaved={() => {
             setCreateModalOpen(false);
-            showToast("Meta creada correctamente.");
+            showToast("Meta guardada correctamente.");
           }}
         />
       ) : null}

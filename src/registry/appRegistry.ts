@@ -2,6 +2,14 @@
 
 export type AppCategory = "travel" | "work" | "ai" | "web" | "crm";
 
+export type AppAccess = "all" | "ia_admin" | "admin";
+
+export type AppProfileLike = {
+  rol?: string | null;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
+};
+
 export type RegisteredApp = {
   id: string;
   name: string;
@@ -10,6 +18,7 @@ export type RegisteredApp = {
   partition: string;
   color: string;
   category: AppCategory;
+  access?: AppAccess;
 };
 
 export const appRegistry: RegisteredApp[] = [
@@ -120,7 +129,8 @@ export const appRegistry: RegisteredApp[] = [
     homeUrl: "internal://cande",
     partition: "persist:internal",
     color: "#10b981",
-    category: "ai"
+    category: "ai",
+    access: "ia_admin"
   },
   {
     id: "nia",
@@ -129,7 +139,8 @@ export const appRegistry: RegisteredApp[] = [
     homeUrl: "internal://nia",
     partition: "persist:internal",
     color: "#10b981",
-    category: "ai"
+    category: "ai",
+    access: "ia_admin"
   },
   {
     id: "control-ia",
@@ -138,7 +149,8 @@ export const appRegistry: RegisteredApp[] = [
     homeUrl: "internal://control-ia",
     partition: "persist:internal",
     color: "#10b981",
-    category: "crm"
+    category: "crm",
+    access: "ia_admin"
   },
 
   {
@@ -324,7 +336,6 @@ export const appRegistry: RegisteredApp[] = [
     category: "crm"
   },
 
-
   {
     id: "importador-catalogos",
     name: "Importador Catálogos",
@@ -332,6 +343,17 @@ export const appRegistry: RegisteredApp[] = [
     homeUrl: "internal://importador-catalogos",
     partition: "persist:internal",
     color: "#64748b",
+    category: "crm",
+    access: "admin"
+  },
+
+  {
+    id: "mi-perfil",
+    name: "Mi perfil",
+    url: "internal://mi-perfil",
+    homeUrl: "internal://mi-perfil",
+    partition: "persist:internal",
+    color: "#172033",
     category: "crm"
   },
 
@@ -345,6 +367,53 @@ export const appRegistry: RegisteredApp[] = [
     category: "crm"
   }
 ];
+
+export function canAccessIaAdmin(profile?: AppProfileLike | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
+  return Boolean(
+    profile?.is_super_admin ||
+      profile?.is_support_user ||
+      role === "gerencia" ||
+      role === "admin_general" ||
+      role === "soporte"
+  );
+}
+
+export function canAccessAdminApp(profile?: AppProfileLike | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
+  return Boolean(
+    profile?.is_super_admin ||
+      profile?.is_support_user ||
+      role === "gerencia" ||
+      role === "admin_general" ||
+      role === "soporte"
+  );
+}
+
+export function canAccessApp(
+  app: RegisteredApp,
+  profile?: AppProfileLike | null
+): boolean {
+  if (!app.access || app.access === "all") return true;
+
+  if (app.access === "ia_admin") {
+    return canAccessIaAdmin(profile);
+  }
+
+  if (app.access === "admin") {
+    return canAccessAdminApp(profile);
+  }
+
+  return true;
+}
+
+export function getVisibleAppsForProfile(
+  profile?: AppProfileLike | null
+): RegisteredApp[] {
+  return appRegistry.filter((app) => canAccessApp(app, profile));
+}
 
 export function getAppById(appId: string): RegisteredApp {
   if (appId === "presupuestos") {

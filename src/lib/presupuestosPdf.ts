@@ -7,19 +7,19 @@ import type {
   PresupuestoV2,
   PresupuestoVuelo
 } from "../store/presupuestosV2Store";
-import { formatMoneyAR } from "./formatters";
+import { formatMoneyAR as formatMoneyARBase } from "./formatters";
 
 /* =========================================================
    NOSSIX / NOSTUR — PRESUPUESTOS PDF / PREVIEW
-   Plantilla comercial ALMUNDO
 
-   Ajustes incluidos:
-   - Header más compacto.
-   - Datos del viaje en card compacta.
-   - Hotel sin mostrar web ni Maps.
-   - Hotel con hasta 4 imágenes en una fila.
-   - Precio destacado en una sola fila visual.
-   - Footer más prolijo y compacto.
+   Enfoque:
+   - Presupuesto como propuesta comercial de turismo.
+   - PDF armado por opciones: Opción 1 = vuelo + hotel + servicios.
+   - Luego resumen rápido de opciones.
+   - Luego precios, pagos, promos e incluye/no incluye por opción.
+   - Nunca divide precio total / pasajeros salvo que metadata lo indique.
+   - Cuotas sin tarjeta/banco = pagos a cuenta.
+   - Compatible con presupuestos manuales y generados por IA.
 ========================================================= */
 
 export type PresupuestoPdfData = {
@@ -30,7 +30,14 @@ export type PresupuestoPdfData = {
   combinaciones: PresupuestoCombinacion[];
 };
 
+
+
 type SafeRecord = Record<string, unknown>;
+
+type PresupuestoDestinoPdf = {
+  pais: string;
+  destino: string;
+};
 
 type FlightLeg = {
   tipo: "IDA" | "VUELTA" | "";
@@ -64,11 +71,71 @@ type FlightDirectionRow = {
   escala: string;
 };
 
-const ALMUNDO_LOGO_URL = "brand/almundo-logo.png";
+type FormaPagoFlexible = {
+  id?: string;
+  tipo?: string;
+  titulo?: string;
+  descripcion?: string;
+  moneda?: string;
+  monto?: number | null;
+  porcentaje?: number | null;
+  cuotas?: number | null;
+  valor_cuota?: number | null;
+  total_financiado?: number | null;
+  tarjeta?: string | null;
+  banco?: string | null;
+  con_interes?: boolean | null;
+  tasa_interes?: number | null;
+  fecha_vencimiento?: string | null;
+  visible_en_pdf?: boolean;
+};
+
+type PromoFlexible = {
+  id?: string;
+  nombre?: string;
+  descripcion?: string;
+  descuento_monto?: number | null;
+  descuento_porcentaje?: number | null;
+  monto?: number | null;
+  porcentaje?: number | null;
+  moneda?: string | null;
+  vigencia_hasta?: string | null;
+  visible_en_pdf?: boolean;
+};
+
+type TarifaPasajeroFlexible = {
+  id?: string;
+  tipo?: string;
+  descripcion?: string;
+  nombre?: string;
+  cantidad?: number | null;
+  precio_unitario?: number | null;
+  subtotal?: number | null;
+  moneda?: string | null;
+  notas?: string | null;
+  visible_en_pdf?: boolean;
+};
+
+const ALMUNDO_LOGO_URL = "/brand/almundo-logo.png";
 
 /* =========================================================
    HELPERS GENERALES
 ========================================================= */
+
+function formatMoneyAR(value: number | null | undefined, moneda?: string | null): string {
+  const amount = Number(value || 0);
+
+  if (!Number.isFinite(amount)) {
+    return formatMoneyARBase(0, moneda || "USD");
+  }
+
+  const formatted = new Intl.NumberFormat("es-AR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  }).format(Math.round(amount));
+
+  return `${formatted} ${moneda || "USD"}`;
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -93,6 +160,15 @@ function cleanLine(value: unknown): string {
     .trim();
 }
 
+function cleanBlock(value: unknown): string {
+  return String(value ?? "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function normalizeText(value: unknown): string {
   return String(value ?? "")
     .toLowerCase()
@@ -104,8 +180,15 @@ function normalizeText(value: unknown): string {
 }
 
 function getMetadata(item: { metadata?: SafeRecord | null } | null | undefined): SafeRecord {
-  if (!item?.metadata || typeof item.metadata !== "object" || Array.isArray(item.metadata)) return {};
+  if (!item?.metadata || typeof item.metadata !== "object" || Array.isArray(item.metadata)) {
+    return {};
+  }
+
   return item.metadata;
+}
+
+function getPresupuestoExtra(presupuesto: PresupuestoV2): SafeRecord {
+  return presupuesto as unknown as SafeRecord;
 }
 
 function getNestedRecord(value: unknown): SafeRecord {
@@ -116,6 +199,14 @@ function getNestedRecord(value: unknown): SafeRecord {
 function getStringFromAny(...values: unknown[]): string {
   for (const value of values) {
     if (hasText(value)) return cleanLine(value);
+  }
+
+  return "";
+}
+
+function getBlockFromAny(...values: unknown[]): string {
+  for (const value of values) {
+    if (hasText(value)) return cleanBlock(value);
   }
 
   return "";
@@ -193,6 +284,17 @@ function formatDateTime(value?: string | null): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatPercent(value: unknown): string {
+  const parsed = getNumberFromAny(value);
+
+  if (!parsed) return "";
+
+  return `${parsed.toLocaleString("es-AR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  })}%`;
 }
 
 function getDisplayName(presupuesto: PresupuestoV2): string {
@@ -298,16 +400,7 @@ function renderBadge(text: string): string {
   return `<span class="badge">${escapeHtml(text)}</span>`;
 }
 
-function renderInfoItem(label: string, value: unknown): string {
-  if (!hasText(value)) return "";
 
-  return `
-    <div class="info-item">
-      <div class="info-label">${escapeHtml(label)}</div>
-      <div class="info-value">${escapeHtml(value)}</div>
-    </div>
-  `;
-}
 
 function renderSection(title: string, content: string, className = ""): string {
   if (!content.trim()) return "";
@@ -323,11 +416,50 @@ function renderSection(title: string, content: string, className = ""): string {
   `;
 }
 
+function getStringArrayFromMetadata(metadata: SafeRecord, ...keys: string[]): string[] {
+  const result: string[] = [];
+
+  for (const key of keys) {
+    const value = metadata[key];
+
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (hasText(item)) result.push(cleanLine(item));
+      });
+    }
+
+    if (hasText(value)) {
+      String(value)
+        .split(/[,\n;]/)
+        .map(cleanLine)
+        .filter(Boolean)
+        .forEach((item) => result.push(item));
+    }
+  }
+
+  return Array.from(new Set(result));
+}
+
+function idsMatch(itemId: string | null | undefined, ids: string[]): boolean {
+  if (!itemId || !ids.length) return false;
+  return ids.includes(itemId);
+}
+
+function isAConfirmar(value: unknown): boolean {
+  const normalized = normalizeText(value);
+
+  return (
+    normalized.includes("aerolinea a confirmar") ||
+    normalized.includes("aerolínea a confirmar") ||
+    normalized === "a confirmar"
+  );
+}
+
 /* =========================================================
    VUELOS
 ========================================================= */
 
-function extractAirlineFromText(value: unknown, fallback = "Aerolínea a confirmar"): string {
+function extractAirlineFromText(value: unknown, fallback = ""): string {
   const raw = String(value ?? "");
   const known = raw.match(
     /(Aerol[ií]neas Argentinas|LATAM|GOL|JetSMART|Jet Smart|Copa Airlines|Copa|Avianca|Iberia|Air Europa|American Airlines|Delta|United|Sky Airline|Flybondi|Arajet)/i
@@ -341,7 +473,9 @@ function extractAirlineFromText(value: unknown, fallback = "Aerolínea a confirm
 }
 
 function extractAirline(vuelo: PresupuestoVuelo): string {
-  if (hasText(vuelo.aerolinea)) return cleanLine(vuelo.aerolinea);
+  if (hasText(vuelo.aerolinea) && !isAConfirmar(vuelo.aerolinea)) {
+    return cleanLine(vuelo.aerolinea);
+  }
 
   const metadata = getMetadata(vuelo);
   const parsed = getNestedRecord(metadata.parsed);
@@ -350,20 +484,25 @@ function extractAirline(vuelo: PresupuestoVuelo): string {
     metadata.aerolinea,
     metadata.airline,
     parsed.aerolinea,
-    parsed.airline
+    parsed.airline,
+    parsed.compania,
+    parsed.compania_aerea
   );
 
-  if (metadataAirline) return metadataAirline;
+  if (metadataAirline && !isAConfirmar(metadataAirline)) return metadataAirline;
 
-  return extractAirlineFromText(
+  const fromText = extractAirlineFromText(
     [
       vuelo.raw_text,
       vuelo.ida_detalle,
       vuelo.vuelta_detalle,
       parsed.texto_libre,
       parsed.raw_text
-    ].join("\n")
+    ].join("\n"),
+    ""
   );
+
+  return isAConfirmar(fromText) ? "" : fromText;
 }
 
 function extractFlightNumbersFromVuelo(vuelo: PresupuestoVuelo): string[] {
@@ -399,2085 +538,3912 @@ function extractFlightNumbersFromVuelo(vuelo: PresupuestoVuelo): string[] {
   return Array.from(new Set([...fromTramos, ...fromText].map((item) => cleanLine(item).replace(/\s+/g, ""))));
 }
 
-function normalizeDirection(value: unknown): "IDA" | "VUELTA" | "" {
-  const normalized = normalizeText(value);
+function getPlaceCode(value: unknown): string {
+  if (!value) return "";
 
-  if (
-    normalized.includes("vuelta") ||
-    normalized.includes("regreso") ||
-    normalized.includes("return") ||
-    normalized.includes("inbound")
-  ) {
-    return "VUELTA";
+  if (typeof value === "string") {
+    const match = value.match(/\b[A-Z]{3}\b/);
+    return match?.[0] || "";
   }
 
-  if (normalized.includes("ida") || normalized.includes("outbound")) {
-    return "IDA";
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const record = value as SafeRecord;
+
+    return getStringFromAny(
+      record.codigo,
+      record.code,
+      record.iata,
+      record.iata_code,
+      record.airport_code
+    );
   }
 
   return "";
 }
 
-function parseFlightLegsFromMetadata(vuelo: PresupuestoVuelo): FlightLeg[] {
+function getPlaceCity(value: unknown): string {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    return cleanLine(value.replace(/\(([A-Z]{3})\)/g, ""));
+  }
+
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const record = value as SafeRecord;
+
+    return getStringFromAny(
+      record.ciudad,
+      record.city,
+      record.nombre,
+      record.name,
+      record.aeropuerto,
+      record.airport
+    );
+  }
+
+  return "";
+}
+
+function formatFlightPlace(code: string, city: string): string {
+  const cleanCode = cleanLine(code);
+  const cleanCity = cleanLine(city);
+
+  if (cleanCity && cleanCode) return `${cleanCity} (${cleanCode})`;
+  if (cleanCode) return cleanCode;
+  if (cleanCity) return cleanCity;
+  return "—";
+}
+
+function parseTimeToMinutes(value: string): number | null {
+  const match = cleanLine(value).match(/^(\d{1,2}):(\d{2})$/);
+
+  if (!match) return null;
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  return hours * 60 + minutes;
+}
+
+function formatMinutesAsDuration(totalMinutes: number): string {
+  const normalized = Math.max(0, totalMinutes);
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+
+  if (hours && minutes) return `${hours}h ${minutes}m`;
+  if (hours) return `${hours}h`;
+  return `${minutes}m`;
+}
+
+function getConnectionDuration(current: FlightLeg, next: FlightLeg): string {
+  const arrival = parseTimeToMinutes(current.llegadaHora);
+  const departure = parseTimeToMinutes(next.salidaHora);
+
+  if (arrival === null || departure === null) return "";
+
+  let diff = departure - arrival;
+
+  if (diff < 0) diff += 24 * 60;
+
+  return formatMinutesAsDuration(diff);
+}
+
+function getFlightLegRoute(leg: FlightLeg): string {
+  return `${formatFlightPlace(leg.salidaCodigo, leg.salidaCiudad)} → ${formatFlightPlace(
+    leg.llegadaCodigo,
+    leg.llegadaCiudad
+  )}`;
+}
+
+function parseFlightLegsFromStructured(vuelo: PresupuestoVuelo): FlightLeg[] {
   const metadata = getMetadata(vuelo);
   const parsed = getNestedRecord(metadata.parsed);
-  const tramos = getArrayFromAny(metadata.tramos, parsed.tramos, metadata.legs, metadata.segmentos);
-  const airline = extractAirline(vuelo);
-  const fallbackTipo = normalizeDirection(
-    getStringFromAny(metadata.tipo_tramo, metadata.tramo_tipo, parsed.tipo_tramo, parsed.tramo_tipo)
+  const rawTramos = getArrayFromAny(
+    metadata.tramos,
+    parsed.tramos,
+    metadata.legs,
+    parsed.legs,
+    metadata.segmentos,
+    parsed.segmentos
   );
 
-  return tramos
-    .map((item): FlightLeg | null => {
+  const airline = extractAirline(vuelo);
+
+  return rawTramos
+    .map((item, index): FlightLeg | null => {
       const tramo = getNestedRecord(item);
-      const origen = getNestedRecord(tramo.origen);
-      const destino = getNestedRecord(tramo.destino);
-      const escalaPosterior = getNestedRecord(tramo.escala_posterior);
 
-      const tipo =
-        normalizeDirection(
-          getStringFromAny(
-            tramo.tipo,
-            tramo.tramo_tipo,
-            tramo.direction,
-            tramo.direccion
-          )
-        ) || fallbackTipo;
-
-      const salidaHora = getStringFromAny(
-        tramo.salida_hora,
-        tramo.hora_salida,
-        tramo.departure_time,
-        tramo.departureTime
-      );
-
-      const llegadaHora = getStringFromAny(
-        tramo.llegada_hora,
-        tramo.hora_llegada,
-        tramo.arrival_time,
-        tramo.arrivalTime
-      );
+      const salidaSource = tramo.salida || tramo.origen || tramo.from || tramo.origin;
+      const llegadaSource = tramo.llegada || tramo.destino || tramo.to || tramo.destination;
 
       const salidaCodigo = getStringFromAny(
         tramo.salida_codigo,
         tramo.origen_codigo,
-        tramo.origen_iata,
-        tramo.departure_code,
-        tramo.departureCode,
-        origen.iata
+        tramo.origin_code,
+        tramo.from_code,
+        getPlaceCode(salidaSource)
       );
 
       const llegadaCodigo = getStringFromAny(
         tramo.llegada_codigo,
         tramo.destino_codigo,
-        tramo.destino_iata,
-        tramo.arrival_code,
-        tramo.arrivalCode,
-        destino.iata
+        tramo.destination_code,
+        tramo.to_code,
+        getPlaceCode(llegadaSource)
       );
 
-      if (!salidaHora && !llegadaHora && !salidaCodigo && !llegadaCodigo) return null;
+      const salidaCiudad = getStringFromAny(
+        tramo.salida_ciudad,
+        tramo.origen_ciudad,
+        tramo.origin_city,
+        tramo.from_city,
+        getPlaceCity(salidaSource)
+      );
 
-      const escalaDespues =
-        Object.keys(escalaPosterior).length > 0
-          ? [
-              escalaPosterior.ciudad,
-              escalaPosterior.iata ? `(${escalaPosterior.iata})` : "",
-              escalaPosterior.espera
-            ]
-              .filter(Boolean)
-              .join(" ")
-          : getStringFromAny(
-              tramo.escala_despues,
-              tramo.tiempo_escala,
-              tramo.layover_duration,
-              tramo.connection_time
-            );
+      const llegadaCiudad = getStringFromAny(
+        tramo.llegada_ciudad,
+        tramo.destino_ciudad,
+        tramo.destination_city,
+        tramo.to_city,
+        getPlaceCity(llegadaSource)
+      );
+
+      const numero = getStringFromAny(tramo.numero_vuelo, tramo.flight_number, tramo.numero);
+
+      if (!salidaCodigo && !llegadaCodigo && !numero && !salidaCiudad && !llegadaCiudad) {
+        return null;
+      }
 
       return {
-        tipo,
+        tipo: index === 0 ? "IDA" : "",
         aerolinea: getStringFromAny(tramo.aerolinea, tramo.airline, airline),
-        numero: getStringFromAny(tramo.numero_vuelo, tramo.flight_number, tramo.numero),
+        numero,
         avion: getStringFromAny(tramo.avion, tramo.aircraft),
-        clase: getStringFromAny(tramo.clase, tramo.cabin),
-        fecha: formatDate(
-          getStringFromAny(
-            tramo.fecha_salida,
-            tramo.salida_fecha,
-            tramo.departure_date,
-            tramo.fecha
-          )
-        ),
-        salidaHora,
+        clase: getStringFromAny(tramo.clase, tramo.cabin, tramo.tarifa_familia, vuelo.tarifa_familia),
+        fecha: getStringFromAny(tramo.fecha, tramo.date, vuelo.ida_fecha, vuelo.vuelta_fecha),
+        salidaHora: getStringFromAny(tramo.salida_hora, tramo.hora_salida, tramo.departure_time),
         salidaCodigo,
-        salidaCiudad: getStringFromAny(
-          tramo.salida_ciudad,
-          tramo.origen_ciudad,
-          tramo.origen_nombre,
-          tramo.departure_city,
-          origen.ciudad
-        ),
+        salidaCiudad,
         salidaAeropuerto: getStringFromAny(
           tramo.salida_aeropuerto,
           tramo.origen_aeropuerto,
-          origen.aeropuerto
+          tramo.origin_airport
         ),
         duracion: getStringFromAny(tramo.duracion, tramo.duration),
-        llegadaHora,
+        llegadaHora: getStringFromAny(tramo.llegada_hora, tramo.hora_llegada, tramo.arrival_time),
         llegadaCodigo,
-        llegadaCiudad: getStringFromAny(
-          tramo.llegada_ciudad,
-          tramo.destino_ciudad,
-          tramo.destino_nombre,
-          tramo.arrival_city,
-          destino.ciudad
-        ),
+        llegadaCiudad,
         llegadaAeropuerto: getStringFromAny(
           tramo.llegada_aeropuerto,
           tramo.destino_aeropuerto,
-          destino.aeropuerto
+          tramo.destination_airport
         ),
-        escalaDespues
+        escalaDespues: getStringFromAny(tramo.escala_despues, tramo.escala, tramo.stopover)
       };
     })
     .filter((item): item is FlightLeg => Boolean(item));
 }
 
-function getDirectionFromVuelo(vuelo: PresupuestoVuelo): "IDA" | "VUELTA" | "" {
-  const metadata = getMetadata(vuelo);
-  const parsed = getNestedRecord(metadata.parsed);
+function parseFlightLegsFromLines(vuelo: PresupuestoVuelo): FlightLeg[] {
+  const raw = [
+    vuelo.raw_text,
+    vuelo.ida_detalle,
+    vuelo.vuelta_detalle,
+    vuelo.ruta_resumen,
+    vuelo.condiciones
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  const tipoTramo = normalizeDirection(
-    getStringFromAny(
-      metadata.tipo_tramo,
-      metadata.tramo_tipo,
-      parsed.tipo_tramo,
-      parsed.tramo_tipo
-    )
-  );
-
-  if (tipoTramo) return tipoTramo;
-
-  const title = normalizeText(vuelo.titulo);
-
-  if (title.includes("vuelta") || title.includes("regreso")) return "VUELTA";
-  if (title.includes("ida")) return "IDA";
-
-  const lightText = normalizeText(
-    [
-      vuelo.ida_detalle,
-      vuelo.vuelta_detalle,
-      parsed.titulo,
-      parsed.nombre
-    ].join(" ")
-  );
-
-  if (lightText.includes("vuelo vuelta") || lightText.includes("regreso")) return "VUELTA";
-  if (lightText.includes("vuelo ida")) return "IDA";
-
-  return "";
-}
-
-function compactRoute(value: string): string {
-  return cleanLine(value)
-    .replace(/\s*-\s*/g, " - ")
-    .replace(/\s*→\s*/g, " → ");
-}
-
-function buildRowsFromLegs(legs: FlightLeg[], direction: "IDA" | "VUELTA" | ""): FlightDirectionRow[] {
-  return legs.map((leg, index) => {
-    const escala =
-      leg.escalaDespues ||
-      (index < legs.length - 1
-        ? `${leg.llegadaCiudad || leg.llegadaCodigo || "Escala"} · tiempo a confirmar`
-        : "Directo / tramo final");
-
-    return {
-      label: direction === "VUELTA" || leg.tipo === "VUELTA" ? "Vuelta" : "Ida",
-      fecha: leg.fecha || "—",
-      aerolinea: leg.aerolinea || "Aerolínea",
-      numero: leg.numero || "—",
-      origen: compactRoute(
-        [leg.salidaCiudad, leg.salidaCodigo ? `(${leg.salidaCodigo})` : ""].filter(Boolean).join(" ")
-      ),
-      destino: compactRoute(
-        [leg.llegadaCiudad, leg.llegadaCodigo ? `(${leg.llegadaCodigo})` : ""].filter(Boolean).join(" ")
-      ),
-      salida: leg.salidaHora || "—",
-      llegada: leg.llegadaHora || "—",
-      duracion: leg.duracion || "A confirmar",
-      escala
-    };
-  });
-}
-
-function getParsedRouteLabel(value: string): string {
-  const clean = cleanLine(value);
-
-  if (!clean) return "";
-
-  const airportMatch = clean.match(/(.+?)\s+\(([A-Z]{3})\)/);
-
-  if (airportMatch) {
-    return `${cleanLine(airportMatch[1])} (${airportMatch[2]})`;
-  }
-
-  return clean;
-}
-
-function parseCommercialFlightSummary(vuelo: PresupuestoVuelo, direction: "IDA" | "VUELTA" | ""): FlightDirectionRow {
-  const metadata = getMetadata(vuelo);
-  const parsed = getNestedRecord(metadata.parsed);
+  if (!raw.trim()) return [];
 
   const airline = extractAirline(vuelo);
   const flightNumbers = extractFlightNumbersFromVuelo(vuelo);
 
-  const isVuelta = direction === "VUELTA";
+  const airportPattern =
+    /([A-ZÁÉÍÓÚÑa-záéíóúñüÜ\s.]+?)\s*\(([A-Z]{3})\).*?(\d{1,2}:\d{2}).*?([A-ZÁÉÍÓÚÑa-záéíóúñüÜ\s.]+?)\s*\(([A-Z]{3})\).*?(\d{1,2}:\d{2})/g;
 
-  const directOrigen = isVuelta
-    ? getStringFromAny(vuelo.vuelta_origen, parsed.vuelta_origen, vuelo.ida_origen, parsed.ida_origen)
-    : getStringFromAny(vuelo.ida_origen, parsed.ida_origen);
+  const matches = Array.from(raw.matchAll(airportPattern));
 
-  const directDestino = isVuelta
-    ? getStringFromAny(vuelo.vuelta_destino, parsed.vuelta_destino, vuelo.ida_destino, parsed.ida_destino)
-    : getStringFromAny(vuelo.ida_destino, parsed.ida_destino);
-
-  const directFecha = isVuelta
-    ? getStringFromAny(vuelo.vuelta_fecha, parsed.vuelta_fecha, vuelo.ida_fecha, parsed.ida_fecha)
-    : getStringFromAny(vuelo.ida_fecha, parsed.ida_fecha);
-
-  const directSalida = isVuelta
-    ? getStringFromAny(
-        vuelo.vuelta_hora_salida,
-        parsed.vuelta_hora_salida,
-        vuelo.ida_hora_salida,
-        parsed.ida_hora_salida
-      )
-    : getStringFromAny(vuelo.ida_hora_salida, parsed.ida_hora_salida);
-
-  const directLlegada = isVuelta
-    ? getStringFromAny(
-        vuelo.vuelta_hora_llegada,
-        parsed.vuelta_hora_llegada,
-        vuelo.ida_hora_llegada,
-        parsed.ida_hora_llegada
-      )
-    : getStringFromAny(vuelo.ida_hora_llegada, parsed.ida_hora_llegada);
-
-  const directEscala = isVuelta
-    ? getStringFromAny(vuelo.vuelta_escalas, parsed.vuelta_escalas, vuelo.ida_escalas, parsed.ida_escalas)
-    : getStringFromAny(vuelo.ida_escalas, parsed.ida_escalas);
-
-  const detalle = cleanLine(
-    [
-      isVuelta ? vuelo.vuelta_detalle : vuelo.ida_detalle,
-      isVuelta ? parsed.vuelta_detalle : parsed.ida_detalle,
-      vuelo.ruta_resumen,
-      parsed.ruta_resumen,
-      parsed.texto_libre,
-      parsed.raw_text,
-      vuelo.raw_text
-    ].join(" ")
-  );
-
-  const salidaLlegadaMatch = detalle.match(
-    /Salida\s+(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2}),?\s*llegada\s+(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2}(?:\+\d)?)/i
-  );
-
-  const duracionMatch = detalle.match(/Duraci[oó]n\s+total\s+([^.]+)/i);
-  const escalaMatch = detalle.match(/con\s+escala\s+en\s+(.+?)(?:\.|,|$)/i);
-
-  const routeMatch = detalle.match(
-    /Vuelo\s+(.+?)\s+\(([A-Z]{3})\)\s+a\s+(.+?)\s+\(([A-Z]{3})\)/i
-  );
-
-  const origen =
-    getParsedRouteLabel(directOrigen) ||
-    (routeMatch ? `${cleanLine(routeMatch[1])} (${cleanLine(routeMatch[2])})` : "Ruta a confirmar");
-
-  const destino =
-    getParsedRouteLabel(directDestino) ||
-    (routeMatch ? `${cleanLine(routeMatch[3])} (${cleanLine(routeMatch[4])})` : "Ruta a confirmar");
-
-  return {
-    label: isVuelta ? "Vuelta" : "Ida",
-    fecha: salidaLlegadaMatch ? formatDate(salidaLlegadaMatch[1]) : formatDate(directFecha),
+  return matches.map((match, index) => ({
+    tipo: index === 0 ? "IDA" : "",
     aerolinea: airline,
-    numero: flightNumbers.join(" / ") || "—",
-    origen,
-    destino,
-    salida: salidaLlegadaMatch ? salidaLlegadaMatch[2] : directSalida || "—",
-    llegada: salidaLlegadaMatch ? salidaLlegadaMatch[4] : directLlegada || "—",
-    duracion: cleanLine(duracionMatch?.[1] || "A confirmar"),
-    escala: directEscala || (escalaMatch ? cleanLine(escalaMatch[1]) : "Directo / a confirmar")
-  };
+    numero: flightNumbers[index] || flightNumbers[0] || "",
+    avion: "",
+    clase: vuelo.tarifa_familia || "",
+    fecha: index === 0 ? vuelo.ida_fecha || "" : vuelo.vuelta_fecha || "",
+    salidaHora: cleanLine(match[3]),
+    salidaCodigo: cleanLine(match[2]),
+    salidaCiudad: cleanLine(match[1]),
+    salidaAeropuerto: "",
+    duracion: "",
+    llegadaHora: cleanLine(match[6]),
+    llegadaCodigo: cleanLine(match[5]),
+    llegadaCiudad: cleanLine(match[4]),
+    llegadaAeropuerto: "",
+    escalaDespues: ""
+  }));
 }
 
-function getFlightRows(vuelo: PresupuestoVuelo): FlightDirectionRow[] {
-  const direction = getDirectionFromVuelo(vuelo);
-  const metadataLegs = parseFlightLegsFromMetadata(vuelo);
+function buildFlightRowsFromVuelo(vuelo: PresupuestoVuelo): FlightDirectionRow[] {
+  const metadata = getMetadata(vuelo);
+  const parsed = getNestedRecord(metadata.parsed);
+  const airline = extractAirline(vuelo);
+  const numbers = extractFlightNumbersFromVuelo(vuelo);
 
-  const typedMetadataLegs =
-    direction === "VUELTA"
-      ? metadataLegs.filter((leg) => leg.tipo === "VUELTA" || leg.tipo === "")
-      : direction === "IDA"
-        ? metadataLegs.filter((leg) => leg.tipo === "IDA" || leg.tipo === "")
-        : metadataLegs;
+  const rows: FlightDirectionRow[] = [];
 
-  if (typedMetadataLegs.length) {
-    return buildRowsFromLegs(typedMetadataLegs, direction);
+  const idaOrigen = getStringFromAny(vuelo.ida_origen, parsed.ida_origen, parsed.origen);
+  const idaDestino = getStringFromAny(vuelo.ida_destino, parsed.ida_destino, parsed.destino);
+  const vueltaOrigen = getStringFromAny(vuelo.vuelta_origen, parsed.vuelta_origen);
+  const vueltaDestino = getStringFromAny(vuelo.vuelta_destino, parsed.vuelta_destino);
+
+  if (idaOrigen || idaDestino || vuelo.ida_fecha || vuelo.ida_detalle) {
+    rows.push({
+      label: "IDA",
+      fecha: getStringFromAny(vuelo.ida_fecha, parsed.ida_fecha, parsed.fecha_salida),
+      aerolinea: airline,
+      numero: numbers[0] || "",
+      origen: idaOrigen,
+      destino: idaDestino,
+      salida: getStringFromAny(vuelo.ida_hora_salida, parsed.ida_hora_salida, parsed.hora_salida),
+      llegada: getStringFromAny(vuelo.ida_hora_llegada, parsed.ida_hora_llegada, parsed.hora_llegada),
+      duracion: getStringFromAny(parsed.ida_duracion, parsed.duracion),
+      escala: getStringFromAny(vuelo.ida_escalas, parsed.ida_escalas, parsed.escalas)
+    });
   }
 
-  return [parseCommercialFlightSummary(vuelo, direction)];
+  if (vueltaOrigen || vueltaDestino || vuelo.vuelta_fecha || vuelo.vuelta_detalle) {
+    rows.push({
+      label: "VUELTA",
+      fecha: getStringFromAny(vuelo.vuelta_fecha, parsed.vuelta_fecha, parsed.fecha_regreso),
+      aerolinea: airline,
+      numero: numbers[1] || numbers[0] || "",
+      origen: vueltaOrigen,
+      destino: vueltaDestino,
+      salida: getStringFromAny(vuelo.vuelta_hora_salida, parsed.vuelta_hora_salida),
+      llegada: getStringFromAny(vuelo.vuelta_hora_llegada, parsed.vuelta_hora_llegada),
+      duracion: getStringFromAny(parsed.vuelta_duracion),
+      escala: getStringFromAny(vuelo.vuelta_escalas, parsed.vuelta_escalas)
+    });
+  }
+
+  return rows;
 }
 
-function extractBaggage(vuelo: PresupuestoVuelo): string {
+function renderFlightLegsTable(legs: FlightLeg[]): string {
+  if (!legs.length) return "";
+
+  const rows = legs
+    .map((leg, index) => {
+      const nextLeg = legs[index + 1];
+      const salida = formatFlightPlace(leg.salidaCodigo, leg.salidaCiudad);
+      const llegada = formatFlightPlace(leg.llegadaCodigo, leg.llegadaCiudad);
+      const tramoLabel = `TRAMO ${index + 1}`;
+
+      const row = `
+        <tr>
+          <td>
+            <strong>${escapeHtml(tramoLabel)}</strong>
+            ${leg.fecha ? `<small>${escapeHtml(formatDate(leg.fecha))}</small>` : ""}
+          </td>
+
+          <td>
+            <strong>${escapeHtml(leg.salidaHora || "—")}</strong>
+            <small>${escapeHtml(salida)}</small>
+          </td>
+
+          <td class="flight-path-cell">
+            <span>${escapeHtml(leg.duracion || "Vuelo")}</span>
+            <div class="flight-path"></div>
+            <small>${escapeHtml(getFlightLegRoute(leg))}</small>
+          </td>
+
+          <td>
+            <strong>${escapeHtml(leg.llegadaHora || "—")}</strong>
+            <small>${escapeHtml(llegada)}</small>
+          </td>
+
+          <td>
+            <strong>${escapeHtml(leg.aerolinea || "Aéreo")}</strong>
+            <small>${escapeHtml([leg.numero, leg.clase].filter(Boolean).join(" · ") || "Según detalle")}</small>
+          </td>
+        </tr>
+      `;
+
+      if (!nextLeg) return row;
+
+      const connectionPlace = formatFlightPlace(leg.llegadaCodigo, leg.llegadaCiudad);
+      const connectionDuration = getConnectionDuration(leg, nextLeg);
+
+      return `
+        ${row}
+        <tr class="connection-row">
+          <td colspan="5">
+            ESCALA EN ${escapeHtml(connectionPlace.toUpperCase())}${
+              connectionDuration ? ` · ${escapeHtml(connectionDuration)}` : ""
+            }
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="flight-table-wrap">
+      <table class="flight-table">
+        <thead>
+          <tr>
+            <th>Tramo</th>
+            <th>Salida</th>
+            <th>Duración</th>
+            <th>Llegada</th>
+            <th>Vuelo</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderFlightRowsTable(rows: FlightDirectionRow[]): string {
+  const validRows = rows.filter((row) => {
+    const hasOrigin = hasText(row.origen);
+    const hasDestination = hasText(row.destino);
+    const hasTime = hasText(row.salida) || hasText(row.llegada);
+
+    return hasOrigin || hasDestination || hasTime;
+  });
+
+  if (!validRows.length) return "";
+
+  const htmlRows = validRows
+    .map(
+      (row, index) => `
+        <tr>
+          <td>
+            <strong>${escapeHtml(`TRAMO ${index + 1}`)}</strong>
+            <small>${escapeHtml(formatDate(row.fecha))}</small>
+          </td>
+
+          <td>
+            <strong>${escapeHtml(row.salida || "—")}</strong>
+            <small>${escapeHtml(row.origen || "Origen")}</small>
+          </td>
+
+          <td class="flight-path-cell">
+            <span>${escapeHtml(row.duracion || "Vuelo")}</span>
+            <div class="flight-path"></div>
+            <small>${escapeHtml([row.origen, row.destino].filter(Boolean).join(" → ") || "Según detalle")}</small>
+          </td>
+
+          <td>
+            <strong>${escapeHtml(row.llegada || "—")}</strong>
+            <small>${escapeHtml(row.destino || "Destino")}</small>
+          </td>
+
+          <td>
+            <strong>${escapeHtml(row.aerolinea || "Aéreo")}</strong>
+            <small>${escapeHtml([row.numero, row.escala].filter(Boolean).join(" · ") || "Según detalle")}</small>
+          </td>
+        </tr>
+      `
+    )
+    .join("");
+
+  return `
+    <div class="flight-table-wrap">
+      <table class="flight-table">
+        <thead>
+          <tr>
+            <th>Tramo</th>
+            <th>Salida</th>
+            <th>Duración</th>
+            <th>Llegada</th>
+            <th>Vuelo</th>
+          </tr>
+        </thead>
+        <tbody>${htmlRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderVueloTextoComplementario(vuelo: PresupuestoVuelo): string {
   const metadata = getMetadata(vuelo);
   const parsed = getNestedRecord(metadata.parsed);
 
-  const text = [
-    vuelo.equipaje,
-    parsed.equipaje,
-    vuelo.raw_text,
+  const explicit = getBlockFromAny(
+    metadata.texto_complementario,
+    metadata.texto_visible_pdf,
+    metadata.detalle_visible_pdf,
+    parsed.texto_complementario,
+    parsed.texto_visible_pdf
+  );
+
+  if (explicit) return explicit;
+
+  const raw = getBlockFromAny(vuelo.raw_text, parsed.raw_text, parsed.texto_libre);
+
+  if (raw) return raw;
+
+  return getBlockFromAny(
     vuelo.ida_detalle,
     vuelo.vuelta_detalle,
-    parsed.texto_libre,
-    parsed.raw_text
-  ].join("\n");
-
-  const normalized = normalizeText(text);
-
-  const items: string[] = [];
-
-  if (/mochila|bolso de mano|personal item/.test(normalized)) items.push("Bolso de mano");
-  if (/cabina|carry/.test(normalized)) items.push("Carry on");
-  if (/despachar|valija|equipaje facturado|checked baggage/.test(normalized)) {
-    if (/costo extra|con costo|permite|adicional/.test(normalized)) {
-      items.push("Equipaje despachado con costo");
-    } else {
-      items.push("Equipaje despachado");
-    }
-  }
-
-  return items.length ? Array.from(new Set(items)).join(" + ") : "A confirmar";
+    vuelo.equipaje,
+    vuelo.condiciones,
+    parsed.ida_detalle,
+    parsed.vuelta_detalle,
+    parsed.equipaje,
+    parsed.condiciones
+  );
 }
 
-function extractSeatSelection(vuelo: PresupuestoVuelo): string {
+function renderVueloCard(vuelo: PresupuestoVuelo, index: number): string {
   const metadata = getMetadata(vuelo);
   const parsed = getNestedRecord(metadata.parsed);
 
-  const metadataValue = getStringFromAny(
-    metadata.seleccion_asientos,
-    metadata.seleccion_de_asientos,
-    metadata.asientos,
-    parsed.seleccion_asientos,
-    parsed.asientos
+  const titulo = getStringFromAny(
+    vuelo.titulo,
+    parsed.titulo,
+    parsed.nombre,
+    vuelo.ruta_resumen,
+    `Aéreo ${index + 1}`
   );
 
-  if (metadataValue) return metadataValue;
+  const airline = extractAirline(vuelo);
+  const legs = parseFlightLegsFromStructured(vuelo);
+  const fallbackLegs = legs.length ? legs : parseFlightLegsFromLines(vuelo);
+  const directionRows = buildFlightRowsFromVuelo(vuelo);
+  const textoLibre = renderVueloTextoComplementario(vuelo);
 
-  const raw = String(vuelo.raw_text ?? "");
+  const ruta = getStringFromAny(vuelo.ruta_resumen, parsed.ruta_resumen, parsed.ruta);
 
-  if (/selecci[oó]n de asientos incluida|asientos incluidos/i.test(raw)) {
-    return "Selección de asientos incluida según tarifa.";
-  }
+  const badges = [
+    airline ? renderBadge(airline) : "",
+    ruta ? renderBadge(ruta) : "",
+    vuelo.tarifa_familia ? renderBadge(vuelo.tarifa_familia) : ""
+  ]
+    .filter(Boolean)
+    .join("");
 
-  if (/selecci[oó]n de asientos con costo|asientos con costo/i.test(raw)) {
-    return "Selección de asientos con costo adicional.";
-  }
+  const imageHtml = vuelo.captura_url
+    ? `
+      <div class="flight-capture">
+        <img src="${escapeHtml(vuelo.captura_url)}" alt="${escapeHtml(titulo)}" />
+      </div>
+    `
+    : "";
 
-  return "Sujeta a disponibilidad y condiciones de la tarifa.";
-}
+  const tableHtml = fallbackLegs.length
+    ? renderFlightLegsTable(fallbackLegs)
+    : renderFlightRowsTable(directionRows);
 
-function renderVueloCard(vuelo: PresupuestoVuelo): string {
-  const showPrice = shouldShowPrice(vuelo);
-  const tieneCaptura = hasText(vuelo.captura_url);
+  const textoHtml = textoLibre
+    ? `
+      <div class="flight-free-text">
+        ${nl2br(textoLibre)}
+      </div>
+    `
+    : "";
 
-  /*
-    IMPORTANTE:
-    raw_text se usa para que la IA pueda interpretar el vuelo,
-    pero NO debe mostrarse en el PDF porque puede contener texto pegado,
-    prompt, scraping completo o información repetida.
-  */
-  const mostrarTextoLibreVuelo = false;
-  const textoLibre = mostrarTextoLibreVuelo ? cleanLine(vuelo.raw_text) : "";
+  const priceHtml = shouldShowPrice(vuelo)
+    ? `
+      <div class="resource-price">
+        ${formatMoneyAR(vuelo.precio_total || 0, vuelo.moneda || "USD")}
+      </div>
+    `
+    : "";
 
-  if (tieneCaptura) {
-    return `
-      <article class="flight-card">
-        <div class="flight-capture">
-          <img src="${escapeHtml(vuelo.captura_url)}" alt="Captura del aéreo" />
-        </div>
-
-            ${
-          textoLibre
-            ? `
-              <div class="flight-free-text">
-                ${nl2br(textoLibre)}
-              </div>
-            `
-            : ""
-        }
-
-        ${
-          showPrice
-            ? `
-              <div class="visible-price">
-                <span>Valor del aéreo</span>
-                <strong>${formatMoneyAR(vuelo.precio_total, vuelo.moneda)}</strong>
-              </div>
-            `
-            : ""
-        }
-
-        ${vuelo.condiciones ? `<div class="small-note">${nl2br(vuelo.condiciones)}</div>` : ""}
-      </article>
-    `;
-  }
-
-  const rows = getFlightRows(vuelo);
-  const seatSelection = extractSeatSelection(vuelo);
-  const baggage = extractBaggage(vuelo);
+  const equipajeHtml = vuelo.equipaje
+    ? `
+      <div class="flight-luggage-note">
+        <strong>Equipaje</strong>
+        <span>${escapeHtml(vuelo.equipaje)}</span>
+      </div>
+    `
+    : "";
 
   return `
     <article class="flight-card">
-      <div class="table-wrap">
-        <table class="flight-table">
-          <thead>
-            <tr>
-              <th>Tramo</th>
-              <th>Aerolínea / vuelo</th>
-              <th>Origen</th>
-              <th>Destino</th>
-              <th>Salida</th>
-              <th>Llegada</th>
-              <th>Duración</th>
-              <th>Escala</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            ${rows
-              .map(
-                (row) => `
-                  <tr>
-                    <td>
-                      <strong>${escapeHtml(row.label)}</strong>
-                      <span>${escapeHtml(row.fecha)}</span>
-                    </td>
-                    <td>
-                      <strong>${escapeHtml(row.aerolinea)}</strong>
-                      <span>${escapeHtml(row.numero)}</span>
-                    </td>
-                    <td>${escapeHtml(row.origen)}</td>
-                    <td>${escapeHtml(row.destino)}</td>
-                    <td>${escapeHtml(row.salida)}</td>
-                    <td>${escapeHtml(row.llegada)}</td>
-                    <td>${escapeHtml(row.duracion)}</td>
-                    <td>${escapeHtml(row.escala)}</td>
-                  </tr>
-                `
-              )
-              .join("")}
-          </tbody>
-        </table>
+      <div class="resource-header">
+        <div>
+          <h3>${escapeHtml(titulo)}</h3>
+          ${badges ? `<div class="badges">${badges}</div>` : ""}
+        </div>
+        ${priceHtml}
       </div>
 
-      <div class="flight-bottom-grid">
-        <div class="flight-note">
-          <strong>Equipaje</strong>
-          <span>${escapeHtml(baggage)}</span>
-        </div>
-
-        <div class="flight-note">
-          <strong>Asientos</strong>
-          <span>${escapeHtml(seatSelection)}</span>
-        </div>
-      </div>
-
-          ${
-        textoLibre
-          ? `
-            <div class="flight-free-text">
-              ${nl2br(textoLibre)}
-            </div>
-          `
-          : ""
-      }
-
-      ${
-        showPrice
-          ? `
-            <div class="visible-price">
-              <span>Valor del aéreo</span>
-              <strong>${formatMoneyAR(vuelo.precio_total, vuelo.moneda)}</strong>
-            </div>
-          `
-          : ""
-      }
-
-      ${vuelo.condiciones ? `<div class="small-note">${nl2br(vuelo.condiciones)}</div>` : ""}
+      ${imageHtml}
+      ${tableHtml}
+      ${equipajeHtml}
+      ${textoHtml}
     </article>
   `;
+}
+
+function renderVuelosSection(vuelos: PresupuestoVuelo[]): string {
+  const visibles = dedupeVuelos(vuelos).filter((item) => item.incluir_en_pdf !== false);
+
+  if (!visibles.length) return "";
+
+  const content = visibles.map((vuelo, index) => renderVueloCard(vuelo, index)).join("");
+
+  return renderSection("Aéreos", content);
 }
 
 /* =========================================================
    HOTELES
 ========================================================= */
 
-function getHotelGoogleData(hotel: PresupuestoHotel): SafeRecord {
-  const metadata = getMetadata(hotel);
+function renderHotelStars(categoria?: string | number | null): string {
+  const stars = Number(String(categoria ?? "").replace(/[^\d]/g, ""));
 
-  return getNestedRecord(
-    metadata.google_hotel ||
-      metadata.googleHotel ||
-      metadata.hotel_google ||
-      metadata.google_places ||
-      metadata.googlePlaces ||
-      metadata.place ||
-      metadata.place_details ||
-      metadata.placeDetails ||
-      metadata.enrichment ||
-      metadata.enriquecimiento_google
-  );
-}
+  if (!Number.isFinite(stars) || stars <= 0) return "";
 
-function pushPhotoCandidate(candidates: string[], value: unknown): void {
-  if (!value) return;
-
-  if (typeof value === "string") {
-    const clean = value.trim();
-
-    if (clean.startsWith("http") || clean.startsWith("/")) {
-      candidates.push(clean);
-    }
-
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    value.forEach((item) => pushPhotoCandidate(candidates, item));
-    return;
-  }
-
-  if (typeof value === "object") {
-    const record = value as SafeRecord;
-
-    pushPhotoCandidate(candidates, record.url);
-    pushPhotoCandidate(candidates, record.foto_url);
-    pushPhotoCandidate(candidates, record.photo_url);
-    pushPhotoCandidate(candidates, record.imagen_url);
-    pushPhotoCandidate(candidates, record.image_url);
-    pushPhotoCandidate(candidates, record.src);
-
-    pushPhotoCandidate(candidates, record.imagenes);
-    pushPhotoCandidate(candidates, record.fotos);
-    pushPhotoCandidate(candidates, record.photos);
-    pushPhotoCandidate(candidates, record.fotos_urls);
-    pushPhotoCandidate(candidates, record.photo_urls);
-    pushPhotoCandidate(candidates, record.photos_urls);
-  }
+  return "★".repeat(Math.min(stars, 5));
 }
 
 function getHotelPhotos(hotel: PresupuestoHotel): string[] {
   const metadata = getMetadata(hotel);
-  const google = getHotelGoogleData(hotel);
-
-  const hotelMaestro = getNestedRecord(
-    metadata.hotel_maestro ||
-      metadata.hotelMaestro ||
-      metadata.hotel_maestro_data ||
-      metadata.hotelMaestroData ||
-      metadata.hotel_base ||
-      metadata.hotelBase ||
-      metadata.maestro
-  );
-
   const parsed = getNestedRecord(metadata.parsed);
+  const hotelMaestro = getNestedRecord(metadata.hotel_maestro);
+  const googlePlace = getNestedRecord(metadata.google_place);
 
-  const candidates: string[] = [];
+  const googlePhotos = getArrayFromAny(
+    metadata.fotos,
+    metadata.photos,
+    googlePlace.fotos,
+    googlePlace.photos,
+    parsed.fotos,
+    parsed.photos,
+    hotelMaestro.fotos,
+    hotelMaestro.photos
+  )
+    .map((item) => {
+      if (typeof item === "string") return item;
 
-  pushPhotoCandidate(candidates, hotel.imagen_url);
-  pushPhotoCandidate(candidates, hotel.captura_url);
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const record = item as SafeRecord;
+        return getStringFromAny(record.url, record.foto_url, record.src, record.photo_url);
+      }
 
-  pushPhotoCandidate(candidates, metadata.imagen_url);
-  pushPhotoCandidate(candidates, metadata.foto_url);
-  pushPhotoCandidate(candidates, metadata.photo_url);
-  pushPhotoCandidate(candidates, metadata.image_url);
+      return "";
+    })
+    .filter(Boolean);
 
-  pushPhotoCandidate(candidates, hotelMaestro.imagen_url);
-  pushPhotoCandidate(candidates, hotelMaestro.foto_url);
-  pushPhotoCandidate(candidates, hotelMaestro.imagenes);
-  pushPhotoCandidate(candidates, hotelMaestro.fotos);
-  pushPhotoCandidate(candidates, hotelMaestro.photos);
+  const photos = [
+    hotel.imagen_url,
+    hotel.captura_url,
+    ...googlePhotos,
+    metadata.imagen_url,
+    metadata.foto_url,
+    googlePlace.foto_url,
+    googlePlace.imagen_url,
+    parsed.imagen_url,
+    parsed.foto_url,
+    hotelMaestro.imagen_url,
+    hotelMaestro.foto_url
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
 
-  pushPhotoCandidate(candidates, parsed.imagen_url);
-  pushPhotoCandidate(candidates, parsed.foto_url);
-  pushPhotoCandidate(candidates, parsed.imagenes);
-  pushPhotoCandidate(candidates, parsed.fotos);
-  pushPhotoCandidate(candidates, parsed.photos);
-
-  pushPhotoCandidate(candidates, google.foto_url);
-  pushPhotoCandidate(candidates, google.photo_url);
-  pushPhotoCandidate(candidates, google.imagen_url);
-  pushPhotoCandidate(candidates, google.fotos);
-  pushPhotoCandidate(candidates, google.photos);
-  pushPhotoCandidate(candidates, google.photo_urls);
-  pushPhotoCandidate(candidates, google.photos_urls);
-
-  pushPhotoCandidate(candidates, metadata.imagenes);
-  pushPhotoCandidate(candidates, metadata.fotos);
-  pushPhotoCandidate(candidates, metadata.photos);
-  pushPhotoCandidate(candidates, metadata.fotos_urls);
-  pushPhotoCandidate(candidates, metadata.photo_urls);
-  pushPhotoCandidate(candidates, metadata.photos_urls);
-
-  return Array.from(new Set(candidates)).slice(0, 4);
+  return Array.from(new Set(photos)).slice(0, 4);
 }
 
-function getHotelRating(hotel: PresupuestoHotel): string {
-  const metadata = getMetadata(hotel);
-  const google = getHotelGoogleData(hotel);
+function renderHotelPhotos(hotel: PresupuestoHotel, nombre: string): string {
+  const photos = getHotelPhotos(hotel);
 
-  const rating = getNumberFromAny(metadata.rating, metadata.google_rating, google.rating);
-  const total = getNumberFromAny(
-    metadata.user_ratings_total,
-    metadata.reviews_total,
-    google.user_ratings_total,
-    google.reviews_total
-  );
-
-  if (!rating) return "";
-
-  return `${rating.toFixed(1).replace(".", ",")} / 5${total ? ` · ${total} reseñas` : ""}`;
-}
-
-function getHotelAddress(hotel: PresupuestoHotel): string {
-  const metadata = getMetadata(hotel);
-  const google = getHotelGoogleData(hotel);
-
-  return getStringFromAny(
-    metadata.direccion_original,
-    metadata.direccion,
-    metadata.formatted_address,
-    metadata.address,
-    google.direccion,
-    google.formatted_address,
-    google.address,
-    hotel.zona
-  );
-}
-
-function renderHotelPhotos(photos: string[]): string {
   if (!photos.length) return "";
 
+  const padded = [...photos];
+
+  while (padded.length < 4) {
+    padded.push(photos[photos.length - 1]);
+  }
+
   return `
-    <div class="hotel-photo-grid count-${photos.length}">
-      ${photos.map((photo) => `<div><img src="${escapeHtml(photo)}" /></div>`).join("")}
+    <div class="hotel-gallery">
+      ${padded
+        .slice(0, 4)
+        .map(
+          (photo, index) => `
+            <div class="hotel-photo">
+              <img src="${escapeHtml(photo)}" alt="${escapeHtml(`${nombre} ${index + 1}`)}" />
+            </div>
+          `
+        )
+        .join("")}
     </div>
   `;
 }
 
-function renderHotelCard(hotel: PresupuestoHotel): string {
-  const showPrice = shouldShowPrice(hotel);
-  const photos = getHotelPhotos(hotel);
-  const rating = getHotelRating(hotel);
-  const address = getHotelAddress(hotel);
+function getHotelRatingData(hotel: PresupuestoHotel): {
+  rating: number | null;
+  userRatingsTotal: number | null;
+} {
+  const metadata = getMetadata(hotel);
+  const parsed = getNestedRecord(metadata.parsed);
+  const googlePlace = getNestedRecord(metadata.google_place);
+
+  return {
+    rating: getNumberFromAny(
+      metadata.rating,
+      metadata.google_rating,
+      metadata.calificacion_google,
+      googlePlace.rating,
+      googlePlace.google_rating,
+      parsed.rating,
+      parsed.google_rating
+    ),
+    userRatingsTotal: getNumberFromAny(
+      metadata.user_ratings_total,
+      metadata.google_user_ratings_total,
+      metadata.cantidad_resenias,
+      metadata.cantidad_reseñas,
+      googlePlace.user_ratings_total,
+      googlePlace.google_user_ratings_total,
+      parsed.user_ratings_total,
+      parsed.google_user_ratings_total
+    )
+  };
+}
+
+function renderHotelBadges({
+  destino,
+  regimen,
+  stars,
+  rating,
+  userRatingsTotal
+}: {
+  destino: string;
+  regimen: string;
+  stars: string;
+  rating: number | null;
+  userRatingsTotal: number | null;
+}): string {
+  const googleRatingHtml = rating
+    ? `<span class="hotel-google-rating">Google ${escapeHtml(
+        rating.toLocaleString("es-AR", {
+          minimumFractionDigits: 1,
+          maximumFractionDigits: 1
+        })
+      )} ★${
+        userRatingsTotal
+          ? ` · ${escapeHtml(userRatingsTotal.toLocaleString("es-AR"))} reseñas`
+          : ""
+      }</span>`
+    : "";
+
+  return `
+    <div class="hotel-badges">
+      ${destino ? `<span>${escapeHtml(destino)}</span>` : ""}
+      ${regimen ? `<span>${escapeHtml(regimen)}</span>` : ""}
+      ${stars ? `<span>${escapeHtml(stars)}</span>` : ""}
+      ${googleRatingHtml}
+    </div>
+  `;
+}
+
+function renderHotelDataCard(
+  facts: Array<{
+    label: string;
+    value: string;
+  }>
+): string {
+  const visibles = facts.filter((item) => hasText(item.value));
+
+  if (!visibles.length) return "";
+
+  return `
+    <div class="hotel-data-card">
+      ${visibles
+        .map(
+          (fact) => `
+            <div class="hotel-data-item">
+              <small>${escapeHtml(fact.label)}</small>
+              <strong>${escapeHtml(fact.value)}</strong>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function getHotelDescription(hotel: PresupuestoHotel): string {
+  const metadata = getMetadata(hotel);
+  const parsed = getNestedRecord(metadata.parsed);
+  const googlePlace = getNestedRecord(metadata.google_place);
+
+  return getBlockFromAny(
+    hotel.descripcion,
+    hotel.beneficios,
+    metadata.descripcion,
+    metadata.beneficios,
+    googlePlace.descripcion,
+    googlePlace.editorial_summary,
+    parsed.descripcion,
+    parsed.beneficios,
+    hotel.raw_text
+  );
+}
+
+function renderHotelCard(hotel: PresupuestoHotel, index: number): string {
+  const metadata = getMetadata(hotel);
+  const parsed = getNestedRecord(metadata.parsed);
+
+  const nombre = getStringFromAny(
+    hotel.nombre,
+    hotel.titulo,
+    parsed.nombre,
+    parsed.titulo,
+    `Hotel ${index + 1}`
+  );
+
+  const destino = getStringFromAny(hotel.destino, parsed.destino);
+  const zona = getStringFromAny(hotel.zona, parsed.zona, parsed.ubicacion, parsed.direccion);
+  const regimen = getStringFromAny(hotel.regimen, parsed.regimen);
+  const habitacion = getStringFromAny(hotel.habitacion, parsed.habitacion);
+  const categoria = getStringFromAny(hotel.categoria, parsed.categoria);
+  const stars = renderHotelStars(categoria);
+  const { rating, userRatingsTotal } = getHotelRatingData(hotel);
+  const galleryHtml = renderHotelPhotos(hotel, nombre);
+
+  const hotelFacts = [
+    { label: "Destino", value: destino },
+    { label: "Zona", value: zona },
+    { label: "Check in", value: formatDate(hotel.check_in) },
+    { label: "Check out", value: formatDate(hotel.check_out) },
+    { label: "Noches", value: hotel.noches ? `${hotel.noches}` : "" },
+    { label: "Régimen", value: regimen },
+    { label: "Habitación", value: habitacion },
+    { label: "Categoría", value: stars || categoria }
+  ];
+
+  const description = getHotelDescription(hotel);
+  const conditions = getBlockFromAny(
+    hotel.condiciones,
+    hotel.politica_cancelacion,
+    parsed.condiciones,
+    parsed.politica_cancelacion
+  );
+
+  const priceHtml = shouldShowPrice(hotel)
+    ? `
+      <div class="hotel-price">
+        ${formatMoneyAR(hotel.precio_total || 0, hotel.moneda || "USD")}
+      </div>
+    `
+    : "";
 
   return `
     <article class="hotel-card">
-      ${renderHotelPhotos(photos)}
+      ${galleryHtml}
 
-      <div class="hotel-head">
-        <div>
-          <div class="eyebrow">Hotel</div>
-          <h3>${escapeHtml(hotel.nombre || "Hotel")}</h3>
-          <p>${escapeHtml(hotel.destino || "Destino no especificado")}</p>
+      <div class="hotel-content">
+        <div class="hotel-title-row">
+          <div>
+            <h3>${escapeHtml(nombre)}</h3>
+            ${renderHotelBadges({
+              destino,
+              regimen,
+              stars,
+              rating,
+              userRatingsTotal
+            })}
+          </div>
+
+          ${priceHtml}
         </div>
-        ${hotel.es_principal ? `<span class="mini-badge">Principal</span>` : ""}
+
+        ${renderHotelDataCard(hotelFacts)}
+
+        ${
+          description
+            ? `
+              <div class="hotel-description">
+                ${nl2br(description)}
+              </div>
+            `
+            : ""
+        }
+
+        ${
+          conditions
+            ? `
+              <div class="hotel-conditions">
+                ${nl2br(conditions)}
+              </div>
+            `
+            : ""
+        }
       </div>
-
-      <div class="hotel-info-grid">
-        ${renderInfoItem("Check-in", formatDate(hotel.check_in))}
-        ${renderInfoItem("Check-out", formatDate(hotel.check_out))}
-        ${renderInfoItem("Noches", hotel.noches ?? "—")}
-        ${hotel.regimen ? renderInfoItem("Régimen", hotel.regimen) : ""}
-        ${hotel.habitacion ? renderInfoItem("Habitación", hotel.habitacion) : ""}
-        ${hotel.ocupacion ? renderInfoItem("Ocupación", hotel.ocupacion) : ""}
-      </div>
-
-      ${
-        address || rating
-          ? `
-            <div class="hotel-google-box">
-              ${address ? `<span><strong>Dirección:</strong> ${escapeHtml(address)}</span>` : ""}
-              ${rating ? `<span><strong>Google:</strong> ${escapeHtml(rating)}</span>` : ""}
-            </div>
-          `
-          : ""
-      }
-
-      ${hotel.descripcion ? `<div class="text-box">${nl2br(hotel.descripcion)}</div>` : ""}
-
-      ${
-        hotel.beneficios
-          ? `
-            <div class="included-box">
-              <strong>Destacados</strong>
-              <div>${nl2br(hotel.beneficios)}</div>
-            </div>
-          `
-          : ""
-      }
-
-      ${
-        showPrice
-          ? `
-            <div class="visible-price">
-              <span>Valor del hotel</span>
-              <strong>${formatMoneyAR(hotel.precio_total, hotel.moneda)}</strong>
-            </div>
-          `
-          : ""
-      }
-
-      ${hotel.condiciones ? `<div class="small-note">${nl2br(hotel.condiciones)}</div>` : ""}
-      ${hotel.politica_cancelacion ? `<div class="small-note">${nl2br(hotel.politica_cancelacion)}</div>` : ""}
     </article>
   `;
+}
+
+function renderHotelesSection(hoteles: PresupuestoHotel[]): string {
+  const visibles = dedupeHoteles(hoteles).filter((item) => item.incluir_en_pdf !== false);
+
+  if (!visibles.length) return "";
+
+  const content = visibles.map((hotel, index) => renderHotelCard(hotel, index)).join("");
+
+  return renderSection("Alojamiento", content);
 }
 
 /* =========================================================
-   SERVICIOS / PRECIOS
+   SERVICIOS
 ========================================================= */
 
-function renderServicioCard(servicio: PresupuestoServicio): string {
-  const showPrice = shouldShowPrice(servicio);
+function getServicioTipoLabel(tipo?: string | null): string {
+  const normalized = normalizeText(tipo || "");
+
+  if (normalized.includes("traslado")) return "Traslado";
+  if (normalized.includes("asistencia")) return "Asistencia";
+  if (normalized.includes("excursion")) return "Excursión";
+  if (normalized.includes("seguro")) return "Seguro";
+  if (normalized.includes("entrada")) return "Entrada";
+  if (normalized.includes("auto")) return "Auto";
+  if (normalized.includes("tren")) return "Tren";
+  if (normalized.includes("bus")) return "Bus";
+
+  return tipo || "Servicio";
+}
+
+function renderServicioCard(servicio: PresupuestoServicio, index: number): string {
+  const metadata = getMetadata(servicio);
+  const parsed = getNestedRecord(metadata.parsed);
+
+  const nombre = getStringFromAny(
+    servicio.nombre,
+    parsed.nombre,
+    parsed.titulo,
+    `Servicio ${index + 1}`
+  );
+
+  const tipo = getServicioTipoLabel(getStringFromAny(servicio.tipo, parsed.tipo));
+  const descripcion = getBlockFromAny(
+    servicio.descripcion,
+    parsed.descripcion,
+    parsed.texto_libre,
+    parsed.raw_text
+  );
+
+  const priceHtml =
+    shouldShowPrice(servicio) && servicio.precio_total
+      ? `
+        <div class="resource-price">
+          ${formatMoneyAR(servicio.precio_total, servicio.moneda || "USD")}
+        </div>
+      `
+      : "";
 
   return `
-    <article class="service-row">
-      <div>
-        <div class="service-title">
-          ${escapeHtml(servicio.nombre || "Servicio")}
-          ${servicio.incluido ? `<span>Incluido</span>` : ""}
-          ${servicio.opcional ? `<span class="amber">Opcional</span>` : ""}
+    <article class="service-card">
+      <div class="service-top">
+        <div>
+          <div class="service-type">${escapeHtml(tipo)}</div>
+          <h3>${escapeHtml(nombre)}</h3>
         </div>
-        ${servicio.descripcion ? `<div class="service-desc">${nl2br(servicio.descripcion)}</div>` : ""}
+
+        ${priceHtml}
       </div>
 
       ${
-        servicio.incluido
-          ? `<strong>Incluido</strong>`
-          : showPrice
-            ? `<strong>${formatMoneyAR(servicio.precio_total, servicio.moneda)}</strong>`
-            : ""
+        descripcion
+          ? `
+            <div class="service-desc">
+              ${nl2br(descripcion)}
+            </div>
+          `
+          : ""
+      }
+
+      <div class="service-flags">
+        ${servicio.incluido ? `<span>Incluido</span>` : ""}
+        ${servicio.opcional ? `<span>Opcional</span>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderServiciosSection(servicios: PresupuestoServicio[]): string {
+  const visibles = dedupeServicios(servicios).filter((item) => item.incluir_en_pdf !== false);
+
+  if (!visibles.length) return "";
+
+  const content = `
+    <div class="services-grid">
+      ${visibles.map((servicio, index) => renderServicioCard(servicio, index)).join("")}
+    </div>
+  `;
+
+  return renderSection("Servicios incluidos / adicionales", content);
+}
+
+/* =========================================================
+   OPCIONES COMERCIALES — METADATA FLEXIBLE
+========================================================= */
+
+function getFormaPagos(combinacion: PresupuestoCombinacion): FormaPagoFlexible[] {
+  const metadata = getMetadata(combinacion);
+  const raw = getArrayFromAny(metadata.formas_pago, metadata.formasPagos, metadata.payments);
+
+  return raw
+    .map((item, index): FormaPagoFlexible | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        if (!hasText(item)) return null;
+
+        return {
+          id: `payment-text-${index}`,
+          tipo: "TEXTO",
+          titulo: "Forma de pago",
+          descripcion: cleanLine(item),
+          moneda: combinacion.moneda || "USD",
+          visible_en_pdf: true
+        };
+      }
+
+      const record = item as SafeRecord;
+
+      return {
+        id: getStringFromAny(record.id, `payment-${index}`),
+        tipo: getStringFromAny(record.tipo, record.type),
+        titulo: getStringFromAny(record.titulo, record.nombre, record.title, record.name),
+        descripcion: getBlockFromAny(record.descripcion, record.detalle, record.texto, record.description),
+        moneda: getStringFromAny(record.moneda, combinacion.moneda, "USD"),
+        monto: getNumberFromAny(record.monto, record.amount),
+        porcentaje: getNumberFromAny(record.porcentaje, record.percent),
+        cuotas: getNumberFromAny(record.cuotas, record.installments),
+        valor_cuota: getNumberFromAny(record.valor_cuota, record.installment_amount),
+        total_financiado: getNumberFromAny(record.total_financiado, record.financed_total),
+        tarjeta: getStringFromAny(record.tarjeta, record.card) || null,
+        banco: getStringFromAny(record.banco, record.bank) || null,
+        con_interes:
+          typeof record.con_interes === "boolean"
+            ? record.con_interes
+            : typeof record.with_interest === "boolean"
+              ? record.with_interest
+              : null,
+        tasa_interes: getNumberFromAny(record.tasa_interes, record.interest_rate),
+        fecha_vencimiento: getStringFromAny(record.fecha_vencimiento, record.due_date) || null,
+        visible_en_pdf: record.visible_en_pdf === false ? false : true
+      };
+    })
+    .filter((item): item is FormaPagoFlexible => Boolean(item))
+    .filter((item) => item.visible_en_pdf !== false);
+}
+
+function getPromociones(combinacion: PresupuestoCombinacion): PromoFlexible[] {
+  const metadata = getMetadata(combinacion);
+  const raw = getArrayFromAny(metadata.promociones, metadata.promos, metadata.promotions);
+
+  return raw
+    .map((item, index): PromoFlexible | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        if (!hasText(item)) return null;
+
+        return {
+          id: `promo-text-${index}`,
+          nombre: cleanLine(item),
+          descripcion: "",
+          moneda: combinacion.moneda || "USD",
+          visible_en_pdf: true
+        };
+      }
+
+      const record = item as SafeRecord;
+
+      return {
+        id: getStringFromAny(record.id, `promo-${index}`),
+        nombre: getStringFromAny(record.nombre, record.titulo, record.name, record.title),
+        descripcion: getBlockFromAny(record.descripcion, record.detalle, record.texto, record.description),
+        descuento_monto: getNumberFromAny(record.descuento_monto, record.discount_amount),
+        descuento_porcentaje: getNumberFromAny(record.descuento_porcentaje, record.discount_percent),
+        monto: getNumberFromAny(record.monto, record.amount),
+        porcentaje: getNumberFromAny(record.porcentaje, record.percent),
+        moneda: getStringFromAny(record.moneda, combinacion.moneda, "USD"),
+        vigencia_hasta: getStringFromAny(record.vigencia_hasta, record.valid_until) || null,
+        visible_en_pdf: record.visible_en_pdf === false ? false : true
+      };
+    })
+    .filter((item): item is PromoFlexible => Boolean(item))
+    .filter((item) => item.visible_en_pdf !== false);
+}
+
+function getDescuentos(combinacion: PresupuestoCombinacion): PromoFlexible[] {
+  const metadata = getMetadata(combinacion);
+  const raw = getArrayFromAny(metadata.descuentos, metadata.discounts);
+
+  return raw
+    .map((item, index): PromoFlexible | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        if (!hasText(item)) return null;
+
+        return {
+          id: `discount-text-${index}`,
+          nombre: cleanLine(item),
+          descripcion: "",
+          moneda: combinacion.moneda || "USD",
+          visible_en_pdf: true
+        };
+      }
+
+      const record = item as SafeRecord;
+
+      return {
+        id: getStringFromAny(record.id, `discount-${index}`),
+        nombre: getStringFromAny(record.nombre, record.titulo, record.name, record.title),
+        descripcion: getBlockFromAny(record.descripcion, record.detalle, record.texto, record.description),
+        descuento_monto: getNumberFromAny(record.descuento_monto, record.discount_amount, record.monto),
+        descuento_porcentaje: getNumberFromAny(
+          record.descuento_porcentaje,
+          record.discount_percent,
+          record.porcentaje
+        ),
+        monto: getNumberFromAny(record.monto, record.amount),
+        porcentaje: getNumberFromAny(record.porcentaje, record.percent),
+        moneda: getStringFromAny(record.moneda, combinacion.moneda, "USD"),
+        vigencia_hasta: getStringFromAny(record.vigencia_hasta, record.valid_until) || null,
+        visible_en_pdf: record.visible_en_pdf === false ? false : true
+      };
+    })
+    .filter((item): item is PromoFlexible => Boolean(item))
+    .filter((item) => item.visible_en_pdf !== false);
+}
+
+function getTarifasPasajeros(combinacion: PresupuestoCombinacion): TarifaPasajeroFlexible[] {
+  const metadata = getMetadata(combinacion);
+  const raw = getArrayFromAny(
+    metadata.tarifas_pasajeros,
+    metadata.tarifas,
+    metadata.passenger_rates
+  );
+
+  return raw
+    .map((item, index): TarifaPasajeroFlexible | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+
+      const record = item as SafeRecord;
+
+      return {
+        id: getStringFromAny(record.id, `rate-${index}`),
+        tipo: getStringFromAny(record.tipo, record.type),
+        descripcion: getStringFromAny(record.descripcion, record.label, record.description),
+        nombre: getStringFromAny(record.nombre, record.name),
+        cantidad: getNumberFromAny(record.cantidad, record.qty, record.quantity),
+        precio_unitario: getNumberFromAny(record.precio_unitario, record.unit_price),
+        subtotal: getNumberFromAny(record.subtotal, record.total),
+        moneda: getStringFromAny(record.moneda, combinacion.moneda, "USD"),
+        notas: getStringFromAny(record.notas, record.notes) || null,
+        visible_en_pdf: record.visible_en_pdf === false ? false : true
+      };
+    })
+    .filter((item): item is TarifaPasajeroFlexible => Boolean(item))
+    .filter((item) => item.visible_en_pdf !== false);
+}
+
+function isCardPayment(payment: FormaPagoFlexible): boolean {
+  const tipo = normalizeText(payment.tipo || "");
+  const title = normalizeText(payment.titulo || "");
+  const description = normalizeText(payment.descripcion || "");
+
+  if (payment.tarjeta || payment.banco) return true;
+
+  return (
+    tipo.includes("tarjeta") ||
+    tipo.includes("card") ||
+    title.includes("tarjeta") ||
+    description.includes("tarjeta")
+  );
+}
+
+function isPaymentOnAccount(payment: FormaPagoFlexible): boolean {
+  const tipo = normalizeText(payment.tipo || "");
+  const title = normalizeText(payment.titulo || "");
+  const description = normalizeText(payment.descripcion || "");
+
+  if (tipo.includes("pagos a cuenta") || tipo.includes("pago a cuenta")) return true;
+  if (tipo.includes("pagos_a_cuenta")) return true;
+  if (title.includes("pagos a cuenta") || title.includes("plan de pagos")) return true;
+  if (description.includes("pagos a cuenta") || description.includes("pago a cuenta")) return true;
+
+  return Boolean(payment.cuotas && payment.valor_cuota && !isCardPayment(payment));
+}
+
+function getPaymentTitle(payment: FormaPagoFlexible): string {
+  if (isPaymentOnAccount(payment)) return "Plan de pagos";
+
+  if (isCardPayment(payment)) {
+    return getStringFromAny(
+      payment.titulo,
+      [payment.tarjeta, payment.banco].filter(Boolean).join(" · "),
+      "Tarjeta de crédito"
+    );
+  }
+
+  const tipo = normalizeText(payment.tipo || "");
+
+  if (tipo.includes("senia") || tipo.includes("seña") || tipo.includes("saldo")) {
+    return getStringFromAny(payment.titulo, "Pago inicial + saldo");
+  }
+
+  return getStringFromAny(payment.titulo, "Forma de pago");
+}
+
+function getPaymentDescription(
+  payment: FormaPagoFlexible,
+  combinacion: PresupuestoCombinacion
+): string {
+  const moneda = payment.moneda || combinacion.moneda || "USD";
+
+  if (isPaymentOnAccount(payment) && payment.cuotas && payment.valor_cuota) {
+    return `${payment.cuotas} pago${payment.cuotas === 1 ? "" : "s"} a cuenta de ${formatMoneyAR(
+      payment.valor_cuota,
+      moneda
+    )}.`;
+  }
+
+  if (isCardPayment(payment) && payment.cuotas && payment.valor_cuota) {
+    return [
+      `${payment.cuotas} cuota${payment.cuotas === 1 ? "" : "s"} de ${formatMoneyAR(
+        payment.valor_cuota,
+        moneda
+      )}.`,
+      payment.total_financiado
+        ? `Total financiado ${formatMoneyAR(payment.total_financiado, moneda)}.`
+        : "",
+      payment.con_interes === true
+        ? "Con interés."
+        : payment.con_interes === false
+          ? "Sin interés."
+          : "",
+      payment.tasa_interes ? `Tasa ${formatPercent(payment.tasa_interes)}.` : "",
+      payment.fecha_vencimiento ? `Vencimiento ${formatDate(payment.fecha_vencimiento)}.` : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  const parts = [
+    payment.descripcion,
+    payment.monto ? `Monto: ${formatMoneyAR(payment.monto, moneda)}.` : "",
+    payment.porcentaje ? `${formatPercent(payment.porcentaje)}.` : "",
+    payment.fecha_vencimiento ? `Vencimiento ${formatDate(payment.fecha_vencimiento)}.` : ""
+  ]
+    .filter(Boolean)
+    .map(cleanLine);
+
+  return parts.join(" ");
+}
+
+function renderFlexiblePayments(combinacion: PresupuestoCombinacion): string {
+  const payments = getFormaPagos(combinacion);
+
+  const fallbackPayments: FormaPagoFlexible[] = [];
+
+  if (combinacion.forma_pago_resumen) {
+    fallbackPayments.push({
+      id: "fallback-summary",
+      tipo: "RESUMEN",
+      titulo: "Forma de pago",
+      descripcion: combinacion.forma_pago_resumen,
+      moneda: combinacion.moneda || "USD",
+      visible_en_pdf: true
+    });
+  }
+
+  if (combinacion.seña || combinacion.saldo) {
+    fallbackPayments.push({
+      id: "fallback-senia-saldo",
+      tipo: "SENIA_SALDO",
+      titulo: "Pago inicial + saldo",
+      descripcion: [
+        combinacion.seña
+          ? `Pago inicial / seña: ${formatMoneyAR(combinacion.seña, combinacion.moneda || "USD")}.`
+          : "",
+        combinacion.saldo
+          ? `Saldo: ${formatMoneyAR(combinacion.saldo, combinacion.moneda || "USD")}.`
+          : ""
+      ]
+        .filter(Boolean)
+        .join(" "),
+      moneda: combinacion.moneda || "USD",
+      visible_en_pdf: true
+    });
+  }
+
+  const allPaymentsRaw = payments.length ? payments : fallbackPayments;
+  const seenPayments = new Set<string>();
+
+  const allPayments = allPaymentsRaw.filter((payment) => {
+    const title = getPaymentTitle(payment);
+    const description = getPaymentDescription(payment, combinacion);
+
+    const key = normalizeText(
+      [
+        payment.tipo,
+        title,
+        description,
+        payment.cuotas,
+        payment.valor_cuota,
+        payment.monto,
+        payment.tarjeta,
+        payment.banco
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+
+    if (!key) return false;
+    if (seenPayments.has(key)) return false;
+
+    seenPayments.add(key);
+    return true;
+  });
+
+  if (!allPayments.length && !combinacion.condiciones_pago) return "";
+
+  const paymentsHtml = allPayments
+    .map((payment) => {
+      const title = getPaymentTitle(payment);
+      const description = getPaymentDescription(payment, combinacion);
+
+      if (!title && !description) return "";
+
+      return `
+        <div class="payment-item ${isPaymentOnAccount(payment) ? "payment-account" : ""}">
+          <strong>${escapeHtml(title)}</strong>
+          ${description ? `<p>${nl2br(description)}</p>` : ""}
+        </div>
+      `;
+    })
+    .filter(Boolean)
+    .join("");
+
+  const condicionesHtml = combinacion.condiciones_pago
+    ? `
+      <div class="payment-conditions">
+        ${nl2br(combinacion.condiciones_pago)}
+      </div>
+    `
+    : "";
+
+  return `
+    <div class="payments-box">
+      <div class="mini-title">Formas de pago</div>
+      ${paymentsHtml}
+      ${condicionesHtml}
+    </div>
+  `;
+}
+
+function renderPromosAndDiscounts(combinacion: PresupuestoCombinacion): string {
+  const promos = getPromociones(combinacion);
+  const descuentos = getDescuentos(combinacion);
+  const etiquetaNormalized = normalizeText(combinacion.etiqueta || "");
+
+  const itemsRaw = [
+    ...promos.map((promo) => ({ ...promo, kind: "promo" as const })),
+    ...descuentos.map((discount) => ({ ...discount, kind: "discount" as const }))
+  ];
+
+  const seen = new Set<string>();
+
+  const items = itemsRaw.filter((item) => {
+    const key = normalizeText(
+      [
+        item.kind,
+        item.nombre,
+        item.descripcion,
+        item.descuento_monto,
+        item.descuento_porcentaje,
+        item.monto,
+        item.porcentaje
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+
+    if (!key) return false;
+    if (seen.has(key)) return false;
+
+    seen.add(key);
+    return true;
+  });
+
+  const hasEtiquetaInItems =
+    etiquetaNormalized &&
+    items.some((item) =>
+      normalizeText([item.nombre, item.descripcion].filter(Boolean).join(" ")).includes(
+        etiquetaNormalized
+      )
+    );
+
+  if (!items.length && !combinacion.etiqueta) return "";
+
+  const etiquetaHtml =
+    combinacion.etiqueta && !hasEtiquetaInItems
+      ? `
+        <div class="promo-item">
+          <strong>${escapeHtml(combinacion.etiqueta)}</strong>
+        </div>
+      `
+      : "";
+
+  const itemsHtml = items
+    .map((item) => {
+      const amount =
+        item.descuento_monto || item.monto
+          ? formatMoneyAR(
+              item.descuento_monto || item.monto || 0,
+              item.moneda || combinacion.moneda || "USD"
+            )
+          : "";
+
+      const percent =
+        item.descuento_porcentaje || item.porcentaje
+          ? formatPercent(item.descuento_porcentaje || item.porcentaje)
+          : "";
+
+      const detail = [
+        item.descripcion,
+        amount ? `Beneficio: ${amount}.` : "",
+        percent ? `Beneficio: ${percent}.` : "",
+        item.vigencia_hasta ? `Vigente hasta ${formatDate(item.vigencia_hasta)}.` : ""
+      ]
+        .filter(Boolean)
+        .map(cleanLine)
+        .join(" ");
+
+      return `
+        <div class="promo-item ${item.kind === "discount" ? "discount-item" : ""}">
+          <strong>${escapeHtml(item.nombre || (item.kind === "discount" ? "Descuento" : "Promoción"))}</strong>
+          ${detail ? `<p>${nl2br(detail)}</p>` : ""}
+        </div>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="promos-box">
+      <div class="mini-title">Promociones y descuentos</div>
+      ${etiquetaHtml}
+      ${itemsHtml}
+    </div>
+  `;
+}
+
+function renderTarifasPasajeros(combinacion: PresupuestoCombinacion): string {
+  const tarifas = getTarifasPasajeros(combinacion);
+
+  if (!tarifas.length) return "";
+
+  const rows = tarifas
+    .map((tarifa) => {
+      const moneda = tarifa.moneda || combinacion.moneda || "USD";
+
+      return `
+        <tr>
+          <td>
+            <strong>${escapeHtml(tarifa.descripcion || tarifa.nombre || tarifa.tipo || "Tarifa")}</strong>
+            ${tarifa.notas ? `<small>${escapeHtml(tarifa.notas)}</small>` : ""}
+          </td>
+          <td>${tarifa.cantidad || "—"}</td>
+          <td>${tarifa.precio_unitario ? formatMoneyAR(tarifa.precio_unitario, moneda) : "—"}</td>
+          <td>${tarifa.subtotal ? formatMoneyAR(tarifa.subtotal, moneda) : "—"}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="rates-box">
+      <div class="mini-title">Detalle por pasajero / tipo de tarifa</div>
+      <table class="rates-table">
+        <thead>
+          <tr>
+            <th>Tarifa</th>
+            <th>Cant.</th>
+            <th>Unitario</th>
+            <th>Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function getCombinacionResourceIds(combinacion: PresupuestoCombinacion): {
+  vuelosIds: string[];
+  hotelesIds: string[];
+  serviciosIds: string[];
+} {
+  const metadata = getMetadata(combinacion);
+
+  return {
+    vuelosIds: getStringArrayFromMetadata(metadata, "vuelos_ids", "vuelo_ids"),
+    hotelesIds: getStringArrayFromMetadata(metadata, "hoteles_ids", "hotel_ids"),
+    serviciosIds: getStringArrayFromMetadata(metadata, "servicios_ids", "servicio_ids")
+  };
+}
+
+function getResourcesForCombinacion(
+  combinacion: PresupuestoCombinacion,
+  vuelos: PresupuestoVuelo[],
+  hoteles: PresupuestoHotel[],
+  servicios: PresupuestoServicio[]
+): {
+  vuelosUsados: PresupuestoVuelo[];
+  hotelesUsados: PresupuestoHotel[];
+  serviciosUsados: PresupuestoServicio[];
+} {
+  const { vuelosIds, hotelesIds, serviciosIds } = getCombinacionResourceIds(combinacion);
+
+  return {
+    vuelosUsados: vuelosIds.length ? vuelos.filter((item) => idsMatch(item.id, vuelosIds)) : vuelos,
+    hotelesUsados: hotelesIds.length ? hoteles.filter((item) => idsMatch(item.id, hotelesIds)) : hoteles,
+    serviciosUsados: serviciosIds.length
+      ? servicios.filter((item) => idsMatch(item.id, serviciosIds))
+      : servicios
+  };
+}
+
+function renderOptionFlightResource(vuelo: PresupuestoVuelo, index: number): string {
+  const titulo = getStringFromAny(vuelo.titulo, vuelo.ruta_resumen, `Aéreo ${index + 1}`);
+  const ruta = getStringFromAny(vuelo.ruta_resumen);
+  const texto = renderVueloTextoComplementario(vuelo);
+  const equipaje = cleanLine(vuelo.equipaje);
+  const tableHtml = (() => {
+    const legs = parseFlightLegsFromStructured(vuelo);
+    const fallbackLegs = legs.length ? legs : parseFlightLegsFromLines(vuelo);
+    const directionRows = buildFlightRowsFromVuelo(vuelo);
+
+    if (fallbackLegs.length) return renderFlightLegsTable(fallbackLegs);
+    return renderFlightRowsTable(directionRows);
+  })();
+
+  const imageHtml = vuelo.captura_url
+    ? `
+      <div class="option-flight-image">
+        <img src="${escapeHtml(vuelo.captura_url)}" alt="${escapeHtml(titulo)}" />
+      </div>
+    `
+    : "";
+
+  return `
+    <article class="option-resource-card option-flight-card">
+      <div class="option-resource-head">
+        <div>
+          <div class="option-resource-kicker">Aéreo</div>
+          <h4>${escapeHtml(titulo)}</h4>
+          ${ruta ? `<p>${escapeHtml(ruta)}</p>` : ""}
+        </div>
+      </div>
+
+      ${imageHtml}
+
+      ${
+        !imageHtml && tableHtml
+          ? `
+            <div class="option-flight-table">
+              ${tableHtml}
+            </div>
+          `
+          : ""
+      }
+
+      ${
+        equipaje
+          ? `
+            <div class="option-resource-note">
+              <strong>Equipaje</strong>
+              <span>${escapeHtml(equipaje)}</span>
+            </div>
+          `
+          : ""
+      }
+
+      ${
+        texto && !vuelo.captura_url
+          ? `
+            <div class="option-resource-text">
+              ${nl2br(texto)}
+            </div>
+          `
+          : ""
       }
     </article>
   `;
 }
 
-function renderPaymentGrid(combinacion: PresupuestoCombinacion): string {
-  const items = [
+function renderOptionHotelResource(hotel: PresupuestoHotel, index: number): string {
+  const nombre = getStringFromAny(hotel.nombre, hotel.titulo, `Hotel ${index + 1}`);
+  const destino = getStringFromAny(hotel.destino);
+  const zona = getStringFromAny(hotel.zona);
+  const regimen = getStringFromAny(hotel.regimen);
+  const habitacion = getStringFromAny(hotel.habitacion);
+  const categoria = getStringFromAny(hotel.categoria);
+  const stars = renderHotelStars(categoria);
+  const { rating, userRatingsTotal } = getHotelRatingData(hotel);
+  const galleryHtml = renderHotelPhotos(hotel, nombre);
+
+  const facts = [
+    { label: "Destino", value: destino },
+    { label: "Zona", value: zona },
+    { label: "Check in", value: formatDate(hotel.check_in) },
+    { label: "Check out", value: formatDate(hotel.check_out) },
+    { label: "Noches", value: hotel.noches ? `${hotel.noches}` : "" },
+    { label: "Régimen", value: regimen },
+    { label: "Habitación", value: habitacion },
+    { label: "Categoría", value: stars || categoria }
+  ];
+
+  const description = getHotelDescription(hotel);
+
+  return `
+    <article class="option-resource-card option-hotel-card">
+      <div class="option-resource-head">
+        <div>
+          <div class="option-resource-kicker">Hotel</div>
+          <h4>${escapeHtml(nombre)}</h4>
+
+          ${renderHotelBadges({
+            destino,
+            regimen,
+            stars,
+            rating,
+            userRatingsTotal
+          })}
+        </div>
+      </div>
+
+      ${galleryHtml}
+
+      <div class="compact-hotel-data">
+        ${renderHotelDataCard(facts)}
+      </div>
+
+      ${
+        description
+          ? `
+            <div class="option-resource-text">
+              ${nl2br(description)}
+            </div>
+          `
+          : ""
+      }
+    </article>
+  `;
+}
+
+function renderOptionServiceResources(servicios: PresupuestoServicio[]): string {
+  if (!servicios.length) return "";
+
+  return `
+    <div class="option-services-box">
+      <div class="option-resource-kicker">Servicios</div>
+
+      <div class="option-services-grid">
+        ${servicios
+          .map(
+            (servicio) => `
+              <div class="option-service-item">
+                <strong>${escapeHtml(servicio.nombre || "Servicio")}</strong>
+                ${
+                  servicio.descripcion
+                    ? `<span>${escapeHtml(cleanLine(servicio.descripcion))}</span>`
+                    : ""
+                }
+              </div>
+            `
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderOptionResourceBundle(
+  combinacion: PresupuestoCombinacion,
+  vuelos: PresupuestoVuelo[],
+  hoteles: PresupuestoHotel[],
+  servicios: PresupuestoServicio[],
+  index: number
+): string {
+  const { vuelosUsados, hotelesUsados, serviciosUsados } = getResourcesForCombinacion(
+    combinacion,
+    vuelos,
+    hoteles,
+    servicios
+  );
+
+  const titulo = combinacion.nombre || `Opción ${index + 1}`;
+
+  return `
+    <div class="option-bundle">
+      <div class="option-bundle-title">
+        <span>Opción ${index + 1}</span>
+        <strong>${escapeHtml(titulo)}</strong>
+      </div>
+
+      <div class="option-bundle-stack">
+        ${vuelosUsados.map((vuelo, vueloIndex) => renderOptionFlightResource(vuelo, vueloIndex)).join("")}
+        ${hotelesUsados.map((hotel, hotelIndex) => renderOptionHotelResource(hotel, hotelIndex)).join("")}
+        ${renderOptionServiceResources(serviciosUsados)}
+      </div>
+    </div>
+  `;
+}
+
+function renderIncludedExcluded(combinacion: PresupuestoCombinacion): string {
+  const incluye = getBlockFromAny(combinacion.incluye_resumen);
+  const noIncluye = getBlockFromAny(combinacion.no_incluye_resumen);
+
+  if (!incluye && !noIncluye) return "";
+
+  return `
+    <div class="included-grid">
+      ${
+        incluye
+          ? `
+            <div class="included-box positive">
+              <div class="mini-title">Incluye</div>
+              <div>${nl2br(incluye)}</div>
+            </div>
+          `
+          : ""
+      }
+
+      ${
+        noIncluye
+          ? `
+            <div class="included-box negative">
+              <div class="mini-title">No incluye</div>
+              <div>${nl2br(noIncluye)}</div>
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderMainPrice(
+  combinacion: PresupuestoCombinacion,
+  presupuesto: PresupuestoV2
+): string {
+  const metadata = getMetadata(combinacion);
+  const total = combinacion.precio_total || 0;
+  const moneda = combinacion.moneda || presupuesto.moneda_principal || "USD";
+  const totalPax = getTotalPax(presupuesto);
+  const showPerPassenger = metadataBool(metadata, "mostrar_precio_por_pasajero", false);
+  const priceLabel = getStringFromAny(metadata.precio_label, "Precio total");
+  const composicion = getBlockFromAny(metadata.composicion_precio_texto);
+
+  const perPassenger = showPerPassenger && totalPax > 0 ? total / totalPax : null;
+
+  return `
+    <div class="main-price-box">
+      <div>
+        <div class="price-label">${escapeHtml(priceLabel)}</div>
+        <div class="main-price">${formatMoneyAR(total, moneda)}</div>
+        ${
+          composicion
+            ? `<div class="price-composition">${nl2br(composicion)}</div>`
+            : ""
+        }
+      </div>
+
+      ${
+        perPassenger
+          ? `
+            <div class="per-pax-price">
+              <span>Referencia por pasajero</span>
+              <strong>${formatMoneyAR(perPassenger, moneda)}</strong>
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderAlternativePrices(combinacion: PresupuestoCombinacion): string {
+  const moneda = combinacion.moneda || "USD";
+
+  const prices = [
     combinacion.precio_contado
-      ? renderInfoItem("Contado", formatMoneyAR(combinacion.precio_contado, combinacion.moneda))
-      : "",
+      ? { label: "Contado", value: formatMoneyAR(combinacion.precio_contado, moneda) }
+      : null,
     combinacion.precio_transferencia
-      ? renderInfoItem("Transferencia", formatMoneyAR(combinacion.precio_transferencia, combinacion.moneda))
-      : "",
+      ? { label: "Transferencia", value: formatMoneyAR(combinacion.precio_transferencia, moneda) }
+      : null,
     combinacion.precio_tarjeta
-      ? renderInfoItem("Tarjeta", formatMoneyAR(combinacion.precio_tarjeta, combinacion.moneda))
-      : "",
-    combinacion.seña ? renderInfoItem("Seña", formatMoneyAR(combinacion.seña, combinacion.moneda)) : "",
-    combinacion.saldo ? renderInfoItem("Saldo", formatMoneyAR(combinacion.saldo, combinacion.moneda)) : ""
+      ? { label: "Tarjeta", value: formatMoneyAR(combinacion.precio_tarjeta, moneda) }
+      : null,
+    combinacion.precio_financiado
+      ? { label: "Financiado", value: formatMoneyAR(combinacion.precio_financiado, moneda) }
+      : null
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
+
+  if (!prices.length) return "";
+
+  return `
+    <div class="alt-prices">
+      ${prices
+        .map(
+          (price) => `
+            <div class="alt-price-item">
+              <span>${escapeHtml(price.label)}</span>
+              <strong>${escapeHtml(price.value)}</strong>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderOptionCommercialConditions(combinacion: PresupuestoCombinacion): string {
+  const content = [
+    renderTarifasPasajeros(combinacion),
+    renderPromosAndDiscounts(combinacion),
+    renderFlexiblePayments(combinacion),
+    renderIncludedExcluded(combinacion)
   ]
     .filter(Boolean)
     .join("");
 
-  if (!items) return "";
+  if (!content) return "";
 
-  return `<div class="payment-grid">${items}</div>`;
+  return `
+    <div class="option-commercial-extra">
+      ${content}
+    </div>
+  `;
 }
 
 function renderCombinacionCard(
   combinacion: PresupuestoCombinacion,
-  presupuesto: PresupuestoV2,
+  vuelos: PresupuestoVuelo[],
+  hoteles: PresupuestoHotel[],
+  servicios: PresupuestoServicio[],
+  index: number,
   recommendedId: string | null
 ): string {
-  const pax = getTotalPax(presupuesto);
-  const precioPorPasajero = combinacion.precio_total / pax;
-  const isRecommended = recommendedId === combinacion.id;
+  const isRecommended =
+    recommendedId === combinacion.id ||
+    (!recommendedId && combinacion.destacada) ||
+    index === 0;
+
+  const titulo = getStringFromAny(combinacion.nombre, `Opción ${index + 1}`);
+  const subtitulo = getStringFromAny(combinacion.subtitulo);
+  const descripcion = getBlockFromAny(combinacion.descripcion);
 
   return `
     <article class="option-card ${isRecommended ? "recommended" : ""}">
       <div class="option-head">
         <div>
-          <div class="eyebrow">${isRecommended ? "Opción destacada" : combinacion.etiqueta || "Opción"}</div>
-          <h3>${escapeHtml(combinacion.nombre || "Opción")}</h3>
-          ${combinacion.subtitulo ? `<p>${escapeHtml(combinacion.subtitulo)}</p>` : ""}
+          <div class="option-kicker">
+            ${isRecommended ? "Opción sugerida" : `Opción ${index + 1}`}
+          </div>
+
+          <h3>${escapeHtml(titulo)}</h3>
+
+          ${subtitulo ? `<p>${escapeHtml(subtitulo)}</p>` : ""}
         </div>
 
-        <div class="price-box">
-          <small>Precio total</small>
-          <strong>${formatMoneyAR(combinacion.precio_total, combinacion.moneda)}</strong>
-          <em>${formatMoneyAR(precioPorPasajero, combinacion.moneda)} por pasajero</em>
-        </div>
-      </div>
-
-      ${combinacion.descripcion ? `<div class="text-box">${nl2br(combinacion.descripcion)}</div>` : ""}
-      ${renderPaymentGrid(combinacion)}
-
-      ${
-        combinacion.forma_pago_resumen
-          ? `
-            <div class="included-box blue-box">
-              <strong>Forma de pago</strong>
-              <div>${nl2br(combinacion.forma_pago_resumen)}</div>
-            </div>
-          `
-          : ""
-      }
-
-      ${
-        combinacion.incluye_resumen
-          ? `
-            <div class="included-box">
-              <strong>Incluye</strong>
-              <div>${nl2br(combinacion.incluye_resumen)}</div>
-            </div>
-          `
-          : ""
-      }
-
-      ${
-        combinacion.no_incluye_resumen
-          ? `
-            <div class="small-note">
-              <strong>No incluye:</strong><br />
-              ${nl2br(combinacion.no_incluye_resumen)}
-            </div>
-          `
-          : ""
-      }
-
-      ${
-        combinacion.condiciones_pago
-          ? `
-            <div class="small-note">
-              <strong>Condiciones de pago:</strong><br />
-              ${nl2br(combinacion.condiciones_pago)}
-            </div>
-          `
-          : ""
-      }
-
-      ${combinacion.notas ? `<div class="small-note">${nl2br(combinacion.notas)}</div>` : ""}
-    </article>
-  `;
-}
-
-function renderResumenViaje(presupuesto: PresupuestoV2): string {
-  const items = [
-    renderInfoItem("Cliente", getDisplayName(presupuesto)),
-    renderInfoItem("Teléfono", presupuesto.cliente_telefono),
-    renderInfoItem("Email", presupuesto.cliente_email),
-    renderInfoItem("Destino", presupuesto.destino_detalle || presupuesto.destino_principal),
-    renderInfoItem("Salida", formatDate(presupuesto.fecha_salida)),
-    renderInfoItem("Regreso", formatDate(presupuesto.fecha_regreso)),
-    renderInfoItem("Pasajeros", getPasajerosLabel(presupuesto)),
-    renderInfoItem("Noches", presupuesto.noches ?? "—"),
-    renderInfoItem("Validez", presupuesto.validez_hasta || "Sujeto a disponibilidad")
-  ]
-    .filter(Boolean)
-    .join("");
-
-  return `<div class="client-grid">${items}</div>`;
-}
-
-function renderRecommendedHero(recommended: PresupuestoCombinacion, presupuesto: PresupuestoV2): string {
-  const pax = getTotalPax(presupuesto);
-  const precioPorPasajero = recommended.precio_total / pax;
-
-  return `
-    <div class="recommended-hero compact-price-hero">
-      <div class="compact-price-left">
-        <div class="eyebrow">Opción destacada</div>
-        <h2>${escapeHtml(recommended.nombre || "Opción")}</h2>
         ${
-          recommended.subtitulo || recommended.descripcion
-            ? `<p>${escapeHtml(recommended.subtitulo || recommended.descripcion)}</p>`
+          combinacion.etiqueta
+            ? `<span class="option-tag">${escapeHtml(combinacion.etiqueta)}</span>`
             : ""
         }
       </div>
 
-      <div class="compact-price-right">
-        <span>Precio total del paquete</span>
-        <strong>${formatMoneyAR(recommended.precio_total, recommended.moneda)}</strong>
-        <em>${formatMoneyAR(precioPorPasajero, recommended.moneda)} por pasajero</em>
+      ${descripcion ? `<div class="option-description">${nl2br(descripcion)}</div>` : ""}
+
+      ${renderOptionResourceBundle(combinacion, vuelos, hoteles, servicios, index)}
+    </article>
+  `;
+}
+
+function renderCombinacionPriceCard(
+  combinacion: PresupuestoCombinacion,
+  presupuesto: PresupuestoV2,
+  index: number,
+  recommendedId: string | null
+): string {
+  const isRecommended =
+    recommendedId === combinacion.id ||
+    (!recommendedId && combinacion.destacada) ||
+    index === 0;
+
+  const titulo = getStringFromAny(combinacion.nombre, `Opción ${index + 1}`);
+  const subtitulo = getStringFromAny(combinacion.subtitulo);
+  const descripcion = getBlockFromAny(combinacion.descripcion);
+
+  return `
+    <article class="price-option-card ${isRecommended ? "recommended" : ""}">
+      <div class="option-head">
+        <div>
+          <div class="option-kicker">
+            ${isRecommended ? "Opción sugerida" : `Opción ${index + 1}`}
+          </div>
+
+          <h3>${escapeHtml(titulo)}</h3>
+
+          ${subtitulo ? `<p>${escapeHtml(subtitulo)}</p>` : ""}
+        </div>
+
+        ${
+          combinacion.etiqueta
+            ? `<span class="option-tag">${escapeHtml(combinacion.etiqueta)}</span>`
+            : ""
+        }
       </div>
 
-      ${
-        recommended.forma_pago_resumen
-          ? `<div class="compact-price-payment">${escapeHtml(recommended.forma_pago_resumen)}</div>`
-          : ""
-      }
+      ${descripcion ? `<div class="option-description">${nl2br(descripcion)}</div>` : ""}
+
+      <div class="option-price-zone">
+        ${renderMainPrice(combinacion, presupuesto)}
+        ${renderAlternativePrices(combinacion)}
+        ${renderOptionCommercialConditions(combinacion)}
+      </div>
+    </article>
+  `;
+}
+
+function renderOpcionesSection(
+  presupuesto: PresupuestoV2,
+  vuelos: PresupuestoVuelo[],
+  hoteles: PresupuestoHotel[],
+  servicios: PresupuestoServicio[],
+  combinaciones: PresupuestoCombinacion[]
+): string {
+  const visibles = dedupeCombinaciones(combinaciones).filter((item) => item.visible_en_pdf !== false);
+
+  if (!visibles.length) return "";
+
+  const recommended = getRecommendedCombinacion(presupuesto, visibles);
+  const recommendedId = recommended?.id || null;
+
+  const content = `
+    <div class="options-stack">
+      ${visibles
+        .map((combinacion, index) =>
+      renderCombinacionCard(
+  combinacion,
+  vuelos,
+  hoteles,
+  servicios,
+  index,
+  recommendedId
+)
+        )
+        .join("")}
     </div>
   `;
+
+  return renderSection("Opciones presupuestadas", content, "options-section");
+}
+
+function renderPreciosSection(
+  presupuesto: PresupuestoV2,
+  combinaciones: PresupuestoCombinacion[]
+): string {
+  const visibles = dedupeCombinaciones(combinaciones).filter((item) => item.visible_en_pdf !== false);
+
+  if (!visibles.length) return "";
+
+  const recommended = getRecommendedCombinacion(presupuesto, visibles);
+  const recommendedId = recommended?.id || null;
+
+  const content = `
+    <div class="prices-stack">
+      ${visibles
+        .map((combinacion, index) =>
+          renderCombinacionPriceCard(combinacion, presupuesto, index, recommendedId)
+        )
+        .join("")}
+    </div>
+  `;
+
+  return renderSection("Precios y formas de pago", content, "prices-section");
+}
+
+function renderOptionSummaryRow(
+  combinacion: PresupuestoCombinacion,
+  index: number,
+  recommendedId: string | null,
+  vuelos: PresupuestoVuelo[],
+  hoteles: PresupuestoHotel[],
+  servicios: PresupuestoServicio[]
+): string {
+  const isRecommended =
+    recommendedId === combinacion.id ||
+    (!recommendedId && combinacion.destacada) ||
+    index === 0;
+
+  const { vuelosIds, hotelesIds, serviciosIds } = getCombinacionResourceIds(combinacion);
+
+  const vuelosUsados = vuelosIds.length
+    ? vuelos.filter((item) => idsMatch(item.id, vuelosIds))
+    : vuelos;
+
+  const hotelesUsados = hotelesIds.length
+    ? hoteles.filter((item) => idsMatch(item.id, hotelesIds))
+    : hoteles;
+
+  const serviciosUsados = serviciosIds.length
+    ? servicios.filter((item) => idsMatch(item.id, serviciosIds))
+    : servicios;
+
+  const combo = [
+    vuelosUsados
+      .map((item) => getStringFromAny(item.titulo, item.ruta_resumen, item.aerolinea, "Aéreo"))
+      .filter(Boolean)
+      .join(" + "),
+    hotelesUsados
+      .map((item) => getStringFromAny(item.nombre, item.titulo, "Hotel"))
+      .filter(Boolean)
+      .join(" + "),
+    serviciosUsados
+      .map((item) => getStringFromAny(item.nombre, item.tipo, "Servicio"))
+      .filter(Boolean)
+      .join(" + ")
+  ]
+    .filter(Boolean)
+    .join(" + ");
+
+  return `
+    <tr>
+      <td>
+        <strong>${escapeHtml(combinacion.nombre || `Opción ${index + 1}`)}</strong>
+        ${combinacion.subtitulo ? `<small>${escapeHtml(combinacion.subtitulo)}</small>` : ""}
+      </td>
+
+      <td>
+        ${escapeHtml(combo || "Combinación según detalle")}
+      </td>
+
+      <td>
+        ${formatMoneyAR(combinacion.precio_total || 0, combinacion.moneda || "USD")}
+      </td>
+
+      <td>
+        ${isRecommended ? `<span class="summary-recommended">Sugerida</span>` : ""}
+        ${combinacion.etiqueta ? `<span class="summary-tag">${escapeHtml(combinacion.etiqueta)}</span>` : ""}
+      </td>
+    </tr>
+  `;
+}
+
+function renderOptionsSummary(
+  combinaciones: PresupuestoCombinacion[],
+  recommendedId: string | null,
+  vuelos: PresupuestoVuelo[],
+  hoteles: PresupuestoHotel[],
+  servicios: PresupuestoServicio[]
+): string {
+  const visibles = dedupeCombinaciones(combinaciones).filter((item) => item.visible_en_pdf !== false);
+
+  if (visibles.length <= 1) return "";
+
+  return `
+    <section class="section options-summary-section">
+      <div class="section-title">
+        <h2>Resumen rápido de opciones</h2>
+        <span></span>
+      </div>
+
+      <div class="summary-table-wrap">
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>Opción</th>
+              <th>Combinación</th>
+              <th>Precio</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${visibles
+              .map((item, index) =>
+                renderOptionSummaryRow(item, index, recommendedId, vuelos, hoteles, servicios)
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+/* =========================================================
+   RESUMEN / INTRO / CONDICIONES
+========================================================= */
+
+function getDestinosPresupuestadosData(presupuesto: PresupuestoV2): PresupuestoDestinoPdf[] {
+  const metadata = getMetadata(presupuesto);
+  const extra = getPresupuestoExtra(presupuesto);
+
+  const raw =
+    metadata.destinos_presupuestados ||
+    metadata.destinos ||
+    extra.destinos_presupuestados ||
+    extra.destinos;
+
+  if (Array.isArray(raw)) {
+    const destinos = raw
+      .map((item): PresupuestoDestinoPdf | null => {
+        if (typeof item === "string") {
+          const clean = cleanLine(item);
+
+          if (!clean) return null;
+
+          return {
+            pais: "",
+            destino: clean
+          };
+        }
+
+        if (item && typeof item === "object" && !Array.isArray(item)) {
+          const record = item as SafeRecord;
+
+          const pais = getStringFromAny(
+            record.pais,
+            record.country,
+            record.pais_nombre,
+            record.country_name
+          );
+
+          const destino = getStringFromAny(
+            record.destino,
+            record.destination,
+            record.ciudad,
+            record.city,
+            record.nombre,
+            record.name
+          );
+
+          if (!pais && !destino) return null;
+
+          return {
+            pais,
+            destino
+          };
+        }
+
+        return null;
+      })
+      .filter((item): item is PresupuestoDestinoPdf => Boolean(item));
+
+    if (destinos.length) return destinos;
+  }
+
+  if (typeof raw === "string" && hasText(raw)) {
+    return raw
+      .split(/[,\n;]/)
+      .map(cleanLine)
+      .filter(Boolean)
+      .map((item) => ({
+        pais: "",
+        destino: item
+      }));
+  }
+
+  const fallbackDestino = getStringFromAny(presupuesto.destino_principal);
+  const fallbackPais = getStringFromAny(presupuesto.destino_detalle);
+
+  if (fallbackDestino) {
+    return [
+      {
+        pais: fallbackPais,
+        destino: fallbackDestino
+      }
+    ];
+  }
+
+  return [];
+}
+
+function formatDestinoPdfItem(item: PresupuestoDestinoPdf): string {
+  const destino = cleanLine(item.destino);
+  const pais = cleanLine(item.pais);
+
+  if (destino && pais) return `${destino}, ${pais}`;
+  return destino || pais;
+}
+
+function getDestinoPresupuestoLabel(presupuesto: PresupuestoV2): string {
+  const destinos = getDestinosPresupuestadosData(presupuesto);
+
+  if (destinos.length) {
+    return destinos
+      .map(formatDestinoPdfItem)
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  return "Viaje a cotizar";
+}
+
+function getDestinoPresupuestoResumen(presupuesto: PresupuestoV2): string {
+  const destinos = getDestinosPresupuestadosData(presupuesto);
+
+  if (destinos.length) {
+    return destinos
+      .map(formatDestinoPdfItem)
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return getDestinoPresupuestoLabel(presupuesto);
+}
+
+function getVendedorPresupuestoLabel(presupuesto: PresupuestoV2): string {
+  const extra = getPresupuestoExtra(presupuesto);
+  const metadata = getMetadata(presupuesto);
+
+  return getStringFromAny(
+    extra.vendedor_nombre,
+    extra.vendedor,
+    extra.vendedor_email,
+    metadata.vendedor_nombre,
+    metadata.vendedor,
+    metadata.vendedor_email
+  );
+}
+
+function getSucursalPresupuestoLabel(presupuesto: PresupuestoV2): string {
+  const extra = getPresupuestoExtra(presupuesto);
+  const metadata = getMetadata(presupuesto);
+
+  return getStringFromAny(
+    extra.sucursal_nombre,
+    extra.sucursal,
+    metadata.sucursal_nombre,
+    metadata.sucursal
+  );
+}
+
+function renderHero(presupuesto: PresupuestoV2): string {
+  const vendedor = getVendedorPresupuestoLabel(presupuesto);
+  const destino = getDestinoPresupuestoLabel(presupuesto);
+
+  return `
+    <section class="hero">
+      <div class="hero-left">
+        <div class="brand-row">
+          <img src="${escapeHtml(ALMUNDO_LOGO_URL)}" alt="Almundo" />
+          <span>Presupuesto de viaje</span>
+        </div>
+
+        <h1>${escapeHtml(getDisplayName(presupuesto))}</h1>
+
+        <p>${escapeHtml(destino)}</p>
+      </div>
+
+      <div class="hero-right">
+        <div class="hero-number">${escapeHtml(presupuesto.numero || "PRESUPUESTO")}</div>
+
+        ${
+          vendedor
+            ? `
+              <div class="hero-meta-label">Creado por</div>
+              <div class="hero-seller">${escapeHtml(vendedor)}</div>
+            `
+            : ""
+        }
+
+        <div class="hero-date">Emitido: ${formatDateTime(presupuesto.updated_at || presupuesto.created_at)}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderResumenSection(
+  presupuesto: PresupuestoV2,
+  combinaciones: PresupuestoCombinacion[]
+): string {
+  const recommended = getRecommendedCombinacion(presupuesto, combinaciones);
+  const vendedor = getVendedorPresupuestoLabel(presupuesto);
+  const sucursal = getSucursalPresupuestoLabel(presupuesto);
+  const destino = getDestinoPresupuestoResumen(presupuesto);
+
+  const resumenItems = [
+    { label: "Destino/s", value: destino, multiline: true },
+    { label: "Salida", value: formatDate(presupuesto.fecha_salida), multiline: false },
+    { label: "Regreso", value: formatDate(presupuesto.fecha_regreso), multiline: false },
+    { label: "Noches", value: presupuesto.noches ? `${presupuesto.noches}` : "", multiline: false },
+    { label: "Pasajeros", value: getPasajerosLabel(presupuesto), multiline: false },
+    { label: "Creado por", value: vendedor, multiline: false },
+    { label: "Sucursal", value: sucursal, multiline: false },
+    { label: "Opción sugerida", value: recommended?.nombre || "", multiline: false }
+  ].filter((item) => hasText(item.value));
+
+  if (!resumenItems.length) return "";
+
+  return renderSection(
+    "Resumen del viaje",
+    `
+      <div class="trip-summary-card">
+        ${resumenItems
+          .map(
+            (item) => `
+              <div class="trip-summary-row ${item.multiline ? "trip-summary-row-wide" : ""}">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${item.multiline ? nl2br(item.value) : escapeHtml(item.value)}</strong>
+              </div>
+            `
+          )
+          .join("")}
+      </div>
+    `
+  );
+}
+
+function renderIntroSection(presupuesto: PresupuestoV2): string {
+  const extra = getPresupuestoExtra(presupuesto);
+  const metadata = getMetadata(presupuesto);
+
+  const intro = getBlockFromAny(
+    extra.introduccion,
+    extra.descripcion,
+    extra.notas,
+    metadata.introduccion,
+    metadata.descripcion,
+    metadata.notas,
+    metadata.detalle_propuesta
+  );
+
+  if (!intro) return "";
+
+  return renderSection(
+    "Detalle de la propuesta",
+    `
+      <div class="intro-box">
+        ${nl2br(intro)}
+      </div>
+    `
+  );
+}
+
+function renderCondicionesSection(presupuesto: PresupuestoV2): string {
+  const metadata = getMetadata(presupuesto);
+  const condiciones = getBlockFromAny(
+    presupuesto.condiciones_generales,
+    metadata.condiciones_generales,
+    metadata.condiciones,
+    metadata.notas_legales
+  );
+
+  const fallback = `
+    Tarifas sujetas a disponibilidad y modificación al momento de reservar.
+    La reserva queda confirmada únicamente contra pago y emisión correspondiente.
+    Documentación, visados, vacunas y requisitos migratorios son responsabilidad del pasajero.
+    Los servicios se rigen por las condiciones de cada proveedor.
+  `;
+
+  return renderSection(
+    "Condiciones generales",
+    `
+      <div class="conditions-box">
+        ${nl2br(condiciones || fallback)}
+      </div>
+    `
+  );
 }
 
 function renderFooter(presupuesto: PresupuestoV2): string {
   return `
     <footer class="footer">
-      <div class="footer-title">ALMUNDO Franquicia Córdoba</div>
-      <div class="footer-text">${nl2br(presupuesto.footer_text)}</div>
+      <div>
+        <strong>NOSSIX · ALMUNDO</strong>
+        <span>Acompañamiento antes, durante y después del viaje.</span>
+      </div>
+
+      <div>
+        ${presupuesto.cliente_email ? escapeHtml(presupuesto.cliente_email) : ""}
+        ${presupuesto.cliente_telefono ? ` · ${escapeHtml(presupuesto.cliente_telefono)}` : ""}
+      </div>
     </footer>
   `;
 }
 
 /* =========================================================
-   HTML PRINCIPAL
+   HTML FINAL
 ========================================================= */
 
 export function buildPresupuestoHtml(data: PresupuestoPdfData): string {
-  const { presupuesto } = data;
-
-  const vuelos = dedupeVuelos(data.vuelos.filter((item) => item.incluir_en_pdf !== false));
-  const hoteles = dedupeHoteles(data.hoteles.filter((item) => item.incluir_en_pdf !== false));
-  const servicios = dedupeServicios(data.servicios.filter((item) => item.incluir_en_pdf !== false));
-  const combinaciones = dedupeCombinaciones(
-    data.combinaciones.filter((item) => item.visible_en_pdf !== false)
-  );
-
+  const presupuesto = data.presupuesto;
+  const vuelos = dedupeVuelos(data.vuelos || []);
+  const hoteles = dedupeHoteles(data.hoteles || []);
+  const servicios = dedupeServicios(data.servicios || []);
+  const combinaciones = dedupeCombinaciones(data.combinaciones || []);
   const recommended = getRecommendedCombinacion(presupuesto, combinaciones);
   const recommendedId = recommended?.id || null;
 
-  const combinacionesSinRecomendada =
-    recommendedId && combinaciones.length > 1
-      ? combinaciones.filter((item) => item.id !== recommendedId)
-      : [];
+ const hero = renderHero(presupuesto);
 
-  const cliente = getDisplayName(presupuesto);
-  const titulo =
-    presupuesto.titulo ||
-    presupuesto.destino_detalle ||
-    presupuesto.destino_principal ||
-    "Propuesta de viaje";
+  const resumenSection = renderResumenSection(presupuesto, combinaciones);
+  const introSection = renderIntroSection(presupuesto);
 
-  const generatedAt = formatDateTime(new Date().toISOString());
+  const hasCommercialOptions = combinaciones.some((item) => item.visible_en_pdf !== false);
 
-  const resumenSection = renderSection("Datos del viaje", renderResumenViaje(presupuesto));
+  /*
+    IMPORTANTE:
+    - Cuando hay opciones comerciales, NO mostramos los recursos globales arriba.
+    - Cada opción muestra su propio vuelo + hotel + servicios.
+    - Después viene resumen rápido.
+    - Después precios y formas de pago.
+  */
+  const vuelosSection = hasCommercialOptions ? "" : renderVuelosSection(vuelos);
+  const hotelesSection = hasCommercialOptions ? "" : renderHotelesSection(hoteles);
+  const serviciosSection = hasCommercialOptions ? "" : renderServiciosSection(servicios);
 
-  const introSection = presupuesto.intro_comercial
-    ? renderSection("Propuesta comercial", `<div class="intro-box">${nl2br(presupuesto.intro_comercial)}</div>`)
-    : "";
+  const opcionesSection = renderOpcionesSection(
+    presupuesto,
+    vuelos,
+    hoteles,
+    servicios,
+    combinaciones
+  );
 
-  const vuelosSection = vuelos.length
-    ? renderSection("Vuelos", vuelos.map((vuelo) => renderVueloCard(vuelo)).join(""), "compact-section")
-    : "";
+  const optionsSummarySection = renderOptionsSummary(
+    combinaciones,
+    recommendedId,
+    vuelos,
+    hoteles,
+    servicios
+  );
 
-  const hotelesSection = hoteles.length
-    ? renderSection("Hotel", hoteles.map(renderHotelCard).join(""), "compact-section")
-    : "";
-
-  const serviciosSection = servicios.length
-    ? renderSection(
-        "Servicios incluidos y adicionales",
-        servicios.map(renderServicioCard).join(""),
-        "compact-section"
-      )
-    : "";
-
-  const recommendedSection = recommended
-    ? renderSection("Precio destacado", renderRecommendedHero(recommended, presupuesto))
-    : "";
-
-  const combinacionesSection = combinacionesSinRecomendada.length
-    ? renderSection(
-        "Otras opciones de precio",
-        combinacionesSinRecomendada
-          .map((item) => renderCombinacionCard(item, presupuesto, recommendedId))
-          .join("")
-      )
-    : "";
-
-  const condicionesSection = presupuesto.condiciones_generales
-    ? `
-      <section class="conditions">
-        <strong>Condiciones generales</strong><br />
-        ${nl2br(presupuesto.condiciones_generales)}
-      </section>
-    `
-    : "";
+  const preciosSection = renderPreciosSection(presupuesto, combinaciones);
+  const condicionesSection = renderCondicionesSection(presupuesto);
 
   return `
-<!doctype html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <title>${escapeHtml(presupuesto.numero || "Presupuesto NOSTUR")}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-  <style>
-    * {
-      box-sizing: border-box;
-      -webkit-print-color-adjust: exact !important;
-      print-color-adjust: exact !important;
-    }
-
-        .flight-capture {
-      overflow: hidden;
-      margin: -4px -4px 12px -4px;
-      border-radius: 18px;
-      border: 1px solid rgba(15, 23, 42, 0.08);
-      background: #f8fafc;
-    }
-
-    .flight-capture img {
-      display: block;
-      width: 100%;
-      max-height: 360px;
-      object-fit: contain;
-      background: #ffffff;
-    }
-
-    .flight-free-text {
-      margin-top: 10px;
-      border-radius: 16px;
-      padding: 11px 12px;
-      background: #f8fafc;
-      color: #334155;
-      font-size: 11px;
-      font-weight: 650;
-      line-height: 1.5;
-      white-space: normal;
-    }
-
-
-    html,
-    body {
-      margin: 0;
-      padding: 0;
-      background: #eef1f6;
-      color: #1f2937;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-      font-size: 12px;
-      line-height: 1.42;
-    }
-
-    body {
-      padding: 24px 0;
-    }
-
-    .preview-toolbar {
-      position: sticky;
-      top: 0;
-      z-index: 50;
-      width: 794px;
-      margin: 0 auto 14px auto;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 14px;
-      border: 1px solid rgba(15, 23, 42, 0.10);
-      border-radius: 20px;
-      background: rgba(255, 255, 255, 0.94);
-      backdrop-filter: blur(12px);
-      box-shadow: 0 16px 35px rgba(15, 23, 42, 0.10);
-    }
-
-    .preview-toolbar strong {
-      display: block;
-      font-size: 13px;
-      color: #111827;
-    }
-
-    .preview-toolbar span {
-      display: block;
-      margin-top: 2px;
-      font-size: 11px;
-      font-weight: 700;
-      color: #64748b;
-    }
-
-    .preview-toolbar button {
-      height: 38px;
-      border: 0;
-      border-radius: 14px;
-      padding: 0 16px;
-      background: #e95512;
-      color: #fff;
-      font-size: 12px;
-      font-weight: 900;
-      cursor: pointer;
-      box-shadow: 0 10px 22px rgba(233, 85, 18, 0.22);
-    }
-
-    .page {
-      width: 794px;
-      min-height: 1123px;
-      margin: 0 auto;
-      background: #ffffff;
-      border-radius: 22px;
-      overflow: hidden;
-      box-shadow: 0 28px 80px rgba(15, 23, 42, 0.18);
-    }
-
-    .cover {
-      position: relative;
-      padding: 24px 38px 24px 38px;
-      background:
-        radial-gradient(circle at 88% 12%, rgba(255, 255, 255, 0.20), transparent 28%),
-        linear-gradient(135deg, #f37021 0%, #e95512 42%, #d84b0f 100%);
-      color: #fff;
-    }
-
-    .brand-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 24px;
-    }
-
-    .brand-box {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 44px;
-      min-width: 160px;
-      padding: 8px 16px;
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.96);
-      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-    }
-
-    .brand-box img {
-      max-width: 150px;
-      max-height: 31px;
-      object-fit: contain;
-      display: block;
-    }
-
-    .brand-fallback {
-      color: #e95512;
-      font-size: 23px;
-      font-weight: 1000;
-      letter-spacing: -0.03em;
-    }
-
-    .doc-number {
-      text-align: right;
-      font-size: 10px;
-      font-weight: 800;
-      color: rgba(255, 255, 255, 0.86);
-    }
-
-    .doc-number strong {
-      display: block;
-      margin-top: 3px;
-      font-size: 15px;
-      color: #fff;
-    }
-
-    .cover-title {
-      margin-top: 24px;
-      max-width: none;
-    }
-
-    .cover-title-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 18px;
-      margin-top: 7px;
-      width: 100%;
-      flex-wrap: wrap;
-    }
-
-    .cover-title-row h1 {
-      margin: 0;
-      flex-shrink: 0;
-    }
-
-    .inline-badges {
-      margin-top: 0 !important;
-      justify-content: flex-end;
-      flex: 1;
-    }
-
-    .badges {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      margin-top: 0;
-    }
-
-    .cover-title .kicker {
-      font-size: 10px;
-      font-weight: 950;
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
-      color: rgba(255, 255, 255, 0.78);
-    }
-
-    .cover-title h1 {
-      margin: 7px 0 0 0;
-      font-size: 30px;
-      line-height: 1.05;
-      letter-spacing: -0.045em;
-      color: #fff;
-    }
-
-    .cover-title p {
-      margin: 8px 0 0 0;
-      font-size: 13px;
-      font-weight: 750;
-      color: rgba(255, 255, 255, 0.88);
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 24px;
-      padding: 5px 10px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.18);
-      color: #fff;
-      font-size: 9px;
-      font-weight: 950;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    .content {
-      padding: 22px 38px 28px 38px;
-    }
-
-    .section {
-      margin-bottom: 18px;
-      break-inside: avoid;
-      page-break-inside: avoid;
-    }
-
-    .compact-section {
-      margin-bottom: 16px;
-    }
-
-    .section-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      margin-bottom: 9px;
-    }
-
-    .section-title h2 {
-      margin: 0;
-      font-size: 16px;
-      line-height: 1.1;
-      letter-spacing: -0.025em;
-      color: #111827;
-    }
-
-    .section-title span {
-      height: 4px;
-      flex: 1;
-      border-radius: 999px;
-      background: linear-gradient(90deg, #f37021, rgba(243, 112, 33, 0));
-    }
-
-    .client-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 7px;
-      padding: 10px;
-      border: 1px solid rgba(15, 23, 42, 0.08);
-      border-radius: 20px;
-      background: #f8fafc;
-    }
-
-    .info-item {
-      min-height: 44px;
-      border: 0;
-      border-radius: 13px;
-      padding: 8px 9px;
-      background: #ffffff;
-    }
-
-    .info-label {
-      margin-bottom: 3px;
-      font-size: 7.8px;
-      font-weight: 950;
-      text-transform: uppercase;
-      letter-spacing: 0.13em;
-      color: #64748b;
-    }
-
-    .info-value {
-      font-size: 10.8px;
-      font-weight: 900;
-      color: #111827;
-    }
-
-    .intro-box,
-    .text-box {
-      border-radius: 16px;
-      padding: 11px 12px;
-      background: #f8fafc;
-      color: #334155;
-      font-size: 11px;
-      font-weight: 650;
-    }
-
-    .intro-box {
-      border: 1px solid rgba(243, 112, 33, 0.22);
-      background: #fff7ed;
-      color: #4b2a17;
-    }
-
-    .eyebrow {
-      font-size: 8.5px;
-      font-weight: 1000;
-      text-transform: uppercase;
-      letter-spacing: 0.15em;
-      color: #e95512;
-    }
-
-    .mini-badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 23px;
-      padding: 5px 9px;
-      border-radius: 999px;
-      background: #fff7ed;
-      color: #c2410c;
-      font-size: 8.5px;
-      font-weight: 950;
-      text-transform: uppercase;
-    }
-
-    .flight-card,
-    .hotel-card,
-    .option-card {
-      margin-bottom: 12px;
-      border: 1px solid rgba(15, 23, 42, 0.08);
-      border-radius: 22px;
-      background: #fff;
-      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.04);
-      padding: 14px;
-      break-inside: avoid;
-      page-break-inside: avoid;
-    }
-
-    .table-wrap {
-      overflow: hidden;
-      border: 1px solid rgba(15, 23, 42, 0.12);
-      border-radius: 16px;
-    }
-
-    .flight-table {
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
-    }
-
-    .flight-table th {
-      background: #f8fafc;
-      color: #475569;
-      font-size: 9px;
-      text-align: left;
-      font-weight: 1000;
-      padding: 8px 7px;
-      border-bottom: 1px solid rgba(15, 23, 42, 0.10);
-    }
-
-    .flight-table td {
-      padding: 9px 7px;
-      border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-      border-right: 1px solid rgba(15, 23, 42, 0.06);
-      color: #334155;
-      font-size: 9.4px;
-      font-weight: 760;
-      vertical-align: top;
-      overflow-wrap: anywhere;
-    }
-
-    .flight-table tr:last-child td {
-      border-bottom: 0;
-    }
-
-    .flight-table td:last-child {
-      border-right: 0;
-    }
-
-    .flight-table th:nth-child(1),
-    .flight-table td:nth-child(1) {
-      width: 10%;
-    }
-
-    .flight-table th:nth-child(2),
-    .flight-table td:nth-child(2) {
-      width: 16%;
-    }
-
-    .flight-table th:nth-child(3),
-    .flight-table td:nth-child(3),
-    .flight-table th:nth-child(4),
-    .flight-table td:nth-child(4) {
-      width: 15%;
-    }
-
-    .flight-table th:nth-child(5),
-    .flight-table td:nth-child(5),
-    .flight-table th:nth-child(6),
-    .flight-table td:nth-child(6) {
-      width: 8%;
-    }
-
-    .flight-table th:nth-child(7),
-    .flight-table td:nth-child(7) {
-      width: 10%;
-    }
-
-    .flight-table th:nth-child(8),
-    .flight-table td:nth-child(8) {
-      width: 18%;
-    }
-
-    .flight-table td strong {
-      display: block;
-      color: #111827;
-      font-size: 10.4px;
-      font-weight: 1000;
-    }
-
-    .flight-table td span {
-      display: block;
-      margin-top: 2px;
-      color: #64748b;
-      font-size: 9px;
-      font-weight: 800;
-    }
-
-    .flight-bottom-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-top: 10px;
-    }
-
-    .flight-note,
-    .small-note {
-      margin-top: 0;
-      border-radius: 15px;
-      padding: 10px 11px;
-      background: #fff7ed;
-      color: #7c2d12;
-      font-size: 10.5px;
-      font-weight: 650;
-    }
-
-    .flight-note strong {
-      display: block;
-      margin-bottom: 5px;
-      font-size: 9.5px;
-      font-weight: 1000;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-    }
-
-    .flight-note span {
-      display: block;
-      font-size: 11px;
-      font-weight: 850;
-    }
-
-    .hotel-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 14px;
-      margin-bottom: 10px;
-    }
-
-    .hotel-head h3 {
-      margin: 3px 0 0 0;
-      font-size: 18px;
-      letter-spacing: -0.025em;
-      color: #111827;
-    }
-
-    .hotel-head p {
-      margin: 3px 0 0 0;
-      color: #64748b;
-      font-weight: 850;
-      font-size: 12px;
-    }
-
-    .hotel-photo-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      grid-template-rows: 118px;
-      gap: 7px;
-      margin: -4px -4px 12px -4px;
-    }
-
-    .hotel-photo-grid.count-1 {
-      grid-template-columns: 1fr;
-      grid-template-rows: 190px;
-    }
-
-    .hotel-photo-grid.count-2 {
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: 170px;
-    }
-
-    .hotel-photo-grid.count-3 {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      grid-template-rows: 135px;
-    }
-
-    .hotel-photo-grid.count-4 {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      grid-template-rows: 118px;
-    }
-
-    .hotel-photo-grid div {
-      overflow: hidden;
-      border-radius: 16px;
-      background: #f1f5f9;
-    }
-
-    .hotel-photo-grid img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
-
-    .hotel-info-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-
-    .hotel-info-grid .info-item {
-      min-height: 52px;
-      padding: 9px 10px;
-      background: #f8fafc;
-    }
-
-    .hotel-google-box {
-      display: grid;
-      gap: 4px;
-      margin-top: 9px;
-      border-radius: 16px;
-      padding: 10px 11px;
-      background: #eff6ff;
-      color: #1d4ed8;
-      font-size: 10px;
-      font-weight: 750;
-      overflow-wrap: anywhere;
-    }
-
-    .hotel-google-box strong {
-      color: #1e3a8a;
-      font-weight: 1000;
-    }
-
-    .included-box {
-      margin-top: 10px;
-      border: 1px solid rgba(16, 185, 129, 0.18);
-      border-radius: 16px;
-      padding: 11px 12px;
-      background: #ecfdf5;
-      color: #065f46;
-      font-size: 11px;
-      font-weight: 650;
-    }
-
-    .included-box.blue-box {
-      border-color: rgba(14, 165, 233, 0.20);
-      background: #eff6ff;
-      color: #1d4ed8;
-    }
-
-    .included-box strong {
-      display: block;
-      margin-bottom: 5px;
-      font-size: 9.5px;
-      font-weight: 1000;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-    }
-
-    .visible-price {
-      margin-top: 9px;
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: center;
-      border-radius: 15px;
-      padding: 10px 11px;
-      background: #f8fafc;
-      border: 1px solid rgba(15, 23, 42, 0.08);
-    }
-
-    .visible-price span {
-      font-size: 9.5px;
-      font-weight: 1000;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: #64748b;
-    }
-
-    .visible-price strong {
-      font-size: 12.5px;
-      font-weight: 1000;
-      color: #111827;
-      white-space: nowrap;
-    }
-
-    .service-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 18px;
-      align-items: flex-start;
-      margin-bottom: 8px;
-      padding: 12px 13px;
-      border: 1px solid rgba(15, 23, 42, 0.08);
-      border-radius: 17px;
-      background: #f8fafc;
-      break-inside: avoid;
-      page-break-inside: avoid;
-    }
-
-    .service-title {
-      font-size: 12.5px;
-      font-weight: 950;
-      color: #111827;
-    }
-
-    .service-title span {
-      display: inline-flex;
-      margin-left: 6px;
-      padding: 3px 7px;
-      border-radius: 999px;
-      background: #dcfce7;
-      color: #166534;
-      font-size: 8.5px;
-      font-weight: 950;
-      text-transform: uppercase;
-    }
-
-    .service-title span.amber {
-      background: #fef3c7;
-      color: #92400e;
-    }
-
-    .service-desc {
-      margin-top: 4px;
-      color: #64748b;
-      font-size: 10.5px;
-      font-weight: 700;
-    }
-
-    .service-row > strong {
-      white-space: nowrap;
-      color: #111827;
-      font-size: 12px;
-      font-weight: 950;
-    }
-
-    .recommended-hero {
-      border: 1px solid rgba(16, 185, 129, 0.20);
-      border-radius: 22px;
-      background:
-        radial-gradient(circle at 90% 10%, rgba(16, 185, 129, 0.14), transparent 32%),
-        linear-gradient(135deg, #ecfdf5, #f8fafc);
-      break-inside: avoid;
-      page-break-inside: avoid;
-    }
-
-    .recommended-hero .eyebrow {
-      color: #047857;
-    }
-
-    .compact-price-hero {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      align-items: center;
-      gap: 18px;
-      padding: 16px 18px;
-    }
-
-    .compact-price-left h2 {
-      margin: 4px 0 0 0;
-      font-size: 19px;
-      letter-spacing: -0.035em;
-      color: #111827;
-    }
-
-    .compact-price-left p {
-      margin: 4px 0 0 0;
-      color: #475569;
-      font-size: 11.5px;
-      font-weight: 800;
-    }
-
-    .compact-price-right {
-      min-width: 250px;
-      text-align: right;
-    }
-
-    .compact-price-right span {
-      display: block;
-      font-size: 9px;
-      font-weight: 950;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: #64748b;
-    }
-
-    .compact-price-right strong {
-      display: block;
-      margin-top: 3px;
-      font-size: 25px;
-      line-height: 1;
-      letter-spacing: -0.05em;
-      color: #111827;
-    }
-
-    .compact-price-right em {
-      display: block;
-      margin-top: 5px;
-      font-style: normal;
-      font-size: 10.5px;
-      font-weight: 900;
-      color: #047857;
-    }
-
-    .compact-price-payment {
-      grid-column: 1 / -1;
-      margin-top: -6px;
-      color: #475569;
-      font-size: 10.5px;
-      font-weight: 750;
-    }
-
-    .option-card {
-      padding: 16px;
-      margin-bottom: 12px;
-      break-inside: avoid;
-      page-break-inside: avoid;
-    }
-
-    .option-card.recommended {
-      border-color: rgba(16, 185, 129, 0.22);
-      background: linear-gradient(135deg, #ecfdf5, #ffffff);
-    }
-
-    .option-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 18px;
-      align-items: flex-start;
-    }
-
-    .option-card h3 {
-      margin: 3px 0 0 0;
-      font-size: 16px;
-      letter-spacing: -0.025em;
-      color: #111827;
-    }
-
-    .option-card p {
-      margin: 4px 0 0 0;
-      color: #64748b;
-      font-weight: 700;
-      font-size: 11.5px;
-    }
-
-    .price-box {
-      min-width: 160px;
-      text-align: right;
-    }
-
-    .price-box small {
-      display: block;
-      margin-bottom: 4px;
-      color: #64748b;
-      font-size: 8.5px;
-      font-weight: 950;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-    }
-
-    .price-box strong {
-      display: block;
-      color: #111827;
-      font-size: 21px;
-      font-weight: 1000;
-      letter-spacing: -0.04em;
-    }
-
-    .price-box em {
-      display: block;
-      margin-top: 4px;
-      font-style: normal;
-      color: #047857;
-      font-size: 10px;
-      font-weight: 900;
-    }
-
-    .payment-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-      margin-top: 10px;
-    }
-
-    .conditions {
-      border-top: 1px solid rgba(15, 23, 42, 0.08);
-      margin-top: 20px;
-      padding-top: 14px;
-      color: #475569;
-      font-size: 10.5px;
-      font-weight: 650;
-      break-inside: avoid;
-      page-break-inside: avoid;
-    }
-
-    .conditions strong {
-      color: #111827;
-      font-size: 12px;
-      font-weight: 1000;
-    }
-
-    .footer {
-      margin-top: 20px;
-      border-top: 1px solid rgba(15, 23, 42, 0.08);
-      padding-top: 12px;
-      color: #64748b;
-      font-size: 9.5px;
-      font-weight: 750;
-      line-height: 1.45;
-      text-align: center;
-    }
-
-    .footer-title {
-      margin-bottom: 4px;
-      color: #111827;
-      font-size: 10.5px;
-      font-weight: 950;
-    }
-
-    .footer-text {
-      max-width: 620px;
-      margin: 0 auto;
-    }
-
-    .no-print {
-      display: block;
-    }
-
-    @media print {
-      @page {
-        size: A4;
-        margin: 14mm 0 16mm 0;
+    <!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(presupuesto.numero || "Presupuesto")}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        ${renderStyles()}
+      </head>
+
+      <body>
+        <div class="page">
+          ${hero}
+
+          <section class="content">
+            ${resumenSection}
+            ${introSection}
+            ${vuelosSection}
+            ${hotelesSection}
+            ${serviciosSection}
+            ${opcionesSection}
+            ${optionsSummarySection}
+            ${preciosSection}
+            ${condicionesSection}
+            ${renderFooter(presupuesto)}
+          </section>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+export function openPresupuestoPreview(data: PresupuestoPdfData): boolean {
+  const html = buildPresupuestoHtml(data);
+
+  try {
+    const blob = new Blob([html], {
+      type: "text/html;charset=utf-8"
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const preview = window.open(
+      url,
+      `presupuesto-${data.presupuesto.id || Date.now()}`,
+      "width=980,height=900"
+    );
+
+    if (!preview) {
+      URL.revokeObjectURL(url);
+      return false;
+    }
+
+    preview.focus();
+
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 60_000);
+
+    return true;
+  } catch (error) {
+    console.error("Error abriendo vista previa de presupuesto:", error);
+    return false;
+  }
+}
+function renderStyles(): string {
+  return `
+    <style>
+      :root {
+        --ink: #172033;
+        --muted: #64748b;
+        --soft: #f8fafc;
+        --line: rgba(15, 23, 42, 0.10);
+        --brand: #ff6a00;
+        --brand-soft: #fff7ed;
+        --orange: #ff6a00;
+        --green: #047857;
+        --green-soft: #ecfdf5;
+        --red: #b91c1c;
+        --red-soft: #fef2f2;
+        --amber: #b45309;
+        --amber-soft: #fffbeb;
+        --blue-soft: #eff6ff;
       }
 
-            .flight-capture img {
-        max-height: 78mm;
+      * {
+        box-sizing: border-box;
       }
 
       html,
       body {
-        width: 210mm;
-        min-height: 297mm;
-        background: #fff;
+        margin: 0;
         padding: 0;
+        background: #e8eef3;
+        color: var(--ink);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        font-size: 13px;
+        line-height: 1.55;
+        font-weight: 400;
       }
 
-      .no-print {
-        display: none !important;
+      body {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
       }
 
       .page {
         width: 210mm;
-        min-height: auto;
-        margin: 0;
-        border-radius: 0;
-        box-shadow: none;
-        overflow: visible;
+        min-height: 297mm;
+        margin: 0 auto;
+        background:
+          radial-gradient(circle at top left, rgba(255, 106, 0, 0.08), transparent 34%),
+          linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
       }
 
-      .cover {
-        margin-top: -14mm;
-        padding: 18mm 11mm 11mm 11mm;
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 230px;
+        gap: 24px;
+        padding: 26px 30px 24px;
+        background:
+          radial-gradient(circle at top right, rgba(255, 255, 255, 0.34), transparent 34%),
+          linear-gradient(135deg, #ff6a00 0%, #ff7a1a 42%, #f15a24 100%);
+        color: white;
+      }
+
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .brand-row img {
+        max-width: 155px;
+        max-height: 48px;
+        object-fit: contain;
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 14px;
+        padding: 8px 12px;
+      }
+
+      .brand-row span {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        border-radius: 999px;
+        padding: 4px 10px;
+        background: rgba(255, 255, 255, 0.20);
+        color: rgba(255, 255, 255, 0.86);
+        font-size: 10px;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.13em;
+      }
+
+      .hero h1 {
+        margin: 0;
+        max-width: 520px;
+        font-size: 28px;
+        line-height: 1.12;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+
+      .hero p {
+        margin: 10px 0 0;
+        max-width: 560px;
+        color: rgba(255, 255, 255, 0.84);
+        font-size: 13px;
+        font-weight: 450;
+        line-height: 1.5;
+      }
+
+      .hero-right {
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        padding: 16px;
+        text-align: right;
+      }
+
+      .hero-number {
+        margin-bottom: 14px;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .hero-meta-label {
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 10px;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+
+      .hero-seller {
+        margin-top: 4px;
+        color: #ffffff;
+        font-size: 18px;
+        line-height: 1.15;
+        font-weight: 850;
+        letter-spacing: -0.02em;
+      }
+
+      .hero-date {
+        margin-top: 14px;
+        color: rgba(255, 255, 255, 0.70);
+        font-size: 10.5px;
+        font-weight: 450;
       }
 
       .content {
-        padding: 11mm 10mm 14mm 10mm;
-      }
-
-      .section,
-      .flight-card,
-      .hotel-card,
-      .option-card,
-      .service-row,
-      .recommended-hero,
-      .conditions,
-      .footer {
-        break-inside: avoid;
-        page-break-inside: avoid;
+        padding: 22px 30px 28px;
       }
 
       .section {
-        margin-bottom: 15px;
+        margin-bottom: 24px;
       }
 
-      .flight-card,
-      .hotel-card,
-      .option-card {
+      .section-title {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 12px;
+      }
+
+      .section-title h2 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 15.5px;
+        line-height: 1.2;
+        font-weight: 800;
+        letter-spacing: -0.015em;
+      }
+
+      .section-title span {
+        height: 1px;
+        flex: 1;
+        background: var(--line);
+      }
+
+      /* =====================================================
+         RESUMEN VIAJE — UNA CARD GRANDE
+      ===================================================== */
+
+      .trip-summary-card {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow: hidden;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.90);
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.035);
+      }
+
+      .trip-summary-row {
+        min-width: 0;
+        padding: 13px 15px;
+        border-right: 1px solid rgba(15, 23, 42, 0.08);
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+      }
+
+      .trip-summary-row:nth-child(2n) {
+        border-right: 0;
+      }
+
+      .trip-summary-row:nth-last-child(-n + 2) {
+        border-bottom: 0;
+      }
+
+      .trip-summary-row span {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 9.5px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.10em;
+      }
+
+      .trip-summary-row strong {
+        display: block;
+        color: var(--ink);
+        font-size: 12.7px;
+        line-height: 1.38;
+        font-weight: 750;
+      }
+
+      .trip-summary-row-wide {
+  grid-column: 1 / -1;
+}
+
+.trip-summary-row-wide strong {
+  line-height: 1.55;
+}
+
+      .intro-box,
+      .text-box,
+      .conditions-box {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.78);
+        padding: 14px 15px;
+        color: #334155;
+        font-size: 12.5px;
+        font-weight: 450;
+        line-height: 1.58;
+      }
+
+      .conditions-box {
+        color: #475569;
+        font-size: 11.5px;
+      }
+
+      /* =====================================================
+         BADGES / BASE
+      ===================================================== */
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 21px;
+        max-width: 100%;
+        border-radius: 999px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.18);
+        padding: 3px 8px;
+        color: #c2410c;
+        font-size: 10.5px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 7px;
+      }
+
+      .resource-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+
+      .resource-header h3,
+      .service-card h3 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 15px;
+        line-height: 1.25;
+        font-weight: 760;
+        letter-spacing: -0.015em;
+      }
+
+      .resource-price {
+        white-space: nowrap;
+        border-radius: 13px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.18);
+        padding: 8px 10px;
+        color: #c2410c;
+        font-size: 12.5px;
+        font-weight: 760;
+      }
+
+      /* =====================================================
+         VUELOS — FORMATO GRÁFICO CON ESCALA VERDE
+      ===================================================== */
+
+      .flight-card {
+        margin-bottom: 12px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.88);
         box-shadow: none;
       }
 
-      .hotel-photo-grid.count-4 {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        grid-template-rows: 30mm;
+      .flight-capture {
+        overflow: hidden;
+        margin: 10px 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        background: #f8fafc;
       }
 
-      .hotel-photo-grid.count-3 {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        grid-template-rows: 34mm;
+      .flight-capture img {
+        display: block;
+        width: 100%;
+        max-height: 350px;
+        object-fit: contain;
       }
 
-      .hotel-photo-grid.count-2 {
-        grid-template-columns: 1fr 1fr;
-        grid-template-rows: 42mm;
+      .flight-table-wrap,
+      .summary-table-wrap {
+        overflow: hidden;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 14px;
+        background: white;
       }
 
-      .hotel-photo-grid.count-1 {
-        grid-template-columns: 1fr;
-        grid-template-rows: 48mm;
+      .flight-table,
+      .summary-table,
+      .rates-table {
+        width: 100%;
+        border-collapse: collapse;
       }
 
       .flight-table th,
-      .flight-table td {
-        font-size: 8px;
-        padding: 6px 5px;
+      .summary-table th,
+      .rates-table th {
+        background: #f8fafc;
+        color: var(--muted);
+        font-size: 9.5px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        text-align: left;
+        padding: 8px 9px;
+        border-bottom: 1px solid var(--line);
       }
 
-      .flight-table td strong {
-        font-size: 8.8px;
+      .flight-table td,
+      .summary-table td,
+      .rates-table td {
+        vertical-align: top;
+        padding: 9px;
+        color: #334155;
+        font-size: 11.5px;
+        font-weight: 450;
+        border-bottom: 1px solid rgba(15, 23, 42, 0.06);
       }
 
-      .flight-table td span {
-        font-size: 7.8px;
+      .flight-table tr:last-child td,
+      .summary-table tr:last-child td,
+      .rates-table tr:last-child td {
+        border-bottom: 0;
       }
-    }
-  </style>
-</head>
 
-<body>
-  <div class="preview-toolbar no-print">
-    <div>
-      <strong>Vista previa del presupuesto</strong>
-      <span>Revisalo. Para guardar en PDF usá “Imprimir / Guardar como PDF”.</span>
-    </div>
+      .flight-table strong,
+      .summary-table strong,
+      .rates-table strong {
+        display: block;
+        color: var(--ink);
+        font-weight: 750;
+      }
 
-    <button onclick="window.print()">Imprimir / Guardar PDF</button>
-  </div>
+      .flight-table small,
+      .summary-table small,
+      .rates-table small {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 10.5px;
+        font-weight: 450;
+        line-height: 1.35;
+      }
 
-  <main class="page">
-    <section class="cover">
-      <div class="brand-row">
-        <div class="brand-box">
-          <img src="${ALMUNDO_LOGO_URL}" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
-          <div class="brand-fallback" style="display:none;">almundo</div>
-        </div>
+      .connection-row td {
+        background: #ecfdf5;
+        color: #047857;
+        font-size: 11px;
+        font-weight: 850;
+        letter-spacing: 0.06em;
+        text-align: center;
+        text-transform: uppercase;
+        border-top: 1px solid rgba(4, 120, 87, 0.16);
+        border-bottom: 1px solid rgba(4, 120, 87, 0.16);
+      }
 
-        <div class="doc-number">
-          Presupuesto
-          <strong>${escapeHtml(presupuesto.numero || "BORRADOR")}</strong>
-          <div>Generado: ${escapeHtml(generatedAt)}</div>
-        </div>
-      </div>
+      .flight-luggage-note {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        margin-top: 12px;
+        border-radius: 13px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.16);
+        padding: 9px 11px;
+        color: #9a3412;
+        font-size: 11.5px;
+        line-height: 1.45;
+      }
 
-      <div class="cover-title">
-        <div class="kicker">Propuesta de viaje</div>
+      .flight-luggage-note strong {
+        flex: 0 0 auto;
+        color: #c2410c;
+        font-weight: 850;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
 
-        <div class="cover-title-row">
-          <h1>${escapeHtml(titulo)}</h1>
+      .flight-luggage-note span {
+        color: #9a3412;
+        font-weight: 500;
+      }
 
-          <div class="badges inline-badges">
-            ${renderBadge(presupuesto.destino_principal || "Destino")}
-            ${renderBadge(`${formatDate(presupuesto.fecha_salida)} al ${formatDate(presupuesto.fecha_regreso)}`)}
-            ${renderBadge(getPasajerosLabel(presupuesto))}
-            ${presupuesto.noches ? renderBadge(`${presupuesto.noches} noches`) : ""}
-          </div>
-        </div>
+      .flight-path-cell {
+        text-align: center;
+      }
 
-        <p>Preparado para ${escapeHtml(cliente)}</p>
-      </div>
-    </section>
+      .flight-path-cell span {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+      }
 
-    <section class="content">
-      ${resumenSection}
-      ${introSection}
-      ${vuelosSection}
-      ${hotelesSection}
-      ${serviciosSection}
-      ${recommendedSection}
-      ${combinacionesSection}
-      ${condicionesSection}
-      ${renderFooter(presupuesto)}
-    </section>
-  </main>
-</body>
-</html>
-`;
-}
+      .flight-path {
+        position: relative;
+        height: 1px;
+        margin: 7px 8px;
+        background: rgba(255, 106, 0, 0.30);
+      }
 
-/* =========================================================
-   ACCIONES
-========================================================= */
+      .flight-path::before,
+      .flight-path::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--brand);
+        transform: translateY(-50%);
+      }
 
-export function openPresupuestoPreview(data: PresupuestoPdfData): boolean {
-  const html = buildPresupuestoHtml(data);
-  const previewWindow = window.open("", "_blank", "width=980,height=920");
+      .flight-path::before {
+        left: 0;
+      }
 
-  if (!previewWindow) {
-    return false;
-  }
+      .flight-path::after {
+        right: 0;
+      }
 
-  previewWindow.document.open();
-  previewWindow.document.write(html);
-  previewWindow.document.close();
-  previewWindow.focus();
+      .flight-free-text {
+        margin-top: 12px;
+        border-left: 3px solid rgba(255, 106, 0, 0.35);
+        border-radius: 0 12px 12px 0;
+        background: var(--soft);
+        padding: 10px 12px;
+        color: #475569;
+        font-size: 11.8px;
+        font-weight: 450;
+        line-height: 1.58;
+      }
 
-  return true;
-}
+      /* =====================================================
+         HOTELES
+      ===================================================== */
 
-export function downloadPresupuestoHtml(data: PresupuestoPdfData): void {
-  const html = buildPresupuestoHtml(data);
-  const presupuesto = data.presupuesto;
-  const filename = `${presupuesto.numero || "presupuesto"}-${presupuesto.cliente_nombre || "cliente"}.html`
-    .replace(/[^\w.-]+/g, "-")
-    .replace(/-+/g, "-")
-    .toLowerCase();
+      .hotel-card {
+        display: block;
+        position: relative;
+        margin-bottom: 18px;
+        overflow: hidden;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 22px;
+        background: #ffffff;
+        box-shadow: none;
+      }
 
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+      .hotel-gallery {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(2, 150px);
+        gap: 8px;
+        padding: 10px;
+        background: #fff7ed;
+        border-bottom: 1px solid rgba(255, 106, 0, 0.16);
+      }
 
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+      .hotel-photo {
+        overflow: hidden;
+        border-radius: 16px;
+        background: #fed7aa;
+      }
 
-  window.setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 1000);
+      .hotel-photo img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .hotel-content {
+        position: relative;
+        z-index: 2;
+        display: block;
+        clear: both;
+        padding: 16px;
+        background: #ffffff;
+      }
+
+      .hotel-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+
+      .hotel-title-row h3 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 16px;
+        line-height: 1.25;
+        font-weight: 800;
+        letter-spacing: -0.015em;
+      }
+
+      .hotel-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .hotel-badges span {
+        display: inline-flex;
+        align-items: center;
+        min-height: 23px;
+        border-radius: 999px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.18);
+        padding: 4px 9px;
+        color: #c2410c;
+        font-size: 10.5px;
+        font-weight: 750;
+        line-height: 1.1;
+      }
+
+      .hotel-google-rating {
+        background: #ecfdf5 !important;
+        border-color: rgba(4, 120, 87, 0.18) !important;
+        color: #047857 !important;
+      }
+
+      .hotel-price {
+        white-space: nowrap;
+        border-radius: 13px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.18);
+        padding: 8px 10px;
+        color: #c2410c;
+        font-size: 12.5px;
+        font-weight: 760;
+      }
+
+      .hotel-data-card {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0;
+        overflow: hidden;
+        margin-bottom: 12px;
+        border: 1px solid rgba(15, 23, 42, 0.09);
+        border-radius: 16px;
+        background: #f8fafc;
+      }
+
+      .hotel-data-item {
+        min-width: 0;
+        padding: 10px 12px;
+        border-right: 1px solid rgba(15, 23, 42, 0.08);
+        border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+      }
+
+      .hotel-data-item:nth-child(4n) {
+        border-right: 0;
+      }
+
+      .hotel-data-item:nth-last-child(-n + 4) {
+        border-bottom: 0;
+      }
+
+      .hotel-data-item small {
+        display: block;
+        margin-bottom: 3px;
+        color: #64748b;
+        font-size: 9.2px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.10em;
+      }
+
+      .hotel-data-item strong {
+        display: block;
+        color: var(--ink);
+        font-size: 11.8px;
+        font-weight: 760;
+        line-height: 1.36;
+      }
+
+      .hotel-description {
+        border-radius: 16px;
+        background: #ffffff;
+        border: 1px solid rgba(15, 23, 42, 0.09);
+        padding: 13px 14px;
+        color: #334155;
+        font-size: 12.3px;
+        font-weight: 450;
+        line-height: 1.62;
+      }
+
+      .hotel-conditions,
+      .small-note {
+        margin-top: 10px;
+        border-radius: 13px;
+        background: var(--amber-soft);
+        border: 1px solid rgba(180, 83, 9, 0.14);
+        padding: 10px 11px;
+        color: #78350f;
+        font-size: 11px;
+        font-weight: 450;
+        line-height: 1.55;
+      }
+
+      /* =====================================================
+         SERVICIOS GENERALES
+      ===================================================== */
+
+      .services-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .service-card {
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: none;
+      }
+
+      .service-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+
+      .service-type {
+        margin-bottom: 3px;
+        color: #ea580c;
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.10em;
+        text-transform: uppercase;
+      }
+
+      .service-desc {
+        color: #475569;
+        font-size: 11.8px;
+        font-weight: 450;
+        line-height: 1.55;
+      }
+
+      .service-flags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 10px;
+      }
+
+      .service-flags span {
+        display: inline-flex;
+        min-height: 20px;
+        align-items: center;
+        border-radius: 999px;
+        background: var(--green-soft);
+        border: 1px solid rgba(4, 120, 87, 0.14);
+        padding: 3px 8px;
+        color: var(--green);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      /* =====================================================
+         OPCIONES PRESUPUESTADAS
+         Usa las clases reales generadas por PARTE 3:
+         option-card / option-head / option-bundle /
+         option-resource-card / option-resource-head.
+      ===================================================== */
+
+      .options-stack {
+        display: grid;
+        gap: 20px;
+      }
+
+      .option-card {
+        overflow: hidden;
+        border: 1px solid rgba(255, 106, 0, 0.22);
+        border-radius: 24px;
+        background:
+          linear-gradient(180deg, #ffffff 0%, #ffffff 64%, #fffaf4 100%);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.035);
+      }
+
+      .option-card.recommended {
+        border-color: rgba(255, 106, 0, 0.38);
+      }
+
+      .option-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 17px 18px 14px;
+        background:
+          radial-gradient(circle at top right, rgba(255, 106, 0, 0.11), transparent 32%),
+          linear-gradient(180deg, #fff7ed 0%, #ffffff 100%);
+        border-bottom: 1px solid rgba(255, 106, 0, 0.14);
+      }
+
+      .option-kicker {
+        margin-bottom: 4px;
+        color: #ea580c;
+        font-size: 10px;
+        font-weight: 850;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      .option-head h3 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 19px;
+        line-height: 1.2;
+        font-weight: 850;
+        letter-spacing: -0.025em;
+      }
+
+      .option-head p {
+        margin: 5px 0 0;
+        color: #64748b;
+        font-size: 12.2px;
+        font-weight: 500;
+        line-height: 1.42;
+      }
+
+      .option-tag {
+        display: inline-flex;
+        white-space: nowrap;
+        border-radius: 999px;
+        background: #ffffff;
+        border: 1px solid rgba(255, 106, 0, 0.20);
+        padding: 6px 10px;
+        color: #c2410c;
+        font-size: 10px;
+        font-weight: 800;
+      }
+
+      .option-description {
+        margin: 14px 18px 0;
+        border-radius: 14px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.14);
+        padding: 11px 13px;
+        color: #9a3412;
+        font-size: 11.8px;
+        font-weight: 500;
+        line-height: 1.56;
+      }
+
+      .option-bundle {
+        padding: 16px 18px 18px;
+      }
+
+      .option-bundle-title {
+        display: none;
+      }
+
+      .option-bundle-stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .option-resource-card {
+        overflow: hidden;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 19px;
+        background: #ffffff;
+      }
+
+      .option-resource-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 15px 12px;
+        background: #fffaf4;
+        border-bottom: 1px solid rgba(255, 106, 0, 0.12);
+      }
+
+      .option-resource-kicker {
+        margin-bottom: 5px;
+        color: #ea580c;
+        font-size: 9.8px;
+        font-weight: 850;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .option-resource-head h4 {
+        margin: 0;
+        color: var(--ink);
+        font-size: 16px;
+        line-height: 1.25;
+        font-weight: 820;
+        letter-spacing: -0.015em;
+      }
+
+      .option-resource-head p {
+        margin: 5px 0 0;
+        color: #64748b;
+        font-size: 11.8px;
+        font-weight: 600;
+        line-height: 1.35;
+      }
+
+      .option-flight-image {
+        overflow: hidden;
+        margin: 14px;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 15px;
+        background: #f8fafc;
+      }
+
+      .option-flight-image img {
+        display: block;
+        width: 100%;
+        max-height: 330px;
+        object-fit: contain;
+      }
+
+      .option-flight-table {
+        padding: 14px;
+      }
+
+      .option-flight-card .flight-table-wrap {
+        border-radius: 14px;
+      }
+
+      .option-flight-card .option-resource-text {
+        display: none;
+      }
+
+      .option-resource-note {
+        display: flex;
+        gap: 9px;
+        align-items: flex-start;
+        margin: 0 14px 14px;
+        border-radius: 14px;
+        background: #fff7ed;
+        border: 1px solid rgba(255, 106, 0, 0.16);
+        padding: 10px 12px;
+        color: #9a3412;
+        font-size: 11.5px;
+        line-height: 1.45;
+      }
+
+      .option-resource-note strong {
+        flex: 0 0 auto;
+        color: #c2410c;
+        font-weight: 850;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .option-resource-note span {
+        color: #9a3412;
+        font-weight: 500;
+      }
+
+      .option-resource-text {
+        margin: 0 14px 14px;
+        border-radius: 14px;
+        background: #f8fafc;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        padding: 11px 13px;
+        color: #334155;
+        font-size: 11.7px;
+        font-weight: 450;
+        line-height: 1.56;
+      }
+
+      .option-hotel-card .hotel-gallery {
+        margin: 0;
+        border-top: 0;
+        border-bottom: 1px solid rgba(255, 106, 0, 0.12);
+      }
+
+      .compact-hotel-data {
+        margin: 14px;
+      }
+
+      .compact-hotel-data .hotel-data-card {
+        margin-bottom: 0;
+      }
+
+      .option-services-box {
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 19px;
+        background: #ffffff;
+        padding: 14px;
+      }
+
+      .option-services-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+      }
+
+      .option-service-item {
+        min-width: 0;
+        border-radius: 14px;
+        background: #f8fafc;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        padding: 10px 11px;
+      }
+
+      .option-service-item strong {
+        display: block;
+        color: var(--ink);
+        font-size: 12.2px;
+        font-weight: 780;
+        line-height: 1.3;
+      }
+
+      .option-service-item span {
+        display: block;
+        margin-top: 4px;
+        color: #64748b;
+        font-size: 10.9px;
+        font-weight: 450;
+        line-height: 1.35;
+      }
+
+      /* =====================================================
+         RESUMEN RÁPIDO
+      ===================================================== */
+
+      .options-summary-section {
+        margin-top: 4px;
+      }
+
+      .summary-table th:nth-child(2),
+      .summary-table td:nth-child(2) {
+        width: 48%;
+      }
+
+      .summary-table td:nth-child(2) {
+        white-space: normal;
+        color: #047857;
+        font-weight: 750;
+      }
+
+      .summary-table td:nth-child(3) {
+        white-space: nowrap;
+        color: #047857;
+        font-weight: 800;
+      }
+
+      .summary-table td {
+        line-height: 1.42;
+      }
+
+      .summary-recommended,
+      .summary-tag {
+        display: inline-flex;
+        margin: 0 0 3px 4px;
+        border-radius: 999px;
+        padding: 3px 7px;
+        font-size: 9.5px;
+        font-weight: 750;
+        line-height: 1;
+      }
+
+      .summary-recommended {
+        background: var(--green-soft);
+        color: var(--green);
+        border: 1px solid rgba(4, 120, 87, 0.14);
+      }
+
+      .summary-tag {
+        background: var(--amber-soft);
+        color: var(--amber);
+        border: 1px solid rgba(180, 83, 9, 0.14);
+      }
+
+      /* =====================================================
+         PRECIOS Y FORMAS DE PAGO
+         Usa clases reales: price-option-card + option-head.
+      ===================================================== */
+
+      .prices-stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .price-option-card {
+        overflow: hidden;
+        border: 1px solid rgba(255, 106, 0, 0.22);
+        border-radius: 22px;
+        background: #ffffff;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.035);
+      }
+
+      .price-option-card.recommended {
+        border-color: rgba(255, 106, 0, 0.38);
+      }
+
+      .price-option-card > .option-head {
+        padding: 14px 16px 12px;
+        background: #fff7ed;
+      }
+
+      .price-option-card .option-head h3 {
+        font-size: 17px;
+      }
+
+      .option-price-zone {
+        padding: 14px 16px 16px;
+      }
+
+      .main-price-box {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        border-radius: 18px;
+        background:
+          radial-gradient(circle at top right, rgba(255, 255, 255, 0.24), transparent 32%),
+          linear-gradient(135deg, #ff6a00 0%, #f97316 48%, #ea580c 100%);
+        padding: 15px 16px;
+        color: white;
+      }
+
+      .price-label {
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .main-price {
+        margin-top: 2px;
+        font-size: 25px;
+        line-height: 1.05;
+        font-weight: 850;
+        letter-spacing: -0.04em;
+      }
+
+      .price-composition {
+        max-width: 520px;
+        margin-top: 8px;
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 11px;
+        font-weight: 450;
+        line-height: 1.45;
+      }
+
+      .per-pax-price {
+        align-self: center;
+        min-width: 150px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        padding: 9px 10px;
+        text-align: right;
+      }
+
+      .per-pax-price span {
+        display: block;
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 9.5px;
+        font-weight: 650;
+        text-transform: uppercase;
+      }
+
+      .per-pax-price strong {
+        display: block;
+        margin-top: 2px;
+        color: white;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .alt-prices {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .alt-price-item {
+        border-radius: 13px;
+        background: var(--soft);
+        border: 1px solid rgba(15, 23, 42, 0.07);
+        padding: 9px 10px;
+      }
+
+      .alt-price-item span {
+        display: block;
+        color: var(--muted);
+        font-size: 9.5px;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .alt-price-item strong {
+        display: block;
+        margin-top: 2px;
+        color: var(--ink);
+        font-size: 12.5px;
+        font-weight: 800;
+      }
+
+      .rates-box,
+      .promos-box,
+      .payments-box,
+      .option-resources {
+        margin-top: 11px;
+        border: 1px solid var(--line);
+        border-radius: 15px;
+        background: rgba(255, 255, 255, 0.78);
+        padding: 11px;
+      }
+
+      .mini-title {
+        margin-bottom: 8px;
+        color: var(--ink);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.10em;
+        text-transform: uppercase;
+      }
+
+      .promo-item,
+      .payment-item {
+        border-radius: 12px;
+        background: var(--soft);
+        border: 1px solid rgba(15, 23, 42, 0.06);
+        padding: 9px 10px;
+        margin-top: 7px;
+      }
+
+      .promo-item:first-of-type,
+      .payment-item:first-of-type {
+        margin-top: 0;
+      }
+
+      .promo-item strong,
+      .payment-item strong {
+        display: block;
+        color: var(--ink);
+        font-size: 11.8px;
+        font-weight: 760;
+      }
+
+      .promo-item p,
+      .payment-item p {
+        margin: 3px 0 0;
+        color: #475569;
+        font-size: 11.3px;
+        font-weight: 450;
+        line-height: 1.45;
+      }
+
+      .discount-item {
+        background: var(--green-soft);
+        border-color: rgba(4, 120, 87, 0.13);
+      }
+
+      .payment-account {
+        background: var(--blue-soft);
+        border-color: rgba(37, 99, 235, 0.13);
+      }
+
+      .payment-conditions {
+        margin-top: 9px;
+        border-radius: 12px;
+        background: var(--amber-soft);
+        border: 1px solid rgba(180, 83, 9, 0.13);
+        padding: 9px 10px;
+        color: #78350f;
+        font-size: 11.2px;
+        font-weight: 450;
+        line-height: 1.5;
+      }
+
+      .included-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+        margin-top: 11px;
+      }
+
+      .included-box {
+        border-radius: 15px;
+        border: 1px solid var(--line);
+        padding: 11px;
+        color: #334155;
+        font-size: 11.5px;
+        font-weight: 450;
+        line-height: 1.55;
+      }
+
+      .included-box.positive {
+        background: var(--green-soft);
+        border-color: rgba(4, 120, 87, 0.13);
+      }
+
+      .included-box.negative {
+        background: var(--red-soft);
+        border-color: rgba(185, 28, 28, 0.12);
+      }
+
+      /* =====================================================
+         FOOTER
+      ===================================================== */
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 26px;
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+        color: var(--muted);
+        font-size: 10.8px;
+        font-weight: 450;
+      }
+
+      .footer strong {
+        display: block;
+        color: var(--ink);
+        font-size: 11.5px;
+        font-weight: 800;
+      }
+
+      .footer span {
+        display: block;
+        margin-top: 2px;
+      }
+
+      /* =====================================================
+         PRINT
+      ===================================================== */
+
+      @media print {
+        html,
+        body {
+          background: white;
+        }
+
+        .page {
+          width: auto;
+          min-height: auto;
+          margin: 0;
+          background: white;
+        }
+
+        .hero {
+          padding: 22px 26px 20px;
+        }
+
+        .content {
+          padding: 18px 26px 22px;
+        }
+
+        .section {
+          margin-bottom: 19px;
+        }
+
+        .trip-summary-card,
+        .intro-box,
+        .conditions-box,
+        .main-price-box,
+        .alt-prices,
+        .payments-box,
+        .promos-box,
+        .included-grid,
+        .price-option-card {
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+
+        .option-card,
+        .option-bundle,
+        .option-bundle-stack,
+        .option-resource-card,
+        .hotel-card,
+        .flight-card,
+        .service-card {
+          break-inside: auto;
+          page-break-inside: auto;
+        }
+
+        .option-card {
+          margin-bottom: 16px;
+          overflow: visible;
+        }
+
+        .option-resource-card,
+        .hotel-card {
+          overflow: visible;
+        }
+
+        .hotel-gallery {
+          grid-template-rows: repeat(2, 128px);
+        }
+
+        .option-hotel-card .hotel-gallery {
+          grid-template-rows: repeat(2, 112px);
+        }
+
+        .option-flight-image img {
+          max-height: 280px;
+        }
+
+        .main-price-box {
+          padding: 13px 15px;
+        }
+
+        .main-price {
+          font-size: 23px;
+        }
+
+        .price-option-card {
+          margin-bottom: 12px;
+        }
+      }
+
+      @page {
+        size: A4;
+        margin: 0;
+      }
+
+      /* =====================================================
+         MOBILE / PREVIEW ANGOSTO
+      ===================================================== */
+
+      @media screen and (max-width: 820px) {
+        .page {
+          width: 100%;
+        }
+
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-right {
+          text-align: left;
+        }
+
+        .trip-summary-card,
+        .info-grid,
+        .services-grid,
+        .included-grid,
+        .alt-prices,
+        .option-services-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .trip-summary-row,
+        .trip-summary-row:nth-child(2n),
+        .trip-summary-row:nth-last-child(-n + 2) {
+          border-right: 0;
+          border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+        }
+
+        .trip-summary-row:last-child {
+          border-bottom: 0;
+        }
+
+        .hotel-gallery {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-rows: repeat(2, 120px);
+        }
+
+        .hotel-title-row,
+        .option-head,
+        .main-price-box,
+        .resource-header {
+          display: block;
+        }
+
+        .hotel-price,
+        .option-tag {
+          display: inline-flex;
+          margin-top: 10px;
+        }
+
+        .hotel-data-card {
+          grid-template-columns: 1fr;
+        }
+
+        .hotel-data-item {
+          border-right: 0;
+        }
+
+        .hotel-data-item:nth-last-child(-n + 4) {
+          border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+        }
+
+        .hotel-data-item:last-child {
+          border-bottom: 0;
+        }
+
+        .per-pax-price {
+          margin-top: 10px;
+          text-align: left;
+        }
+      }
+    </style>
+  `;
 }

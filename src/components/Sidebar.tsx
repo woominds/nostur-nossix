@@ -16,7 +16,10 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
-import { appRegistry, getAppById } from "../registry/appRegistry";
+import {
+  getAppById,
+  getVisibleAppsForProfile
+} from "../registry/appRegistry";
 import { useAuthStore } from "../store/authStore";
 import { useBrowserStore } from "../store/browserStore";
 import { brandAssets, brandText } from "../lib/brandAssets";
@@ -30,6 +33,16 @@ type SidebarButtonProps = {
   danger?: boolean;
   onClick: () => void;
 };
+
+type ProfileLike = {
+  id?: string | null;
+  rol?: string | null;
+  activo?: boolean | null;
+  is_super_admin?: boolean | null;
+  is_support_user?: boolean | null;
+};
+
+type RegistryApp = NonNullable<ReturnType<typeof getAppById>>;
 
 const CHATGPT_URL = "https://chatgpt.com/";
 
@@ -48,6 +61,69 @@ const SECTION_COLORS: Record<SidebarSectionKey, string> = {
   operaciones: "#7c3aed",
   apps: "#ff2f76"
 };
+
+const CHAT_APP_IDS = ["livenos", "oportunidades", "cande", "nia", "control-ia"];
+
+const VENTAS_APP_IDS = [
+  "clientes",
+  "carritos",
+  "files",
+  "ctas-ctes",
+  "presupuestos-v2",
+  "comisiones"
+];
+
+const ADMINISTRACION_APP_IDS = [
+  "caja",
+  "control-ventas",
+  "facturas-pagar",
+  "cashflow",
+  "facturas-cobrar",
+  "metas",
+  "pagos-operadores",
+  "riesgos",
+  "importador-catalogos"
+];
+
+const OPERACIONES_APP_IDS = [
+  "calendario-pax",
+  "horarios",
+  "pendientes",
+  "documentos",
+  "colaborativo",
+  "links-utiles",
+  "mi-perfil"
+];
+
+function isAdminLike(profile: ProfileLike | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
+  return Boolean(
+    profile?.activo &&
+      (profile?.is_super_admin ||
+        profile?.is_support_user ||
+        role === "admin_general" ||
+        role === "gerencia" ||
+        role === "gerente" ||
+        role === "administracion")
+  );
+}
+
+function isInternalApp(app: RegistryApp): boolean {
+  return app.url.startsWith("internal://");
+}
+
+function getAppsByIds(appIds: string[]): RegistryApp[] {
+  return appIds
+    .map((appId) => {
+      try {
+        return getAppById(appId) as RegistryApp;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean) as RegistryApp[];
+}
 
 function MicrosoftLogo({ size = 18 }: { size?: number }) {
   const box = Math.floor(size / 2) - 1;
@@ -169,6 +245,21 @@ export function Sidebar() {
   const activeTabId = useBrowserStore((state) => state.activeTabId);
   const signOut = useAuthStore((state) => state.signOut);
 
+  const currentProfile = useAuthStore((state: any) => {
+    return (
+      state.profile ||
+      state.currentProfile ||
+      state.userProfile ||
+      state.sessionProfile ||
+      state.profileData ||
+      null
+    );
+  }) as ProfileLike | null;
+
+  const adminLike = isAdminLike(currentProfile);
+  const canOpenAdminPanels = adminLike;
+  const canSeeAdministrationSection = adminLike;
+
   const [dockOpen, setDockOpen] = useState(false);
 
   const [openSections, setOpenSections] = useState<Record<SidebarSectionKey, boolean>>({
@@ -184,46 +275,36 @@ export function Sidebar() {
   const activeAppId = activeTab?.appId || "web";
 
   const sectionApps = useMemo(() => {
-    const internalApps = appRegistry.filter((app) => app.url.startsWith("internal://"));
+    const visibleApps = getVisibleAppsForProfile(currentProfile);
 
-    const externalApps = appRegistry
+    if (adminLike) {
+      const externalApps = visibleApps
+        .filter((app) => !isInternalApp(app as RegistryApp))
+        .filter((app) => !["crm", "chatgpt"].includes(app.id));
+
+      return {
+        chat: getAppsByIds(CHAT_APP_IDS),
+        ventas: getAppsByIds(VENTAS_APP_IDS),
+        administracion: getAppsByIds(ADMINISTRACION_APP_IDS),
+        operaciones: getAppsByIds(OPERACIONES_APP_IDS),
+        apps: externalApps as RegistryApp[]
+      };
+    }
+
+    const internalApps = visibleApps.filter((app) => app.url.startsWith("internal://"));
+
+    const externalApps = visibleApps
       .filter((app) => !app.url.startsWith("internal://"))
       .filter((app) => !["crm", "chatgpt"].includes(app.id));
 
     return {
-      chat: internalApps.filter((app) =>
-        ["livenos", "oportunidades", "cande", "nia", "control-ia"].includes(app.id)
-      ),
-      ventas: internalApps.filter((app) =>
-        ["clientes", "carritos", "files", "ctas-ctes", "presupuestos-v2", "comisiones"].includes(
-          app.id
-        )
-      ),
-      administracion: internalApps.filter((app) =>
-        [
-          "caja",
-          "control-ventas",
-          "facturas-pagar",
-          "cashflow",
-          "facturas-cobrar",
-          "metas",
-          "pagos-operadores",
-          "riesgos"
-        ].includes(app.id)
-      ),
-      operaciones: internalApps.filter((app) =>
-        [
-          "calendario-pax",
-          "horarios",
-          "pendientes",
-          "documentos",
-          "colaborativo",
-          "links-utiles"
-        ].includes(app.id)
-      ),
+      chat: internalApps.filter((app) => CHAT_APP_IDS.includes(app.id)),
+      ventas: internalApps.filter((app) => VENTAS_APP_IDS.includes(app.id)),
+      administracion: internalApps.filter((app) => ADMINISTRACION_APP_IDS.includes(app.id)),
+      operaciones: internalApps.filter((app) => OPERACIONES_APP_IDS.includes(app.id)),
       apps: externalApps
     };
-  }, []);
+  }, [currentProfile, adminLike]);
 
   function normalizeAppKey(appId: string): string {
     if (appId === "presupuestos") return "presupuestos-v2";
@@ -254,6 +335,8 @@ export function Sidebar() {
   }
 
   function openSettings() {
+    if (!canOpenAdminPanels) return;
+
     setHomeViewMode("apps");
 
     const configTab = tabs.find(
@@ -306,6 +389,13 @@ export function Sidebar() {
 
   function openApp(appId: string) {
     const app = getAppById(appId);
+
+    const isVisible =
+      adminLike ||
+      getVisibleAppsForProfile(currentProfile).some((visibleApp) => visibleApp.id === app.id);
+
+    if (!isVisible) return;
+
     const normalizedAppId = normalizeAppKey(app.id);
 
     createTab({
@@ -351,6 +441,8 @@ export function Sidebar() {
     const isOpen = openSections[section];
     const active = isSectionActive(section);
     const color = SECTION_COLORS[section];
+
+    if (apps.length === 0) return null;
 
     return (
       <section key={section} className="space-y-0.5">
@@ -454,37 +546,37 @@ export function Sidebar() {
         ) : null}
 
         <div
-  className={[
-    "mb-5 flex items-center justify-between gap-2 transition-opacity duration-200",
-    dockOpen ? "opacity-100" : "pointer-events-none opacity-0"
-  ].join(" ")}
->
-  <button
-    type="button"
-    onClick={openHome}
-    aria-label={brandText.appName}
-    className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/10 transition hover:scale-[1.03] hover:shadow-md"
-  >
-    <BrandIso size={34} />
-  </button>
+          className={[
+            "mb-5 flex items-center justify-between gap-2 transition-opacity duration-200",
+            dockOpen ? "opacity-100" : "pointer-events-none opacity-0"
+          ].join(" ")}
+        >
+          <button
+            type="button"
+            onClick={openHome}
+            aria-label={brandText.appName}
+            className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/10 transition hover:scale-[1.03] hover:shadow-md"
+          >
+            <BrandIso size={34} />
+          </button>
 
-  <div className="min-w-0 flex-1">
-    <div className="truncate text-[13px] font-semibold leading-none text-[#172033]">
-      {brandText.appName}
-    </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-semibold leading-none text-[#172033]">
+              {brandText.appName}
+            </div>
 
-    <div className="mt-1 truncate text-[10.5px] font-normal leading-none text-[#8a99ad]">
-      {brandText.appDescription}
-    </div>
-  </div>
-</div>
+            <div className="mt-1 truncate text-[10.5px] font-normal leading-none text-[#8a99ad]">
+              {brandText.appDescription}
+            </div>
+          </div>
+        </div>
 
-       <div
-  className={[
-    "flex flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-hidden pr-0.5 transition-opacity duration-200",
-    dockOpen ? "opacity-100" : "pointer-events-none opacity-0"
-  ].join(" ")}
->
+        <div
+          className={[
+            "flex flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-hidden pr-0.5 transition-opacity duration-200",
+            dockOpen ? "opacity-100" : "pointer-events-none opacity-0"
+          ].join(" ")}
+        >
           <SidebarButton
             label="Inicio"
             active={isHomeActive}
@@ -510,23 +602,25 @@ export function Sidebar() {
 
           {renderSection("chat")}
           {renderSection("ventas")}
-          {renderSection("administracion")}
+          {canSeeAdministrationSection ? renderSection("administracion") : null}
           {renderSection("operaciones")}
           {renderSection("apps")}
         </div>
 
         <div
-  className={[
-    "mt-3 flex flex-col gap-1.5 transition-opacity duration-200",
-    dockOpen ? "opacity-100" : "pointer-events-none opacity-0"
-  ].join(" ")}
->
-          <SidebarButton
-            label="Configuración"
-            active={isSettingsActive}
-            onClick={openSettings}
-            icon={<Settings size={17} strokeWidth={1.8} />}
-          />
+          className={[
+            "mt-3 flex flex-col gap-1.5 transition-opacity duration-200",
+            dockOpen ? "opacity-100" : "pointer-events-none opacity-0"
+          ].join(" ")}
+        >
+          {canOpenAdminPanels ? (
+            <SidebarButton
+              label="Configuración"
+              active={isSettingsActive}
+              onClick={openSettings}
+              icon={<Settings size={17} strokeWidth={1.8} />}
+            />
+          ) : null}
 
           <SidebarButton
             label="Cerrar sesión"

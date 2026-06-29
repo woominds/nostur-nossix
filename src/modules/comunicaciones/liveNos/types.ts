@@ -23,13 +23,17 @@ export type ContactoWa = {
 
 export type ProfileLite = {
   id: string;
-  nombre: string;
-  apellido: string;
-  email: string;
-  color: string;
-  activo: boolean;
-  nombre_publico_whatsapp: string | null;
+  nombre: string | null;
+  apellido: string | null;
+  email: string | null;
+  color: string | null;
+  activo?: boolean | null;
+  nombre_publico_whatsapp?: string | null;
   mostrar_nombre_agente?: boolean | null;
+
+  rol?: string | null;
+  is_super_admin?: boolean | null;
+  is_support_user?: boolean | null;
 };
 
 export type Conversacion = {

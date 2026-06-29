@@ -10,6 +10,8 @@ export type ProfileLite = {
   rol: string;
   color: string;
   activo: boolean;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
 };
 
 export type CatalogItem = {
@@ -188,6 +190,7 @@ type FilesState = {
 
   currentProfile: ProfileLite | null;
   canManageFiles: boolean;
+  sellerDefaultApplied: boolean;
 
   files: FileItem[];
   pagosComerciales: PagoComercial[];
@@ -339,7 +342,9 @@ async function getCurrentUserId(): Promise<string | null> {
 function canProfileManage(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
         profile.rol === "gerencia" ||
         profile.rol === "administracion")
   );
@@ -348,7 +353,9 @@ function canProfileManage(profile: ProfileLite | null): boolean {
 function canProfileUse(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
         profile.rol === "gerencia" ||
         profile.rol === "administracion" ||
         profile.rol === "vendedor")
@@ -366,6 +373,7 @@ export const useFilesStore = create<FilesState>((set, get) => ({
 
   currentProfile: null,
   canManageFiles: false,
+  sellerDefaultApplied: false,
 
   files: [],
   pagosComerciales: [],
@@ -439,42 +447,57 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       return;
     }
 
-    const filters = get().filters;
+    const currentFilters = get().filters;
+    const sellerDefaultApplied = get().sellerDefaultApplied;
+
+    let effectiveFilters = currentFilters;
+
+    if (!sellerDefaultApplied) {
+      const role = String(currentProfile?.rol || "").toLowerCase();
+
+      const defaultVendedorId = role === "vendedor" ? currentUserId : "todos";
+
+      effectiveFilters = {
+        ...currentFilters,
+        vendedorId: defaultVendedorId
+      };
+
+      set({
+        filters: effectiveFilters,
+        sellerDefaultApplied: true
+      });
+    }
 
     let filesQuery = supabase
       .from("files")
       .select("*, clientes(*)")
       .eq("visible_en_files", true)
-      .gte("fecha_venta", filters.desde)
-      .lte("fecha_venta", filters.hasta)
+      .gte("fecha_venta", effectiveFilters.desde)
+      .lte("fecha_venta", effectiveFilters.hasta)
       .order("fecha_venta", { ascending: false })
       .order("created_at", { ascending: false });
 
-    if (!canManageFiles) {
-      filesQuery = filesQuery.eq("vendedor_id", currentUserId);
+    if (effectiveFilters.estado !== "todos") {
+      filesQuery = filesQuery.eq("estado", effectiveFilters.estado);
     }
 
-    if (filters.estado !== "todos") {
-      filesQuery = filesQuery.eq("estado", filters.estado);
+    if (effectiveFilters.operadorId !== "todos") {
+      filesQuery = filesQuery.eq("operador_id", effectiveFilters.operadorId);
     }
 
-    if (filters.operadorId !== "todos") {
-      filesQuery = filesQuery.eq("operador_id", filters.operadorId);
+    if (effectiveFilters.vendedorId !== "todos") {
+      filesQuery = filesQuery.eq("vendedor_id", effectiveFilters.vendedorId);
     }
 
-    if (filters.vendedorId !== "todos" && canManageFiles) {
-      filesQuery = filesQuery.eq("vendedor_id", filters.vendedorId);
+    if (effectiveFilters.sucursalId !== "todos") {
+      filesQuery = filesQuery.eq("sucursal_id", effectiveFilters.sucursalId);
     }
 
-    if (filters.sucursalId !== "todos") {
-      filesQuery = filesQuery.eq("sucursal_id", filters.sucursalId);
-    }
-
-    if (filters.activo === "activos") {
+    if (effectiveFilters.activo === "activos") {
       filesQuery = filesQuery.eq("activo", true);
     }
 
-    if (filters.activo === "inactivos") {
+    if (effectiveFilters.activo === "inactivos") {
       filesQuery = filesQuery.eq("activo", false);
     }
 
@@ -874,7 +897,10 @@ export const useFilesStore = create<FilesState>((set, get) => ({
   },
 
   resetFilters: () => {
-    set({ filters: getDefaultFilters() });
+    set({
+      filters: getDefaultFilters(),
+      sellerDefaultApplied: false
+    });
   },
 
   selectFile: (id) => {

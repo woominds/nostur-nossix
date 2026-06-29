@@ -23,11 +23,95 @@ let dockNotificationCount = 0;
 
 app.setName("NOSTUR");
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
+
 if (process.platform === "darwin" || process.platform === "win32") {
   app.setAppUserModelId("com.nossix.nostur");
 }
 
 const isDev = !app.isPackaged;
+
+let pendingDeepLinkUrl = null;
+
+function isPasswordResetDeepLink(url) {
+  const value = String(url || "");
+  return value.startsWith("nostur://reset-password");
+}
+
+const APP_PROTOCOL = "nostur";
+
+function registerAppProtocol() {
+  try {
+    if (isDev) {
+      const appPath = path.resolve(__dirname, "..");
+
+      log("Registrando protocolo DEV:", {
+        protocol: APP_PROTOCOL,
+        execPath: process.execPath,
+        appPath
+      });
+
+      app.setAsDefaultProtocolClient(APP_PROTOCOL, process.execPath, [appPath]);
+      return;
+    }
+
+    log("Registrando protocolo PROD:", {
+      protocol: APP_PROTOCOL,
+      execPath: process.execPath
+    });
+
+    app.setAsDefaultProtocolClient(APP_PROTOCOL);
+  } catch (err) {
+    errorLog("No se pudo registrar protocolo:", err);
+  }
+}
+
+function sendPasswordResetLinkToRenderer(url) {
+  if (!url || !isPasswordResetDeepLink(url)) return false;
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    pendingDeepLinkUrl = url;
+    return false;
+  }
+
+  pendingDeepLinkUrl = null;
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.show();
+  mainWindow.focus();
+
+  mainWindow.webContents.send("nostur:password-reset-link", {
+    url
+  });
+
+  return true;
+}
+
+function handleDeepLink(url) {
+  log("Deep link recibido:", url);
+
+  if (isPasswordResetDeepLink(url)) {
+    sendPasswordResetLinkToRenderer(url);
+    return true;
+  }
+
+  return false;
+}
+
+function handleInitialDeepLinkFromArgs() {
+  const deepLinkUrl = process.argv.find((arg) => isPasswordResetDeepLink(arg));
+
+  if (deepLinkUrl) {
+    handleDeepLink(deepLinkUrl);
+  }
+}
 
 /*
   Provisorio:
@@ -482,13 +566,6 @@ function showNosturNotification(payload) {
     createdAt: new Date().toISOString()
   });
 
-  /*
-    Importante:
-    macOS a veces no muestra la notificación nativa de Electron
-    cuando la app está activa/en foco. Para NOSTUR forzamos fallback
-    con osascript porque en tu Mac ya comprobamos que funciona.
-    Esto se mantiene para mensajes normales, no para updates.
-  */
   if (process.platform === "darwin") {
     showMacOsFallbackNotification({
       title: normalized.title,
@@ -1180,9 +1257,7 @@ function configureApplicationMenu() {
               { type: "separator" },
               { label: "Traer todo al frente", role: "front" }
             ]
-          : [
-              { label: "Cerrar", role: "close" }
-            ])
+          : [{ label: "Cerrar", role: "close" }])
       ]
     },
 
@@ -1303,6 +1378,15 @@ function createWindow() {
         `)
         .catch(() => {});
     }, 1200);
+
+    if (pendingDeepLinkUrl) {
+      const url = pendingDeepLinkUrl;
+      pendingDeepLinkUrl = null;
+
+      setTimeout(() => {
+        sendPasswordResetLinkToRenderer(url);
+      }, 500);
+    }
   });
 
   mainWindow.on("ready-to-show", () => {
@@ -1463,12 +1547,6 @@ function setupAutoUpdater() {
         nextVersion: info?.version || null,
         info
       });
-
-      /*
-        Notificaciones de sistema de actualización desactivadas.
-        En macOS están bloqueadas hasta firmar/notarizar.
-        En Windows se informa desde el banner interno.
-      */
     });
 
     autoUpdater.on("update-not-available", (info) => {
@@ -1513,11 +1591,6 @@ function setupAutoUpdater() {
         nextVersion: info?.version || null,
         info
       });
-
-      /*
-        Notificaciones de sistema de actualización desactivadas.
-        La instalación se maneja desde el banner interno cuando el updater esté habilitado.
-      */
     });
 
     autoUpdater.on("error", (err) => {
@@ -1695,7 +1768,32 @@ function getUpdateStatus() {
    APP READY
 ========================================================= */
 
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleDeepLink(url);
+});
+
+app.on("second-instance", (_event, commandLine) => {
+  const deepLinkUrl = commandLine.find((arg) => isPasswordResetDeepLink(arg));
+
+  if (deepLinkUrl) {
+    handleDeepLink(deepLinkUrl);
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
 app.whenReady().then(() => {
+  registerAppProtocol();
+
   log("Electron app ready.");
   log("platform:", process.platform);
   log("isPackaged:", app.isPackaged);
@@ -1710,6 +1808,8 @@ app.whenReady().then(() => {
   configureSessions();
   createWindow();
   setupAutoUpdater();
+
+  handleInitialDeepLinkFromArgs();
 
   if (!isMacAutoUpdateDisabled()) {
     setTimeout(() => {

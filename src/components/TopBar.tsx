@@ -236,6 +236,7 @@ export function TopBar() {
   const getCredentialForApp = useBrowserStore((state) => state.getCredentialForApp);
 
   const addressWrapperRef = useRef<HTMLDivElement | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
 
   const [addressValue, setAddressValue] = useState("");
   const [favoriteModalOpen, setFavoriteModalOpen] = useState(false);
@@ -283,7 +284,7 @@ export function TopBar() {
   }, [activeTabId, activeTab?.url, activeTab?.appId]);
 
   useEffect(() => {
-    function handlePointerDown(event: MouseEvent) {
+    function handlePointerDown(event: PointerEvent) {
       const target = event.target as Node | null;
 
       if (!target) return;
@@ -303,12 +304,71 @@ export function TopBar() {
       setHighlightedHistoryIndex(0);
     }
 
-    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleEscape);
 
     return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
+  /**
+   * Defensa global contra resize/drag que queda "pegado".
+   *
+   * Este TopBar no contiene el divisor de pantalla dividida, pero este guard ayuda
+   * a cortar estados visuales globales cuando se pierde el mouseup/pointerup.
+   *
+   * En el componente del divisor conviene escuchar:
+   *
+   * window.addEventListener("nostur:force-stop-resize", stopResizing);
+   *
+   * y dentro de stopResizing hacer setIsResizing(false).
+   */
+  useEffect(() => {
+    function cleanupStuckResizeState() {
+      document.documentElement.classList.remove(
+        "resizing",
+        "is-resizing",
+        "nostur-resizing",
+        "nostur-is-resizing"
+      );
+
+      document.body.classList.remove(
+        "resizing",
+        "is-resizing",
+        "nostur-resizing",
+        "nostur-is-resizing"
+      );
+
+      document.documentElement.style.cursor = "";
+      document.documentElement.style.userSelect = "";
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+
+      window.dispatchEvent(new CustomEvent("nostur:force-stop-resize"));
+    }
+
+    function handleKeyUp(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+
+      cleanupStuckResizeState();
+    }
+
+    window.addEventListener("pointerup", cleanupStuckResizeState, true);
+    window.addEventListener("mouseup", cleanupStuckResizeState, true);
+    window.addEventListener("pointercancel", cleanupStuckResizeState, true);
+    window.addEventListener("blur", cleanupStuckResizeState, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+
+    return () => {
+      window.removeEventListener("pointerup", cleanupStuckResizeState, true);
+      window.removeEventListener("mouseup", cleanupStuckResizeState, true);
+      window.removeEventListener("pointercancel", cleanupStuckResizeState, true);
+      window.removeEventListener("blur", cleanupStuckResizeState, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+
+      cleanupStuckResizeState();
     };
   }, []);
 
@@ -323,11 +383,24 @@ export function TopBar() {
     void applyZoomToActiveView(zoomFactor);
   }, [activeTabId]);
 
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
+
   function showToast(type: ToastState["type"], message: string) {
     setToast({ type, message });
 
-    window.setTimeout(() => {
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => {
       setToast(null);
+      toastTimeoutRef.current = null;
     }, 4200);
   }
 
@@ -339,24 +412,24 @@ export function TopBar() {
     ) as NosturWebview | null;
   }
 
-async function applyZoomToActiveView(nextZoom: number) {
-  const webview = getActiveWebview();
+  async function applyZoomToActiveView(nextZoom: number) {
+    const webview = getActiveWebview();
 
-  if (webview && typeof webview.setZoomFactor === "function") {
-    webview.setZoomFactor(nextZoom);
-    return;
+    if (webview && typeof webview.setZoomFactor === "function") {
+      webview.setZoomFactor(nextZoom);
+      return;
+    }
+
+    if (window.nostur?.setMainZoom) {
+      await window.nostur.setMainZoom(nextZoom);
+      return;
+    }
+
+    document.body.style.transformOrigin = "top left";
+    document.body.style.transform = `scale(${nextZoom})`;
+    document.body.style.width = `${100 / nextZoom}%`;
+    document.body.style.height = `${100 / nextZoom}%`;
   }
-
-  if (window.nostur?.setMainZoom) {
-    await window.nostur.setMainZoom(nextZoom);
-    return;
-  }
-
-  document.body.style.transformOrigin = "top left";
-  document.body.style.transform = `scale(${nextZoom})`;
-  document.body.style.width = `${100 / nextZoom}%`;
-  document.body.style.height = `${100 / nextZoom}%`;
-}
 
   function applyZoom(nextZoom: number) {
     const normalizedZoom = Math.max(
@@ -383,15 +456,15 @@ async function applyZoomToActiveView(nextZoom: number) {
     applyZoom(zoomFactor + ZOOM_STEP);
   }
 
-function handleZoomReset() {
-  try {
-    window.localStorage.setItem("nostur:zoom-factor", String(ZOOM_DEFAULT));
-  } catch {
-    // Sin acción.
-  }
+  function handleZoomReset() {
+    try {
+      window.localStorage.setItem("nostur:zoom-factor", String(ZOOM_DEFAULT));
+    } catch {
+      // Sin acción.
+    }
 
-  applyZoom(ZOOM_DEFAULT);
-}
+    applyZoom(ZOOM_DEFAULT);
+  }
 
   function commitNavigation(value: string) {
     const finalUrl = normalizeUrl(value);

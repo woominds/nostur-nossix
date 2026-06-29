@@ -2,6 +2,9 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
+
+
+
 /* =========================================================
    NOSTUR PRELOAD
    Puente seguro entre MAIN y RENDERER
@@ -67,6 +70,9 @@ function normalizeNotificationPayload(payload) {
 }
 
 contextBridge.exposeInMainWorld("nostur", {
+
+
+  
   /* =========================================================
      SISTEMA / CACHE / ZOOM
   ========================================================= */
@@ -177,3 +183,15 @@ contextBridge.exposeInMainWorld("nostur", {
   onDownloadDone: (callback) =>
     createSafeListener("nostur:download-done", callback)
 });
+
+onPasswordResetLink: (callback) => {
+  const listener = (_event, payload) => {
+    callback(payload);
+  };
+
+  ipcRenderer.on("nostur:password-reset-link", listener);
+
+  return () => {
+    ipcRenderer.removeListener("nostur:password-reset-link", listener);
+  };
+}

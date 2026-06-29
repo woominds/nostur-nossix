@@ -30,13 +30,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { formatMoneyAR } from "../../lib/formatters";
-import { openPresupuestoPreview } from "../../lib/presupuestosPdf";
-
-import {
-  getResumenDireccion,
-  getTramosByDireccion,
-  parseVuelos
-} from "../../lib/parseVuelos";
+import { buildPresupuestoHtml } from "../../lib/presupuestosPdf";
 import {
   usePresupuestosV2Store,
   type CreateCombinacionDraft,
@@ -61,13 +55,14 @@ import {
 
 /* =========================================================
    NOSSIX / NOSTUR — PRESUPUESTOS V2
-   Versión corregida y ampliada:
-   - Cliente por teléfono más tolerante.
-   - Destinos desde base de datos.
-   - Selects flotantes sin quedar tapados por modal.
-   - Carga manual tipo wizard.
-   - Notas generales editables del presupuesto.
-   - Notas por opción comercial.
+
+   Enfoque funcional:
+   - IA como flujo principal: crear y pegar texto.
+   - Manual como carga/corrección.
+   - Presupuesto = comparador de opciones comerciales.
+   - Opción comercial = vuelos + hoteles + servicios + tarifa + pagos + promos.
+   - No divide precio por pasajero salvo que el vendedor lo marque.
+   - Todo lo flexible se guarda en combinacion.metadata para testear sin migración.
 ========================================================= */
 
 type PresupuestosState = ReturnType<typeof usePresupuestosV2Store.getState>;
@@ -92,6 +87,11 @@ type PassengerDraft = {
   adultos: number;
   menores: number;
   edadesMenores: string;
+};
+
+type PresupuestoDestinoDraft = {
+  pais: string;
+  destino: string;
 };
 
 type ClienteDetectado = {
@@ -155,17 +155,16 @@ type PresupuestoIaPreview = {
 };
 
 /* =========================================================
-   BORRADORES AUTOMÁTICOS
-   - Guarda en localStorage mientras se carga.
-   - Evita perder datos al cambiar de pestaña, cerrar modal o usar split.
+   LOCAL STORAGE DRAFTS
 ========================================================= */
 
-const PRESUPUESTOS_DRAFT_VERSION = 1;
+const PRESUPUESTOS_DRAFT_VERSION = 3;
 
 type NuevoPresupuestoDraftStorage = {
   version: number;
   draft: CreatePresupuestoV2Draft;
   passengers: PassengerDraft;
+  destinosPresupuestados: PresupuestoDestinoDraft[];
   updatedAt: string;
 };
 
@@ -175,69 +174,92 @@ type PresupuestoIaDraftStorage = {
   updatedAt: string;
 };
 
-type PresupuestoManualDraftStorage = {
+type PrecioDraftStorage = {
   version: number;
   step: ManualWizardStep;
-  vueloDraft: {
-    titulo: string;
-    raw_text: string;
-    captura_url: string;
-    captura_path: string | null;
-    precio_total: string;
-    moneda: MonedaSimple;
-    mostrar_precio_en_pdf: boolean;
-    incluir_en_pdf: boolean;
-  };
+  vueloDraft: ManualVueloDraft;
   hotelSearch: string;
   selectedHotelMaestro: HotelMaestroLite | null;
-  hotelDraft: {
-    hotel_id: string | null;
-    nombre: string;
-    destino: string;
-    ubicacion: string;
-    categoria: string;
-    regimen: string;
-    habitacion: string;
-    descripcion: string;
-    imagen_url: string;
-    precio_total: string;
-    moneda: MonedaSimple;
-    mostrar_precio_en_pdf: boolean;
-    incluir_en_pdf: boolean;
-  };
-  servicioDraft: {
-    tipo: string;
-    nombre: string;
-    descripcion: string;
-    precio_total: string;
-    moneda: MonedaSimple;
-    mostrar_precio_en_pdf: boolean;
-    incluir_en_pdf: boolean;
-    incluido: boolean;
-    opcional: boolean;
-  };
-  precioDraft: {
-    nombre: string;
-    subtitulo: string;
-    descripcion: string;
-    precio_total: string;
-    moneda: MonedaSimple;
-    precio_contado: string;
-    precio_transferencia: string;
-    precio_tarjeta: string;
-    precio_financiado: string;
-    cuotas: string;
-    valor_cuota: string;
-    seña: string;
-    incluye_resumen: string;
-    no_incluye_resumen: string;
-    forma_pago_resumen: string;
-    condiciones_pago: string;
-    promocion_utilizada: string;
-    destacada: boolean;
-    visible_en_pdf: boolean;
-  };
+  hotelDraft: ManualHotelDraft;
+  servicioDraft: ManualServicioDraft;
+  precioDraft: ManualPrecioDraft;
   updatedAt: string;
+};
+
+type ManualVueloDraft = {
+  titulo: string;
+  raw_text: string;
+  captura_url: string;
+  captura_path: string | null;
+  precio_total: string;
+  moneda: MonedaSimple;
+  mostrar_precio_en_pdf: boolean;
+  incluir_en_pdf: boolean;
+};
+
+type ManualHotelDraft = {
+  hotel_id: string | null;
+  nombre: string;
+  destino: string;
+  ubicacion: string;
+  categoria: string;
+  regimen: string;
+  habitacion: string;
+  descripcion: string;
+  imagen_url: string;
+  precio_total: string;
+  moneda: MonedaSimple;
+  mostrar_precio_en_pdf: boolean;
+  incluir_en_pdf: boolean;
+};
+
+type ManualServicioDraft = {
+  tipo: string;
+  nombre: string;
+  descripcion: string;
+  precio_total: string;
+  moneda: MonedaSimple;
+  mostrar_precio_en_pdf: boolean;
+  incluir_en_pdf: boolean;
+  incluido: boolean;
+  opcional: boolean;
+};
+
+type ManualPrecioDraft = {
+  id?: string;
+  nombre: string;
+  subtitulo: string;
+  descripcion: string;
+  precio_total: string;
+  moneda: MonedaSimple;
+  mostrar_precio_por_pasajero: boolean;
+  precio_label: string;
+  composicion_precio_texto: string;
+  tarifas_pasajeros_texto: string;
+  promociones_texto: string;
+  descuentos_texto: string;
+  formas_pago_texto: string;
+  precio_contado: string;
+  precio_transferencia: string;
+  precio_tarjeta: string;
+  precio_financiado: string;
+  cuotas: string;
+  valor_cuota: string;
+  tarjeta: string;
+  banco: string;
+  con_interes: boolean;
+  seña: string;
+  saldo: string;
+  incluye_resumen: string;
+  no_incluye_resumen: string;
+  forma_pago_resumen: string;
+  condiciones_pago: string;
+  promocion_utilizada: string;
+  destacada: boolean;
+  visible_en_pdf: boolean;
+  vuelos_ids: string[];
+  hoteles_ids: string[];
+  servicios_ids: string[];
 };
 
 function getNuevoPresupuestoDraftKey(): string {
@@ -249,15 +271,13 @@ function getPresupuestoIaDraftKey(presupuestoId: string): string {
 }
 
 function getPresupuestoManualDraftKey(presupuestoId: string): string {
-  return `nostur:presupuestos-v2:${presupuestoId}:manual-draft`;
+  return `nostur:presupuestos-v2:${presupuestoId}:manual-draft-v3`;
 }
 
 function readJsonDraft<T>(key: string): T | null {
   try {
     const raw = window.localStorage.getItem(key);
-
     if (!raw) return null;
-
     return JSON.parse(raw) as T;
   } catch {
     return null;
@@ -268,7 +288,7 @@ function writeJsonDraft<T>(key: string, value: T): void {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // Si el navegador no permite guardar, no rompemos la carga.
+    // No romper operación principal.
   }
 }
 
@@ -276,7 +296,7 @@ function removeJsonDraft(key: string): void {
   try {
     window.localStorage.removeItem(key);
   } catch {
-    // Si falla, no rompemos la operación principal.
+    // No romper operación principal.
   }
 }
 
@@ -331,8 +351,6 @@ const COMMON_DESTINOS: SelectOption[] = [
   value: item,
   label: item
 }));
-
-
 
 /* =========================================================
    HELPERS
@@ -458,8 +476,11 @@ function getEstadoClass(value: string): string {
   if (value === "ENVIADO") return "border-sky-200 bg-sky-50 text-sky-700";
   if (value === "RECHAZADO" || value === "CANCELADO") return "border-red-200 bg-red-50 text-red-700";
   if (value === "VENCIDO") return "border-amber-200 bg-amber-50 text-amber-700";
-
   return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function isSellerProfile(profile?: ProfileLite | null): boolean {
+  return String(profile?.rol || "").toLowerCase() === "vendedor";
 }
 
 function getDisplayName(presupuesto?: PresupuestoV2Resumen | PresupuestoV2 | null): string {
@@ -472,6 +493,58 @@ function getDisplayName(presupuesto?: PresupuestoV2Resumen | PresupuestoV2 | nul
     presupuesto.numero ||
     "Sin nombre"
   );
+}
+function getPdfVendedorNombre(
+  presupuesto: PresupuestoV2 | null,
+  vendedores: ProfileLite[]
+): string {
+  if (!presupuesto) return "";
+
+  const record = presupuesto as unknown as Record<string, unknown>;
+
+  const vendedorDirecto = String(
+    record.vendedor_nombre ||
+      record.vendedor ||
+      record.vendedor_email ||
+      ""
+  ).trim();
+
+  if (vendedorDirecto) return vendedorDirecto;
+
+  const vendedorId = String(record.vendedor_id || "").trim();
+
+  if (!vendedorId) return "";
+
+  const vendedor = vendedores.find((item) => item.id === vendedorId);
+
+  if (!vendedor) return "";
+
+  return (
+    [vendedor.nombre, vendedor.apellido].filter(Boolean).join(" ").trim() ||
+    vendedor.email ||
+    ""
+  );
+}
+
+function withPdfExtraFields(
+  presupuesto: PresupuestoV2,
+  vendedores: ProfileLite[]
+): PresupuestoV2 {
+  const vendedorNombre = getPdfVendedorNombre(presupuesto, vendedores);
+
+  return {
+    ...presupuesto,
+    vendedor_nombre: vendedorNombre
+  } as PresupuestoV2;
+}
+
+
+function getStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
 }
 
 function getArray(value: unknown): Record<string, unknown>[] {
@@ -494,6 +567,186 @@ function getPreviewValue(item: Record<string, unknown>, keys: string[]): string 
 
   return "";
 }
+
+function safeRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function normalizeDestinoDraftItem(item: Partial<PresupuestoDestinoDraft>): PresupuestoDestinoDraft {
+  return {
+    pais: String(item.pais || "").trim(),
+    destino: String(item.destino || "").trim()
+  };
+}
+
+function normalizeDestinosDraft(items: PresupuestoDestinoDraft[]): PresupuestoDestinoDraft[] {
+  const result: PresupuestoDestinoDraft[] = [];
+  const seen = new Set<string>();
+
+  items.forEach((item) => {
+    const clean = normalizeDestinoDraftItem(item);
+    const key = normalizeSearchText(`${clean.destino}|${clean.pais}`);
+
+    if (!clean.destino && !clean.pais) return;
+    if (seen.has(key)) return;
+
+    seen.add(key);
+    result.push(clean);
+  });
+
+  return result;
+}
+
+function getDestinoDraftLabel(item: PresupuestoDestinoDraft): string {
+  const clean = normalizeDestinoDraftItem(item);
+
+  if (clean.destino && clean.pais) return `${clean.destino}, ${clean.pais}`;
+  return clean.destino || clean.pais;
+}
+
+function buildDestinoPrincipalFromDraft(items: PresupuestoDestinoDraft[]): string {
+  const destinos = normalizeDestinosDraft(items)
+    .map((item) => item.destino || item.pais)
+    .filter(Boolean);
+
+  return destinos.join(" + ");
+}
+
+function buildDestinoDetalleFromDraft(items: PresupuestoDestinoDraft[]): string | null {
+  const paises = normalizeDestinosDraft(items)
+    .map((item) => item.pais)
+    .filter(Boolean);
+
+  const unique = Array.from(new Set(paises));
+
+  return unique.length ? unique.join(" · ") : null;
+}
+
+function getDestinosFromMetadataLike(value: unknown): PresupuestoDestinoDraft[] {
+  const metadata = safeRecord(value);
+  const raw = metadata.destinos_presupuestados || metadata.destinos;
+
+  if (Array.isArray(raw)) {
+    return normalizeDestinosDraft(
+      raw
+        .map((item): PresupuestoDestinoDraft | null => {
+          if (typeof item === "string") {
+            return {
+              pais: "",
+              destino: item
+            };
+          }
+
+          if (item && typeof item === "object" && !Array.isArray(item)) {
+            const record = item as Record<string, unknown>;
+
+            return {
+              pais: String(record.pais || record.country || record.pais_nombre || record.country_name || ""),
+              destino: String(
+                record.destino ||
+                  record.destination ||
+                  record.ciudad ||
+                  record.city ||
+                  record.nombre ||
+                  record.name ||
+                  ""
+              )
+            };
+          }
+
+          return null;
+        })
+        .filter((item): item is PresupuestoDestinoDraft => Boolean(item))
+    );
+  }
+
+  if (typeof raw === "string" && raw.trim()) {
+    return normalizeDestinosDraft(
+      raw
+        .split(/[,\n;]/)
+        .map((item) => ({
+          pais: "",
+          destino: item.trim()
+        }))
+    );
+  }
+
+  return [];
+}
+
+function getDestinosFromPresupuestoLike(
+  presupuesto: Partial<PresupuestoV2> | Partial<CreatePresupuestoV2Draft> | null | undefined
+): PresupuestoDestinoDraft[] {
+  if (!presupuesto) return [];
+
+  const record = presupuesto as Record<string, unknown>;
+  const metadataDestinos = getDestinosFromMetadataLike(record.metadata);
+
+  if (metadataDestinos.length) return metadataDestinos;
+
+  const principal = String(record.destino_principal || "").trim();
+  const detalle = String(record.destino_detalle || "").trim();
+
+  if (principal) {
+    return normalizeDestinosDraft([
+      {
+        pais: detalle,
+        destino: principal
+      }
+    ]);
+  }
+
+  return [
+    {
+      pais: "",
+      destino: ""
+    }
+  ];
+}
+
+function getDestinosFromParsedIa(
+  parsed: Record<string, unknown>,
+  fallbackPresupuesto: PresupuestoV2
+): PresupuestoDestinoDraft[] {
+  const direct = getDestinosFromMetadataLike({
+    destinos_presupuestados:
+      parsed.destinos_presupuestados ||
+      parsed.destinos_detectados ||
+      parsed.destinos ||
+      safeRecord(parsed.caratula).destinos_presupuestados
+  });
+
+  if (direct.length) return direct;
+
+  const destinoPrincipal = String(
+    parsed.destino_principal ||
+      safeRecord(parsed.caratula).destino_principal ||
+      fallbackPresupuesto.destino_principal ||
+      ""
+  ).trim();
+
+  const destinoDetalle = String(
+    parsed.destino_detalle ||
+      safeRecord(parsed.caratula).destino_detalle ||
+      fallbackPresupuesto.destino_detalle ||
+      ""
+  ).trim();
+
+  if (destinoPrincipal) {
+    return normalizeDestinosDraft([
+      {
+        pais: destinoDetalle,
+        destino: destinoPrincipal
+      }
+    ]);
+  }
+
+  return getDestinosFromPresupuestoLike(fallbackPresupuesto);
+}
+
+
+
 
 function buildFlightRawText(item: Record<string, unknown>, fallback: string): string {
   const direct = getPreviewValue(item, [
@@ -551,10 +804,7 @@ function buildIaPreview(rawText: string, parsed: Record<string, unknown>): Presu
       })
       .find(Boolean) || "";
 
-  const resumen =
-    parsed.resumen_humano && typeof parsed.resumen_humano === "object" && !Array.isArray(parsed.resumen_humano)
-      ? (parsed.resumen_humano as Record<string, unknown>)
-      : {};
+  const resumen = safeRecord(parsed.resumen_humano);
 
   const advertencias = Array.isArray(resumen.advertencias)
     ? resumen.advertencias.map((item) => String(item || "").trim()).filter(Boolean)
@@ -599,10 +849,7 @@ function getHotelMaestroDescription(hotel: HotelMaestroLite): string {
 }
 
 function normalizeHotelMaestroFromDb(row: Record<string, unknown>): HotelMaestroLite {
-  const metadata =
-    row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
-      ? (row.metadata as Record<string, unknown>)
-      : {};
+  const metadata = safeRecord(row.metadata);
 
   const imagenesRaw = Array.isArray(row.imagenes)
     ? row.imagenes
@@ -767,7 +1014,6 @@ async function searchClienteByTelefono(telefono: string): Promise<ClienteDetecta
     if (error) continue;
 
     const rows = (data || []) as Record<string, unknown>[];
-
     const found = rows.find((row) => phoneMatches(normalized, getRowPhone(row)));
 
     if (found) {
@@ -784,80 +1030,88 @@ async function searchClienteByTelefono(telefono: string): Promise<ClienteDetecta
   return null;
 }
 
-function extractDireccionFromHotelItem(item: Record<string, unknown>): string {
-  const direct =
-    getPreviewValue(item, ["direccion", "address", "formatted_address"]) ||
-    getPreviewValue(item, ["zona", "ubicacion"]);
-
-  if (direct) return direct;
-
-  const descripcion = buildHotelDescription(item);
-
-  return descripcion
-    .replace(/^Ubicado en\s+/i, "")
-    .replace(/^Ubicado\s+en\s+/i, "")
-    .replace(/\.$/, "")
-    .trim();
+function parseLines(value: string): string[] {
+  return String(value || "")
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
-type HotelGoogleEnrichResult = {
-  ok?: boolean;
-  query?: string;
-  error?: string;
-  hotel?: {
-    place_id?: string | null;
-    nombre?: string | null;
-    direccion?: string | null;
-    telefono?: string | null;
-    website?: string | null;
-    google_maps_url?: string | null;
-    rating?: number | null;
-    user_ratings_total?: number | null;
-    descripcion?: string | null;
-    tipos?: string[];
-    foto_url?: string | null;
-    fotos?: Array<{
-      url?: string | null;
-      width?: number | null;
-      height?: number | null;
-    }>;
-  };
-};
+function parsePaymentLines(value: string, moneda: MonedaSimple) {
+  return parseLines(value).map((line, index) => ({
+    id: `manual-payment-${index + 1}`,
+    tipo: "OTRO",
+    titulo: line.includes(":") ? line.split(":")[0].trim() : `Forma de pago ${index + 1}`,
+    descripcion: line,
+    moneda,
+    visible_en_pdf: true
+  }));
+}
 
-async function enrichHotelWithGooglePlaces({
-  nombre,
-  destino,
-  direccion
-}: {
-  nombre: string;
-  destino: string;
-  direccion: string;
-}): Promise<HotelGoogleEnrichResult | null> {
-  if (!nombre.trim()) return null;
+function parsePromoLines(value: string, kind: "promo" | "discount", moneda: MonedaSimple) {
+  return parseLines(value).map((line, index) => ({
+    id: `manual-${kind}-${index + 1}`,
+    nombre: line.includes(":") ? line.split(":")[0].trim() : line,
+    descripcion: line.includes(":") ? line.split(":").slice(1).join(":").trim() : "",
+    moneda,
+    visible_en_pdf: true
+  }));
+}
 
-  try {
-    const { data, error } = await supabase.functions.invoke("hotel-google-enrich", {
-      body: {
-        hotel_nombre: nombre,
-        destino,
-        direccion
-      }
-    });
+function parseTarifaLines(value: string, moneda: MonedaSimple) {
+  return parseLines(value).map((line, index) => {
+    const parts = line.split("|").map((item) => item.trim());
 
-    if (error) {
-      return {
-        ok: false,
-        error: error.message || "Error invocando hotel-google-enrich"
-      };
-    }
+    const descripcion = parts[0] || `Tarifa ${index + 1}`;
+    const cantidad = toNumberOrNull(parts[1] || "");
+    const precioUnitario = toNumberOrNull(parts[2] || "");
+    const subtotal = toNumberOrNull(parts[3] || "");
 
-    return (data || {}) as HotelGoogleEnrichResult;
-  } catch (error) {
     return {
-      ok: false,
-      error: error instanceof Error ? error.message : "Error desconocido invocando Google Places"
+      id: `manual-tariff-${index + 1}`,
+      descripcion,
+      cantidad,
+      precio_unitario: precioUnitario,
+      subtotal,
+      moneda,
+      notas: parts[4] || null,
+      visible_en_pdf: true
     };
-  }
+  });
+}
+
+function makeOptionSummaryFromIds({
+  vuelos,
+  hoteles,
+  servicios,
+  vuelosIds,
+  hotelesIds,
+  serviciosIds
+}: {
+  vuelos: PresupuestoVuelo[];
+  hoteles: PresupuestoHotel[];
+  servicios: PresupuestoServicio[];
+  vuelosIds: string[];
+  hotelesIds: string[];
+  serviciosIds: string[];
+}) {
+  const vuelosTexto = vuelos
+    .filter((item) => vuelosIds.includes(item.id))
+    .map((item) => item.titulo || item.ruta_resumen || item.aerolinea || "Aéreo");
+
+  const hotelesTexto = hoteles
+    .filter((item) => hotelesIds.includes(item.id))
+    .map((item) => [item.nombre, item.regimen, item.habitacion].filter(Boolean).join(" · "));
+
+  const serviciosTexto = servicios
+    .filter((item) => serviciosIds.includes(item.id))
+    .map((item) => item.nombre || "Servicio");
+
+  return {
+    vuelos_texto: vuelosTexto,
+    hoteles_texto: hotelesTexto,
+    servicios_texto: serviciosTexto
+  };
 }
 
 /* =========================================================
@@ -956,9 +1210,7 @@ function NosturSelect({
 
     const spaceBelow = viewportHeight - rect.bottom - 10;
     const spaceAbove = rect.top - 10;
-
     const opensUp = spaceBelow < 120 && spaceAbove > spaceBelow;
-
     const maxHeight = opensUp
       ? Math.max(86, Math.min(280, spaceAbove - 8))
       : Math.max(86, Math.min(280, spaceBelow - 8));
@@ -973,17 +1225,6 @@ function NosturSelect({
     };
   }
 
-  function openSelect() {
-    if (disabled) return;
-
-    const nextPosition = calculatePosition();
-
-    if (!nextPosition) return;
-
-    setPosition(nextPosition);
-    setOpen(true);
-  }
-
   function closeSelect() {
     setOpen(false);
     setPosition(null);
@@ -993,21 +1234,26 @@ function NosturSelect({
     event.preventDefault();
     event.stopPropagation();
 
+    if (disabled) return;
+
     if (open) {
       closeSelect();
       return;
     }
 
-    openSelect();
+    const nextPosition = calculatePosition();
+
+    if (!nextPosition) return;
+
+    setPosition(nextPosition);
+    setOpen(true);
   }
 
   useEffect(() => {
     if (!open) return;
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closeSelect();
-      }
+      if (event.key === "Escape") closeSelect();
     }
 
     function handleReposition() {
@@ -1060,10 +1306,6 @@ function NosturSelect({
                 event.preventDefault();
                 event.stopPropagation();
               }}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
             >
               {options.length === 0 ? (
                 <div className="px-3 py-2 text-[12px] font-normal text-[#94a3b8]">
@@ -1080,7 +1322,6 @@ function NosturSelect({
                       onMouseDown={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-
                         onChange(option.value);
                         closeSelect();
                       }}
@@ -1174,7 +1415,6 @@ function NosturDatePicker({
   const [monthCursor, setMonthCursor] = useState(() => {
     const base = value || min || todayIsoDate();
     const date = new Date(`${base}T00:00:00`);
-
     return Number.isNaN(date.getTime()) ? new Date() : date;
   });
 
@@ -1213,7 +1453,6 @@ function NosturDatePicker({
     const pickerWidth = 292;
     const pickerHeight = 330;
     const margin = 12;
-
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
 
@@ -1224,26 +1463,13 @@ function NosturDatePicker({
 
     const spaceBelow = viewportHeight - rect.bottom - margin;
     const spaceAbove = rect.top - margin;
-
     const opensUp = spaceBelow < pickerHeight && spaceAbove > spaceBelow;
 
     const top = opensUp
       ? Math.max(margin, rect.top - pickerHeight - 6)
       : Math.min(rect.bottom + 6, viewportHeight - pickerHeight - margin);
 
-    return {
-      top,
-      left
-    };
-  }
-
-  function openPicker() {
-    const nextPosition = calculatePosition();
-
-    if (!nextPosition) return;
-
-    setPosition(nextPosition);
-    setOpen(true);
+    return { top, left };
   }
 
   function closePicker() {
@@ -1260,7 +1486,12 @@ function NosturDatePicker({
       return;
     }
 
-    openPicker();
+    const nextPosition = calculatePosition();
+
+    if (!nextPosition) return;
+
+    setPosition(nextPosition);
+    setOpen(true);
   }
 
   useEffect(() => {
@@ -1278,9 +1509,7 @@ function NosturDatePicker({
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closePicker();
-      }
+      if (event.key === "Escape") closePicker();
     }
 
     window.addEventListener("resize", handleReposition);
@@ -1313,124 +1542,129 @@ function NosturDatePicker({
         />
       </button>
 
-      {open && position ? (
-        createPortal(
-          <>
-            <button
-              type="button"
-              className="fixed inset-0 z-[9998] cursor-default bg-transparent"
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                closePicker();
-              }}
-              tabIndex={-1}
-              aria-label="Cerrar calendario"
-            />
+      {open && position
+        ? createPortal(
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-[9998] cursor-default bg-transparent"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closePicker();
+                }}
+                tabIndex={-1}
+                aria-label="Cerrar calendario"
+              />
 
-            <div
-              className="fixed z-[9999] w-[292px] rounded-[18px] border border-black/10 bg-white p-3 shadow-2xl"
-              style={{
-                top: position.top,
-                left: position.left
-              }}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
-            >
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))
-                  }
-                  className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#f8fafc] text-[#64748b] hover:bg-[#eef2f7]"
-                >
-                  ‹
-                </button>
+              <div
+                className="fixed z-[9999] w-[292px] rounded-[18px] border border-black/10 bg-white p-3 shadow-2xl"
+                style={{
+                  top: position.top,
+                  left: position.left
+                }}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+              >
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMonthCursor(
+                        (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1)
+                      )
+                    }
+                    className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#f8fafc] text-[#64748b] hover:bg-[#eef2f7]"
+                  >
+                    ‹
+                  </button>
 
-                <div className="text-[12px] font-semibold capitalize text-[#172033]">
-                  {new Intl.DateTimeFormat("es-AR", {
-                    month: "long",
-                    year: "numeric"
-                  }).format(monthCursor)}
+                  <div className="text-[12px] font-semibold capitalize text-[#172033]">
+                    {new Intl.DateTimeFormat("es-AR", {
+                      month: "long",
+                      year: "numeric"
+                    }).format(monthCursor)}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMonthCursor(
+                        (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1)
+                      )
+                    }
+                    className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#f8fafc] text-[#64748b] hover:bg-[#eef2f7]"
+                  >
+                    ›
+                  </button>
+                </div>
+
+                <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[10px] font-medium uppercase text-[#94a3b8]">
+                  <span>D</span>
+                  <span>L</span>
+                  <span>M</span>
+                  <span>M</span>
+                  <span>J</span>
+                  <span>V</span>
+                  <span>S</span>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1">
+                  {cells.map((cell, index) => {
+                    if (!cell) return <div key={`empty-${index}`} className="h-8" />;
+
+                    const disabled = Boolean(min && cell < min);
+
+                    return (
+                      <button
+                        key={cell}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          onChange(cell);
+                          closePicker();
+                        }}
+                        className={[
+                          "flex h-8 items-center justify-center rounded-[10px] text-[12px] font-medium transition",
+                          cell === value
+                            ? "bg-[#4f7c90] text-white"
+                            : disabled
+                              ? "cursor-not-allowed text-[#cbd5e1]"
+                              : "text-[#334155] hover:bg-[#f1f5f9]"
+                        ].join(" ")}
+                      >
+                        {new Date(`${cell}T00:00:00`).getDate()}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 <button
                   type="button"
-                  onClick={() =>
-                    setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))
-                  }
-                  className="flex h-8 w-8 items-center justify-center rounded-[10px] bg-[#f8fafc] text-[#64748b] hover:bg-[#eef2f7]"
+                  onClick={() => {
+                    const today = todayIsoDate();
+
+                    if (!min || today >= min) {
+                      onChange(today);
+                      setMonthCursor(new Date(`${today}T00:00:00`));
+                      closePicker();
+                    }
+                  }}
+                  className="mt-3 h-8 w-full rounded-[10px] bg-[#f8fafc] text-[12px] font-medium text-[#334155] hover:bg-[#eef2f7]"
                 >
-                  ›
+                  Hoy
                 </button>
               </div>
-
-              <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[10px] font-medium uppercase text-[#94a3b8]">
-                <span>D</span>
-                <span>L</span>
-                <span>M</span>
-                <span>M</span>
-                <span>J</span>
-                <span>V</span>
-                <span>S</span>
-              </div>
-
-              <div className="grid grid-cols-7 gap-1">
-                {cells.map((cell, index) => {
-                  if (!cell) return <div key={`empty-${index}`} className="h-8" />;
-
-                  const disabled = Boolean(min && cell < min);
-
-                  return (
-                    <button
-                      key={cell}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => {
-                        onChange(cell);
-                        closePicker();
-                      }}
-                      className={[
-                        "flex h-8 items-center justify-center rounded-[10px] text-[12px] font-medium transition",
-                        cell === value
-                          ? "bg-[#4f7c90] text-white"
-                          : disabled
-                            ? "cursor-not-allowed text-[#cbd5e1]"
-                            : "text-[#334155] hover:bg-[#f1f5f9]"
-                      ].join(" ")}
-                    >
-                      {new Date(`${cell}T00:00:00`).getDate()}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const today = todayIsoDate();
-
-                  if (!min || today >= min) {
-                    onChange(today);
-                    setMonthCursor(new Date(`${today}T00:00:00`));
-                    closePicker();
-                  }
-                }}
-                className="mt-3 h-8 w-full rounded-[10px] bg-[#f8fafc] text-[12px] font-medium text-[#334155] hover:bg-[#eef2f7]"
-              >
-                Hoy
-              </button>
-            </div>
-          </>,
-          document.body
-        )
-      ) : null}
+            </>,
+            document.body
+          )
+        : null}
     </>
   );
 }
+
 function InlineError({ message, onClose }: { message: string | null; onClose: () => void }) {
   if (!message) return null;
 
@@ -1504,7 +1738,7 @@ function ModalShell({
   maxWidth?: string;
   variant?: "center" | "side";
 }) {
-   if (variant === "side") {
+  if (variant === "side") {
     return createPortal(
       <div className="pointer-events-none fixed bottom-0 right-0 top-[39px] z-[180] flex justify-end">
         <aside className="pointer-events-auto h-full w-full max-w-[560px] overflow-hidden border-l border-black/10 bg-[#edf3f7] text-[#172033] shadow-2xl">
@@ -1512,14 +1746,9 @@ function ModalShell({
             <div className="shrink-0 border-b border-black/10 bg-white/85 px-4 py-3 backdrop-blur-xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h2 className="truncate text-[17px] font-semibold text-[#172033]">
-                    {title}
-                  </h2>
-
+                  <h2 className="truncate text-[17px] font-semibold text-[#172033]">{title}</h2>
                   {subtitle ? (
-                    <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">
-                      {subtitle}
-                    </p>
+                    <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">{subtitle}</p>
                   ) : null}
                 </div>
 
@@ -1533,9 +1762,7 @@ function ModalShell({
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto p-4">
-              {children}
-            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
           </div>
         </aside>
       </div>,
@@ -1553,15 +1780,8 @@ function ModalShell({
       >
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-[17px] font-semibold text-[#172033]">
-              {title}
-            </h2>
-
-            {subtitle ? (
-              <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">
-                {subtitle}
-              </p>
-            ) : null}
+            <h2 className="text-[17px] font-semibold text-[#172033]">{title}</h2>
+            {subtitle ? <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">{subtitle}</p> : null}
           </div>
 
           <button
@@ -1618,7 +1838,6 @@ function MetricCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-[10.5px] font-medium text-[#64748b]">{label}</div>
-
           <div className="mt-0.5 truncate text-[18px] font-semibold tracking-tight text-[#172033]">
             {value}
           </div>
@@ -1655,25 +1874,6 @@ function SmallMetric({ icon, value, label }: { icon: ReactNode; value: number; l
       <div className="text-[18px] font-semibold tracking-tight text-[#172033]">{value}</div>
       <div className="text-[10.5px] font-medium text-[#64748b]">{label}</div>
     </div>
-  );
-}
-
-function SectionSummaryList({
-  title,
-  emptyText,
-  children
-}: {
-  title: string;
-  emptyText: string;
-  children: ReactNode;
-}) {
-  const hasChildren = Boolean(children);
-
-  return (
-    <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
-      <h3 className="mb-2.5 text-[14px] font-semibold text-[#172033]">{title}</h3>
-      {hasChildren ? children : <EmptyState text={emptyText} />}
-    </section>
   );
 }
 
@@ -1837,6 +2037,141 @@ function DestinoAutocomplete({
   );
 }
 
+
+function DestinosMultiplesEditor({
+  value,
+  onChange,
+  options
+}: {
+  value: PresupuestoDestinoDraft[];
+  onChange: (value: PresupuestoDestinoDraft[]) => void;
+  options: SelectOption[];
+}) {
+  const destinos = value.length
+    ? value
+    : [
+        {
+          pais: "",
+          destino: ""
+        }
+      ];
+
+  function updateDestino(index: number, patch: Partial<PresupuestoDestinoDraft>) {
+    const next = destinos.map((item, itemIndex) =>
+      itemIndex === index
+        ? normalizeDestinoDraftItem({
+            ...item,
+            ...patch
+          })
+        : item
+    );
+
+    onChange(next);
+  }
+
+  function addDestino() {
+    onChange([
+      ...destinos,
+      {
+        pais: "",
+        destino: ""
+      }
+    ]);
+  }
+
+  function removeDestino(index: number) {
+    const next = destinos.filter((_, itemIndex) => itemIndex !== index);
+
+    onChange(
+      next.length
+        ? next
+        : [
+            {
+              pais: "",
+              destino: ""
+            }
+          ]
+    );
+  }
+
+  const cleanDestinos = normalizeDestinosDraft(destinos);
+
+  return (
+    <div className="rounded-[16px] border border-black/10 bg-white p-3 shadow-sm">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4 className="text-[13px] font-semibold text-[#172033]">Destinos del viaje</h4>
+          <p className="mt-0.5 text-[11.5px] font-normal leading-5 text-[#64748b]">
+            Cargá uno o más destinos. Sirve para viajes combinados entre países, por ejemplo Punta Cana + Maceió.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={addDestino}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-3 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d]"
+        >
+          <Plus size={14} />
+          Agregar
+        </button>
+      </div>
+
+      <div className="grid gap-2">
+        {destinos.map((item, index) => (
+          <div
+            key={`destino-${index}`}
+            className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_32px]"
+          >
+            <div>
+              <FieldLabel>Destino</FieldLabel>
+              <DestinoAutocomplete
+                value={item.destino}
+                onChange={(destino) => updateDestino(index, { destino })}
+                options={options}
+                placeholder="Ej: Punta Cana, Maceió, Madrid..."
+              />
+            </div>
+
+            <div>
+              <FieldLabel>País</FieldLabel>
+              <TextInput
+                value={item.pais}
+                onChange={(pais) => updateDestino(index, { pais })}
+                placeholder="Ej: República Dominicana, Brasil..."
+              />
+            </div>
+
+            <div className="flex items-end">
+              <button
+                type="button"
+                onClick={() => removeDestino(index)}
+                disabled={destinos.length <= 1 && !item.destino && !item.pais}
+                className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Quitar destino"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {cleanDestinos.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {cleanDestinos.map((item, index) => (
+            <span
+              key={`${item.destino}-${item.pais}-${index}`}
+              className="inline-flex rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700"
+            >
+              {getDestinoDraftLabel(item)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function PassengerSelector({
   value,
   onChange
@@ -1847,7 +2182,6 @@ function PassengerSelector({
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-
   const total = value.adultos + value.menores;
 
   function updateCounter(key: "adultos" | "menores", delta: number) {
@@ -1996,28 +2330,18 @@ function RowMoreMenu({
     const menuWidth = 230;
     const menuHeight = 188;
     const margin = 10;
-
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-
-    const left = Math.min(
-      Math.max(margin, rect.right - menuWidth),
-      viewportWidth - menuWidth - margin
-    );
-
+    const left = Math.min(Math.max(margin, rect.right - menuWidth), viewportWidth - menuWidth - margin);
     const spaceBelow = viewportHeight - rect.bottom - margin;
     const spaceAbove = rect.top - margin;
-
     const opensUp = spaceBelow < menuHeight && spaceAbove > spaceBelow;
 
     const top = opensUp
       ? Math.max(margin, rect.top - menuHeight - 6)
       : Math.min(rect.bottom + 6, viewportHeight - menuHeight - margin);
 
-    return {
-      top,
-      left
-    };
+    return { top, left };
   }
 
   function closeMenu() {
@@ -2057,9 +2381,7 @@ function RowMoreMenu({
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closeMenu();
-      }
+      if (event.key === "Escape") closeMenu();
     }
 
     window.addEventListener("resize", handleReposition);
@@ -2085,75 +2407,75 @@ function RowMoreMenu({
         Más
       </button>
 
-      {open && position ? (
-        createPortal(
-          <>
-            <button
-              type="button"
-              className="fixed inset-0 z-[900] cursor-default bg-transparent"
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                closeMenu();
-              }}
-              tabIndex={-1}
-              aria-label="Cerrar menú"
-            />
-
-            <div
-              className="fixed z-[910] w-[230px] rounded-[14px] border border-black/10 bg-white p-1.5 shadow-2xl"
-              style={{
-                top: position.top,
-                left: position.left
-              }}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
-            >
-              <MenuAction
-                icon={<Copy size={14} />}
-                label="Duplicar"
-                onClick={() => {
+      {open && position
+        ? createPortal(
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-[900] cursor-default bg-transparent"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
                   closeMenu();
-                  onDuplicate();
                 }}
+                tabIndex={-1}
+                aria-label="Cerrar menú"
               />
 
-              <MenuAction
-                icon={<Eye size={14} />}
-                label="Vista previa real"
-                onClick={() => {
-                  closeMenu();
-                  onPreview();
+              <div
+                className="fixed z-[910] w-[230px] rounded-[14px] border border-black/10 bg-white p-1.5 shadow-2xl"
+                style={{
+                  top: position.top,
+                  left: position.left
                 }}
-              />
-
-              <MenuAction
-                icon={<Send size={14} />}
-                label="Enviar por LiveNos"
-                onClick={() => {
-                  closeMenu();
-                  onSendLiveNos();
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
                 }}
-              />
+              >
+                <MenuAction
+                  icon={<Copy size={14} />}
+                  label="Duplicar"
+                  onClick={() => {
+                    closeMenu();
+                    onDuplicate();
+                  }}
+                />
 
-              <div className="my-1 h-px bg-black/10" />
+                <MenuAction
+                  icon={<Eye size={14} />}
+                  label="Vista previa real"
+                  onClick={() => {
+                    closeMenu();
+                    onPreview();
+                  }}
+                />
 
-              <MenuAction
-                danger
-                icon={<Trash2 size={14} />}
-                label="Eliminar"
-                onClick={() => {
-                  closeMenu();
-                  onDelete();
-                }}
-              />
-            </div>
-          </>,
-          document.body
-        )
-      ) : null}
+                <MenuAction
+                  icon={<Send size={14} />}
+                  label="Enviar por LiveNos"
+                  onClick={() => {
+                    closeMenu();
+                    onSendLiveNos();
+                  }}
+                />
+
+                <div className="my-1 h-px bg-black/10" />
+
+                <MenuAction
+                  danger
+                  icon={<Trash2 size={14} />}
+                  label="Eliminar"
+                  onClick={() => {
+                    closeMenu();
+                    onDelete();
+                  }}
+                />
+              </div>
+            </>,
+            document.body
+          )
+        : null}
     </>
   );
 }
@@ -2257,7 +2579,9 @@ function HotelSearchBox({
           >
             {hoteles.length === 0 ? (
               <div className="px-3 py-2 text-[12px] font-normal text-[#94a3b8]">
-                {value.trim().length < 2 ? "Escribí al menos 2 letras." : "Sin hoteles encontrados."}
+                {value.trim().length < 2
+                  ? "Escribí al menos 2 letras."
+                  : "Sin hoteles encontrados."}
               </div>
             ) : (
               hoteles.map((hotel) => (
@@ -2303,9 +2627,87 @@ function HotelSearchBox({
   );
 }
 
-/* =========================================================
-   FILTROS
-========================================================= */
+function ResourceCheckList<T extends { id: string }>({
+  title,
+  empty,
+  items,
+  selectedIds,
+  getTitle,
+  getSubtitle,
+  onChange
+}: {
+  title: string;
+  empty: string;
+  items: T[];
+  selectedIds: string[];
+  getTitle: (item: T) => string;
+  getSubtitle: (item: T) => string;
+  onChange: (ids: string[]) => void;
+}) {
+  function toggle(id: string) {
+    if (selectedIds.includes(id)) {
+      onChange(selectedIds.filter((item) => item !== id));
+      return;
+    }
+
+    onChange([...selectedIds, id]);
+  }
+
+  return (
+    <section className="min-w-0 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <h4 className="min-w-0 truncate text-[12px] font-semibold text-[#172033]">{title}</h4>
+
+        <span className="shrink-0 rounded-md bg-white px-1.5 py-0.5 text-[10px] font-medium text-[#64748b] ring-1 ring-black/10">
+          {selectedIds.length}/{items.length}
+        </span>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="text-[11.5px] font-normal text-[#94a3b8]">{empty}</div>
+      ) : (
+        <div className="grid min-w-0 gap-1.5">
+          {items.map((item) => {
+            const checked = selectedIds.includes(item.id);
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => toggle(item.id)}
+                className={[
+                  "flex min-w-0 items-start gap-2 overflow-hidden rounded-[12px] border px-2.5 py-2 text-left transition",
+                  checked
+                    ? "border-[#4f7c90]/30 bg-[#eef6f7]"
+                    : "border-black/10 bg-white hover:bg-[#f8fafc]"
+                ].join(" ")}
+              >
+                <span
+                  className={[
+                    "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                    checked ? "border-[#4f7c90] bg-[#4f7c90] text-white" : "border-black/20 bg-white"
+                  ].join(" ")}
+                >
+                  {checked ? <Check size={11} /> : null}
+                </span>
+
+                <span className="min-w-0 flex-1 overflow-hidden">
+                  <span className="block max-w-full truncate text-[11.5px] font-semibold text-[#172033]">
+                    {getTitle(item)}
+                  </span>
+
+                  <span className="block max-w-full truncate text-[10.5px] font-normal text-[#64748b]">
+                    {getSubtitle(item)}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function PresupuestoFilters({
   filters,
@@ -2328,7 +2730,10 @@ function PresupuestoFilters({
       { value: "todos", label: "Todos" },
       ...vendedores.map((vendedor) => ({
         value: vendedor.id,
-        label: `${vendedor.nombre || ""} ${vendedor.apellido || ""}`.trim() || vendedor.email || "Usuario"
+        label:
+          `${vendedor.nombre || ""} ${vendedor.apellido || ""}`.trim() ||
+          vendedor.email ||
+          "Usuario"
       }))
     ],
     [vendedores]
@@ -2438,6 +2843,7 @@ function NuevoPresupuestoModal({
   vendedores,
   sucursales,
   destinos,
+  currentProfile,
   saving,
   onClose,
   onCreate
@@ -2445,6 +2851,7 @@ function NuevoPresupuestoModal({
   vendedores: ProfileLite[];
   sucursales: SucursalLite[];
   destinos: SelectOption[];
+  currentProfile: ProfileLite | null;
   saving: boolean;
   onClose: () => void;
   onCreate: (draft: CreatePresupuestoV2Draft, nextMode: "IA" | "MANUAL") => Promise<boolean>;
@@ -2452,28 +2859,38 @@ function NuevoPresupuestoModal({
   const today = todayIsoDate();
   const searchTimer = useRef<number | null>(null);
   const nuevoDraftKey = getNuevoPresupuestoDraftKey();
-
   const savedNuevoDraft = readJsonDraft<NuevoPresupuestoDraftStorage>(nuevoDraftKey);
-
   const [localError, setLocalError] = useState<string | null>(null);
   const [searchingCliente, setSearchingCliente] = useState(false);
   const [clienteDetectado, setClienteDetectado] = useState<ClienteDetectado | null>(null);
 
+  const defaultVendedorId =
+    isSellerProfile(currentProfile) && currentProfile?.id ? currentProfile.id : null;
+
+  const defaultSucursalId =
+    isSellerProfile(currentProfile) && currentProfile?.sucursal_id
+      ? currentProfile.sucursal_id
+      : null;
+
   const [draft, setDraft] = useState<CreatePresupuestoV2Draft>(() => {
     if (savedNuevoDraft?.version === PRESUPUESTOS_DRAFT_VERSION && savedNuevoDraft.draft) {
+      const savedDraftRecord = savedNuevoDraft.draft as unknown as Record<string, unknown>;
+
       return {
         cliente_nombre: savedNuevoDraft.draft.cliente_nombre || "",
         cliente_telefono: savedNuevoDraft.draft.cliente_telefono || "",
         cliente_email: savedNuevoDraft.draft.cliente_email || "",
         destino_principal: savedNuevoDraft.draft.destino_principal || "",
+        destino_detalle: String(savedDraftRecord.destino_detalle || "").trim() || null,
         fecha_salida: savedNuevoDraft.draft.fecha_salida || "",
         fecha_regreso: savedNuevoDraft.draft.fecha_regreso || "",
         adultos: savedNuevoDraft.draft.adultos || 2,
         menores: savedNuevoDraft.draft.menores || 0,
         edades_menores: savedNuevoDraft.draft.edades_menores || null,
-        vendedor_id: savedNuevoDraft.draft.vendedor_id || null,
-        sucursal_id: savedNuevoDraft.draft.sucursal_id || null
-      };
+        vendedor_id: savedNuevoDraft.draft.vendedor_id || defaultVendedorId,
+        sucursal_id: savedNuevoDraft.draft.sucursal_id || defaultSucursalId,
+        metadata: safeRecord(savedDraftRecord.metadata)
+      } as unknown as CreatePresupuestoV2Draft;
     }
 
     return {
@@ -2481,13 +2898,15 @@ function NuevoPresupuestoModal({
       cliente_telefono: "",
       cliente_email: "",
       destino_principal: "",
+      destino_detalle: null,
       fecha_salida: "",
       fecha_regreso: "",
       adultos: 2,
       menores: 0,
-      vendedor_id: null,
-      sucursal_id: null
-    };
+      vendedor_id: defaultVendedorId,
+      sucursal_id: defaultSucursalId,
+      metadata: {}
+    } as unknown as CreatePresupuestoV2Draft;
   });
 
   const [passengers, setPassengers] = useState<PassengerDraft>(() => {
@@ -2506,19 +2925,42 @@ function NuevoPresupuestoModal({
     };
   });
 
+  const [destinosPresupuestados, setDestinosPresupuestados] = useState<PresupuestoDestinoDraft[]>(() => {
+    if (
+      savedNuevoDraft?.version === PRESUPUESTOS_DRAFT_VERSION &&
+      Array.isArray(savedNuevoDraft.destinosPresupuestados) &&
+      savedNuevoDraft.destinosPresupuestados.length > 0
+    ) {
+      return normalizeDestinosDraft(savedNuevoDraft.destinosPresupuestados);
+    }
+
+    return getDestinosFromPresupuestoLike(savedNuevoDraft?.draft || null);
+  });
+
   useEffect(() => {
+    const destinosClean = normalizeDestinosDraft(destinosPresupuestados);
+    const destinoPrincipal = buildDestinoPrincipalFromDraft(destinosClean);
+    const destinoDetalle = buildDestinoDetalleFromDraft(destinosClean);
+
     writeJsonDraft<NuevoPresupuestoDraftStorage>(nuevoDraftKey, {
       version: PRESUPUESTOS_DRAFT_VERSION,
       draft: {
         ...draft,
+        destino_principal: destinoPrincipal,
+        destino_detalle: destinoDetalle,
         adultos: passengers.adultos,
         menores: passengers.menores,
-        edades_menores: passengers.edadesMenores || null
+        edades_menores: passengers.edadesMenores || null,
+        metadata: {
+          ...safeRecord((draft as Record<string, unknown>).metadata),
+          destinos_presupuestados: destinosClean
+        }
       } as CreatePresupuestoV2Draft,
       passengers,
+      destinosPresupuestados: destinosClean,
       updatedAt: new Date().toISOString()
     });
-  }, [nuevoDraftKey, draft, passengers]);
+  }, [nuevoDraftKey, draft, passengers, destinosPresupuestados]);
 
   const noches = diffNights(draft.fecha_salida, draft.fecha_regreso);
 
@@ -2526,7 +2968,10 @@ function NuevoPresupuestoModal({
     { value: "sin_vendedor", label: "Sin vendedor" },
     ...vendedores.map((vendedor) => ({
       value: vendedor.id,
-      label: `${vendedor.nombre || ""} ${vendedor.apellido || ""}`.trim() || vendedor.email || "Usuario"
+      label:
+        `${vendedor.nombre || ""} ${vendedor.apellido || ""}`.trim() ||
+        vendedor.email ||
+        "Usuario"
     }))
   ];
 
@@ -2553,9 +2998,7 @@ function NuevoPresupuestoModal({
     setField("cliente_telefono", value);
     setClienteDetectado(null);
 
-    if (searchTimer.current) {
-      window.clearTimeout(searchTimer.current);
-    }
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
 
     searchTimer.current = window.setTimeout(() => {
       if (normalizePhone(value).length < 6) return;
@@ -2591,9 +3034,11 @@ function NuevoPresupuestoModal({
   }
 
   function validate(): string | null {
+    const destinosClean = normalizeDestinosDraft(destinosPresupuestados);
+
     if (!String(draft.cliente_nombre || "").trim()) return "Ingresá el nombre del cliente.";
     if (!String(draft.cliente_telefono || "").trim()) return "Ingresá el teléfono del cliente.";
-    if (!String(draft.destino_principal || "").trim()) return "Ingresá el destino principal.";
+    if (!destinosClean.some((item) => item.destino || item.pais)) return "Ingresá al menos un destino.";
     if (!draft.fecha_salida) return "Seleccioná la fecha de salida.";
     if (!draft.fecha_regreso) return "Seleccioná la fecha de regreso.";
     if (draft.fecha_regreso <= draft.fecha_salida) return "La fecha de regreso debe ser posterior a la salida.";
@@ -2610,19 +3055,29 @@ function NuevoPresupuestoModal({
       return;
     }
 
-      const created = await onCreate(
+    const destinosClean = normalizeDestinosDraft(destinosPresupuestados);
+    const destinoPrincipal = buildDestinoPrincipalFromDraft(destinosClean);
+    const destinoDetalle = buildDestinoDetalleFromDraft(destinosClean);
+
+    const created = await onCreate(
       {
         ...draft,
+        destino_principal: destinoPrincipal,
+        destino_detalle: destinoDetalle,
         adultos: passengers.adultos,
         menores: passengers.menores,
-        edades_menores: passengers.edadesMenores || null
+        edades_menores: passengers.edadesMenores || null,
+        vendedor_id: draft.vendedor_id || null,
+        sucursal_id: draft.sucursal_id || null,
+        metadata: {
+          ...safeRecord((draft as Record<string, unknown>).metadata),
+          destinos_presupuestados: destinosClean
+        }
       } as CreatePresupuestoV2Draft,
       nextMode
     );
 
-    if (created) {
-      removeJsonDraft(nuevoDraftKey);
-    }
+    if (created) removeJsonDraft(nuevoDraftKey);
   }
 
   function handleSalidaChange(value: string) {
@@ -2636,159 +3091,165 @@ function NuevoPresupuestoModal({
   return (
     <ModalShell
       title="Nuevo presupuesto"
-      subtitle="Carátula inicial del pasajero y viaje."
+      subtitle="Primero cargá la carátula. Después podés pegar texto para IA o crear vacío."
       onClose={onClose}
       variant="side"
     >
       <InlineError message={localError} onClose={() => setLocalError(null)} />
 
-            <div className="grid gap-3">
-        <main className="grid gap-3">
-          <section className="rounded-[16px] border border-black/10 bg-[#f8fafc] p-3">
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-[14px] font-semibold text-[#172033]">Carátula</h3>
-                <p className="text-[11.5px] font-normal text-[#64748b]">
-                  Datos base del pasajero y del viaje.
-                </p>
-              </div>
-
-              <span className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-nostur-orange ring-1 ring-orange-100">
-                ALMUNDO
-              </span>
+      <div className="grid gap-3">
+        <section className="rounded-[16px] border border-black/10 bg-[#f8fafc] p-3">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-[14px] font-semibold text-[#172033]">Carátula</h3>
+              <p className="text-[11.5px] font-normal text-[#64748b]">
+                Datos base del pasajero y del viaje.
+              </p>
             </div>
 
-            <div className="grid gap-2.5 md:grid-cols-2">
-              <div>
-                <FieldLabel>Nombre y apellido</FieldLabel>
-                <TextInput
-                  value={draft.cliente_nombre || ""}
-                  onChange={(value) => setField("cliente_nombre", value)}
-                  placeholder="Nombre del pasajero / familia"
-                />
-              </div>
+            <span className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-nostur-orange ring-1 ring-orange-100">
+              ALMUNDO
+            </span>
+          </div>
 
-              <div>
-                <FieldLabel>Teléfono</FieldLabel>
-                <TextInput
-                  value={draft.cliente_telefono || ""}
-                  onChange={handleTelefonoChange}
-                  placeholder="+549..."
-                  inputMode="tel"
-                />
-              </div>
-
-              <div>
-                <FieldLabel>Email</FieldLabel>
-                <TextInput
-                  value={draft.cliente_email || ""}
-                  onChange={(value) => setField("cliente_email", value)}
-                  placeholder="cliente@email.com"
-                  inputMode="email"
-                />
-              </div>
-
-              <div>
-                <FieldLabel>Destino principal</FieldLabel>
-                <DestinoAutocomplete
-                  value={draft.destino_principal || ""}
-                  onChange={(value) => setField("destino_principal", value)}
-                  options={destinos}
-                  placeholder="Ej: Cancún, Río, Europa..."
-                />
-              </div>
-
-              <div>
-                <FieldLabel>Fecha salida</FieldLabel>
-                <NosturDatePicker
-                  value={draft.fecha_salida || ""}
-                  min={today}
-                  onChange={handleSalidaChange}
-                  placeholder="Seleccionar salida"
-                />
-              </div>
-
-                            <div>
-                <FieldLabel>Fecha regreso</FieldLabel>
-                <NosturDatePicker
-                  value={draft.fecha_regreso || ""}
-                  min={draft.fecha_salida || today}
-                  onChange={(value) => setField("fecha_regreso", value)}
-                  placeholder="Seleccionar regreso"
-                />
-              </div>
-
-              <div>
-                <FieldLabel>Pasajeros</FieldLabel>
-                <PassengerSelector value={passengers} onChange={setPassengers} />
-              </div>
-
-              <div>
-                <FieldLabel>Noches</FieldLabel>
-                <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-medium text-[#172033]">
-                  {noches ? `${noches} noche${noches === 1 ? "" : "s"}` : "—"}
-                </div>
-              </div>
+          <div className="grid gap-2.5 md:grid-cols-2">
+            <div>
+              <FieldLabel>Nombre y apellido</FieldLabel>
+              <TextInput
+                value={draft.cliente_nombre || ""}
+                onChange={(value) => setField("cliente_nombre", value)}
+                placeholder="Nombre del pasajero / familia"
+              />
             </div>
 
-            {searchingCliente ? (
-              <div className="mt-3 flex items-center gap-2 rounded-[14px] border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] font-medium text-sky-700">
-                <Loader2 size={14} className="animate-spin" />
-                Buscando cliente existente...
-              </div>
-            ) : null}
+            <div>
+              <FieldLabel>Teléfono</FieldLabel>
+              <TextInput
+                value={draft.cliente_telefono || ""}
+                onChange={handleTelefonoChange}
+                placeholder="+549..."
+                inputMode="tel"
+              />
+            </div>
 
-            {clienteDetectado ? (
-              <div className="mt-3 rounded-[14px] border border-emerald-200 bg-emerald-50 p-3 text-[12px]">
-                <div className="mb-2 font-semibold text-emerald-800">Cliente encontrado</div>
+            <div>
+              <FieldLabel>Email</FieldLabel>
+              <TextInput
+                value={draft.cliente_email || ""}
+                onChange={(value) => setField("cliente_email", value)}
+                placeholder="cliente@email.com"
+                inputMode="email"
+              />
+            </div>
 
-                <div className="grid gap-1 font-normal text-emerald-700">
-                  <div>{clienteDetectado.nombre || "Sin nombre"}</div>
-                  <div>{clienteDetectado.telefono || "Sin teléfono"}</div>
-                  {clienteDetectado.email ? <div>{clienteDetectado.email}</div> : null}
-                </div>
+            <div className="md:col-span-2">
+              <DestinosMultiplesEditor
+                value={destinosPresupuestados}
+                onChange={(nextDestinos) => {
+                  const destinosClean = normalizeDestinosDraft(nextDestinos);
+                  const destinoPrincipal = buildDestinoPrincipalFromDraft(destinosClean);
+                  const destinoDetalle = buildDestinoDetalleFromDraft(destinosClean);
 
-                <button
-                  type="button"
-                  onClick={useClienteDetectado}
-                  className="mt-3 h-8 rounded-[10px] bg-emerald-700 px-3 text-[12px] font-medium text-white hover:bg-emerald-800"
-                >
-                  Usar datos
-                </button>
-              </div>
-            ) : null}
-          </section>
+                  setDestinosPresupuestados(nextDestinos);
 
-          <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
-            <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Equipo responsable</h3>
+                  setDraft((current) => ({
+                    ...current,
+                    destino_principal: destinoPrincipal,
+                    destino_detalle: destinoDetalle,
+                    metadata: {
+                      ...safeRecord((current as Record<string, unknown>).metadata),
+                      destinos_presupuestados: destinosClean
+                    }
+                  } as CreatePresupuestoV2Draft));
+                }}
+                options={destinos}
+              />
+            </div>
 
-            <div className="grid gap-2.5 md:grid-cols-2">
-              <div>
-                <FieldLabel>Vendedor</FieldLabel>
-                <NosturSelect
-                  value={draft.vendedor_id || "sin_vendedor"}
-                  onChange={(value) =>
-                    setField("vendedor_id", value === "sin_vendedor" ? null : value)
-                  }
-                  options={vendedorOptions}
-                />
-              </div>
+            <div>
+              <FieldLabel>Fecha salida</FieldLabel>
+              <NosturDatePicker
+                value={draft.fecha_salida || ""}
+                min={today}
+                onChange={handleSalidaChange}
+                placeholder="Seleccionar salida"
+              />
+            </div>
 
-              <div>
-                <FieldLabel>Sucursal</FieldLabel>
-                <NosturSelect
-                  value={draft.sucursal_id || "sin_sucursal"}
-                  onChange={(value) =>
-                    setField("sucursal_id", value === "sin_sucursal" ? null : value)
-                  }
-                  options={sucursalOptions}
-                />
+            <div>
+              <FieldLabel>Fecha regreso</FieldLabel>
+              <NosturDatePicker
+                value={draft.fecha_regreso || ""}
+                min={draft.fecha_salida || today}
+                onChange={(value) => setField("fecha_regreso", value)}
+                placeholder="Seleccionar regreso"
+              />
+            </div>
+
+            <div>
+              <FieldLabel>Pasajeros</FieldLabel>
+              <PassengerSelector value={passengers} onChange={setPassengers} />
+            </div>
+
+            <div>
+              <FieldLabel>Noches</FieldLabel>
+              <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-medium text-[#172033]">
+                {noches ? `${noches} noche${noches === 1 ? "" : "s"}` : "—"}
               </div>
             </div>
-          </section>
-        </main>
+          </div>
 
-      
+          {searchingCliente ? (
+            <div className="mt-3 flex items-center gap-2 rounded-[14px] border border-sky-200 bg-sky-50 px-3 py-2 text-[12px] font-medium text-sky-700">
+              <Loader2 size={14} className="animate-spin" />
+              Buscando cliente existente...
+            </div>
+          ) : null}
+
+          {clienteDetectado ? (
+            <div className="mt-3 rounded-[14px] border border-emerald-200 bg-emerald-50 p-3 text-[12px]">
+              <div className="mb-2 font-semibold text-emerald-800">Cliente encontrado</div>
+
+              <div className="grid gap-1 font-normal text-emerald-700">
+                <div>{clienteDetectado.nombre || "Sin nombre"}</div>
+                <div>{clienteDetectado.telefono || "Sin teléfono"}</div>
+                {clienteDetectado.email ? <div>{clienteDetectado.email}</div> : null}
+              </div>
+
+              <button
+                type="button"
+                onClick={useClienteDetectado}
+                className="mt-3 h-8 rounded-[10px] bg-emerald-700 px-3 text-[12px] font-medium text-white hover:bg-emerald-800"
+              >
+                Usar datos
+              </button>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
+          <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Equipo responsable</h3>
+
+          <div className="grid gap-2.5 md:grid-cols-2">
+            <div>
+              <FieldLabel>Vendedor</FieldLabel>
+              <NosturSelect
+                value={draft.vendedor_id || "sin_vendedor"}
+                onChange={(value) => setField("vendedor_id", value === "sin_vendedor" ? null : value)}
+                options={vendedorOptions}
+              />
+            </div>
+
+            <div>
+              <FieldLabel>Sucursal</FieldLabel>
+              <NosturSelect
+                value={draft.sucursal_id || "sin_sucursal"}
+                onChange={(value) => setField("sucursal_id", value === "sin_sucursal" ? null : value)}
+                options={sucursalOptions}
+              />
+            </div>
+          </div>
+        </section>
       </div>
 
       <div className="mt-5 flex flex-wrap justify-between gap-2">
@@ -2808,7 +3269,7 @@ function NuevoPresupuestoModal({
             className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#172033] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-black disabled:opacity-50"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            Crear y usar IA
+            Crear y pegar texto
           </button>
 
           <button
@@ -2818,7 +3279,7 @@ function NuevoPresupuestoModal({
             className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-            Crear y cargar manual
+            Crear vacío
           </button>
         </div>
       </div>
@@ -2856,7 +3317,10 @@ function PreviewDetectedList({
       ) : (
         <div className="grid gap-1.5">
           {items.map((item, index) => (
-            <div key={`${title}-${index}`} className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3">
+            <div
+              key={`${title}-${index}`}
+              className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3"
+            >
               {renderItem(item, index)}
             </div>
           ))}
@@ -2881,10 +3345,7 @@ function PresupuestoIaModal({
   const savedIaDraft = readJsonDraft<PresupuestoIaDraftStorage>(iaDraftKey);
 
   const [rawText, setRawText] = useState(() => {
-    if (savedIaDraft?.version === PRESUPUESTOS_DRAFT_VERSION) {
-      return savedIaDraft.rawText || "";
-    }
-
+    if (savedIaDraft?.version === PRESUPUESTOS_DRAFT_VERSION) return savedIaDraft.rawText || "";
     return "";
   });
 
@@ -2920,11 +3381,34 @@ function PresupuestoIaModal({
             cliente_nombre: presupuesto.cliente_nombre,
             destino_principal: presupuesto.destino_principal,
             destino_detalle: presupuesto.destino_detalle,
+            destinos_presupuestados: getDestinosFromPresupuestoLike(presupuesto),
             fecha_salida: presupuesto.fecha_salida,
             fecha_regreso: presupuesto.fecha_regreso,
             adultos: presupuesto.adultos,
             menores: presupuesto.menores,
             edades_menores: presupuesto.edades_menores
+          },
+          schema_hint: {
+            objetivo:
+              "Devolver presupuesto como opciones comerciales flexibles. Cada opción puede tener vuelos, hoteles, servicios, precio total, tarifas por pasajero/tipo pasajero, promociones, descuentos y formas de pago.",
+            destinos:
+              "Detectar uno o más destinos. Si hay destinos de distintos países, devolver destinos_presupuestados como array de objetos { pais, destino }. Ejemplo: [{ pais: 'República Dominicana', destino: 'Punta Cana' }, { pais: 'Brasil', destino: 'Maceió' }].",
+            no_asumir_precio_por_pasajero:
+              "No dividir total por pasajeros salvo que el texto lo indique explícitamente.",
+            reglas_pagos:
+              "Si aparecen cuotas sin tarjeta/banco explícito, tratarlas como pagos a cuenta del pasajero, no como tarjeta de crédito.",
+            metadata_recomendada: [
+              "destinos_presupuestados",
+              "formas_pago",
+              "promociones",
+              "descuentos",
+              "tarifas_pasajeros",
+              "composicion_precio_texto",
+              "vuelos_texto",
+              "hoteles_texto",
+              "servicios_texto",
+              "mostrar_precio_por_pasajero"
+            ]
           }
         }
       });
@@ -2941,12 +3425,9 @@ function PresupuestoIaModal({
         return;
       }
 
-      const parsed =
-        response.parsed && typeof response.parsed === "object" && !Array.isArray(response.parsed)
-          ? (response.parsed as Record<string, unknown>)
-          : null;
+      const parsed = safeRecord(response.parsed);
 
-      if (!parsed) {
+      if (!Object.keys(parsed).length) {
         setLocalError("La IA no devolvió información procesable.");
         return;
       }
@@ -2976,7 +3457,7 @@ function PresupuestoIaModal({
   return (
     <ModalShell
       title="Presupuesto por IA"
-      subtitle="Pegá el texto completo, revisá la previsualización y aplicalo solo si sirve."
+      subtitle="Pegá la cotización completa. La IA arma vuelos, hoteles, servicios y opciones comerciales."
       onClose={onClose}
       maxWidth="max-w-7xl"
     >
@@ -2988,7 +3469,8 @@ function PresupuestoIaModal({
             <div className="mb-3">
               <h3 className="text-[14px] font-semibold text-[#172033]">Texto completo</h3>
               <p className="text-[11.5px] font-normal leading-5 text-[#64748b]">
-                Pegá la cotización completa. No borres vuelos, escalas, equipaje ni condiciones.
+                Pegá la cotización completa. Incluí vuelos, hoteles, tarifas, promos,
+                condiciones y pagos.
               </p>
             </div>
 
@@ -3028,7 +3510,7 @@ function PresupuestoIaModal({
             </div>
           </section>
 
-                    <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
+          <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
             <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
               Carátula usada como contexto
             </h3>
@@ -3036,15 +3518,17 @@ function PresupuestoIaModal({
             <div className="grid gap-2 text-[12px]">
               <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
                 <FieldLabel>Cliente</FieldLabel>
-                <div className="font-semibold text-[#172033]">
-                  {presupuesto.cliente_nombre || "—"}
-                </div>
+                <div className="font-semibold text-[#172033]">{presupuesto.cliente_nombre || "—"}</div>
               </div>
 
               <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
-                <FieldLabel>Destino</FieldLabel>
-                <div className="font-semibold text-[#172033]">
-                  {presupuesto.destino_principal || "—"}
+                <FieldLabel>Destino/s</FieldLabel>
+                <div className="grid gap-1 font-semibold text-[#172033]">
+                  {getDestinosFromPresupuestoLike(presupuesto).map((item, index) => (
+                    <div key={`${item.destino}-${item.pais}-${index}`}>
+                      {getDestinoDraftLabel(item)}
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -3118,16 +3602,8 @@ function PresupuestoIaModal({
               </section>
 
               <section className="grid gap-2.5 md:grid-cols-4">
-                <SmallMetric
-                  label="Aéreos"
-                  value={aiPreview.vuelos.length}
-                  icon={<Plane size={16} />}
-                />
-                <SmallMetric
-                  label="Hoteles"
-                  value={aiPreview.hoteles.length}
-                  icon={<Hotel size={16} />}
-                />
+                <SmallMetric label="Aéreos" value={aiPreview.vuelos.length} icon={<Plane size={16} />} />
+                <SmallMetric label="Hoteles" value={aiPreview.hoteles.length} icon={<Hotel size={16} />} />
                 <SmallMetric
                   label="Servicios"
                   value={aiPreview.servicios.length}
@@ -3186,15 +3662,12 @@ function PresupuestoIaModal({
                       {getPreviewValue(item, ["destino"]) ? (
                         <span>{getPreviewValue(item, ["destino"])}</span>
                       ) : null}
-
                       {getPreviewValue(item, ["zona", "ubicacion"]) ? (
                         <span>{getPreviewValue(item, ["zona", "ubicacion"])}</span>
                       ) : null}
-
                       {getPreviewValue(item, ["regimen"]) ? (
                         <span>{getPreviewValue(item, ["regimen"])}</span>
                       ) : null}
-
                       {getPreviewValue(item, ["habitacion"]) ? (
                         <span>{getPreviewValue(item, ["habitacion"])}</span>
                       ) : null}
@@ -3231,7 +3704,7 @@ function PresupuestoIaModal({
                 )}
               />
 
-                            <PreviewDetectedList
+              <PreviewDetectedList
                 title="Opciones comerciales detectadas"
                 emptyText="No se detectaron opciones comerciales/precios."
                 items={aiPreview.opciones_comerciales}
@@ -3305,7 +3778,7 @@ function PresupuestoIaModal({
               <div className="sticky bottom-0 rounded-[16px] border border-black/10 bg-white/95 p-3 shadow-xl backdrop-blur">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-[12px] font-normal text-[#64748b]">
-                    Revisá la información. Al aplicar se guarda en el presupuesto.
+                    Revisá la información. Al aplicar reemplaza solo contenido previo generado por IA.
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -3340,7 +3813,7 @@ function PresupuestoIaModal({
 }
 
 /* =========================================================
-   MODAL MANUAL — WIZARD
+   MODAL MANUAL
 ========================================================= */
 
 function WizardStepButton({
@@ -3384,12 +3857,182 @@ function WizardStepButton({
 
       <span className="min-w-0">
         <span className="block truncate text-[12px] font-semibold">{title}</span>
-        <span className="block truncate text-[10.5px] font-normal text-[#64748b]">
-          {subtitle}
-        </span>
+        <span className="block truncate text-[10.5px] font-normal text-[#64748b]">{subtitle}</span>
       </span>
     </button>
   );
+}
+
+function SummaryCard({
+  title,
+  empty,
+  children
+}: {
+  title: string;
+  empty: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
+      <h3 className="mb-2.5 text-[14px] font-semibold text-[#172033]">{title}</h3>
+      {children || <EmptyState text={empty} />}
+    </section>
+  );
+}
+
+function getCombinacionMetadata(combinacion?: PresupuestoCombinacion | null): Record<string, unknown> {
+  if (!combinacion?.metadata || typeof combinacion.metadata !== "object" || Array.isArray(combinacion.metadata)) {
+    return {};
+  }
+
+  return combinacion.metadata;
+}
+
+function stringifyPaymentLines(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+
+      if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+
+      const record = item as Record<string, unknown>;
+      const id = String(record.id || "");
+      const tipo = String(record.tipo || "");
+
+      // Evita que al editar se vuelvan a cargar en el textarea
+      // pagos que el sistema genera automáticamente al guardar.
+      if (
+        id === "manual-payment-summary" ||
+        id === "manual-payment-installments" ||
+        id === "manual-payment-down-balance" ||
+        tipo === "RESUMEN" ||
+        tipo === "TARJETA_CUOTAS" ||
+        tipo === "PAGOS_A_CUENTA" ||
+        tipo === "SENIA_SALDO"
+      ) {
+        return "";
+      }
+
+      const titulo = String(record.titulo || record.nombre || "").trim();
+      const descripcion = String(record.descripcion || record.detalle || "").trim();
+
+      if (titulo && descripcion) return `${titulo}: ${descripcion}`;
+      return titulo || descripcion;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+function stringifyPromoLines(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+
+  return value
+    .map((item) => {
+      if (typeof item === "string") return item;
+
+      if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+
+      const record = item as Record<string, unknown>;
+      const id = String(record.id || "");
+
+      // Evita duplicar la promo principal al editar.
+      if (id === "manual-promo-main") return "";
+
+      const nombre = String(record.nombre || record.titulo || "").trim();
+      const descripcion = String(record.descripcion || record.detalle || "").trim();
+
+      if (nombre && descripcion) return `${nombre}: ${descripcion}`;
+      return nombre || descripcion;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+function stringifyTarifaLines(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+
+      const record = item as Record<string, unknown>;
+
+      return [
+        String(record.descripcion || record.nombre || record.tipo || "").trim(),
+        record.cantidad ?? "",
+        record.precio_unitario ?? "",
+        record.subtotal ?? "",
+        String(record.notas || "").trim()
+      ]
+        .map((part) => String(part || "").trim())
+        .join(" | ");
+    })
+    .filter((line) => line.replace(/\|/g, "").trim())
+    .join("\n");
+}
+
+function buildPrecioDraftFromCombinacion(
+  combinacion: PresupuestoCombinacion,
+  fallback: ManualPrecioDraft
+): ManualPrecioDraft {
+  const metadata = getCombinacionMetadata(combinacion);
+
+  const vuelosIds = Array.isArray(metadata.vuelos_ids)
+    ? metadata.vuelos_ids.map(String)
+    : fallback.vuelos_ids;
+
+  const hotelesIds = Array.isArray(metadata.hoteles_ids)
+    ? metadata.hoteles_ids.map(String)
+    : fallback.hoteles_ids;
+
+  const serviciosIds = Array.isArray(metadata.servicios_ids)
+    ? metadata.servicios_ids.map(String)
+    : fallback.servicios_ids;
+
+  const cuotas =
+    metadata.cuotas !== null && metadata.cuotas !== undefined ? String(metadata.cuotas) : "";
+
+  const valorCuota =
+    metadata.valor_cuota !== null && metadata.valor_cuota !== undefined
+      ? String(metadata.valor_cuota)
+      : "";
+
+  return {
+    ...fallback,
+    nombre: combinacion.nombre || fallback.nombre,
+    subtitulo: combinacion.subtitulo || "",
+    descripcion: combinacion.descripcion || "",
+    precio_total: combinacion.precio_total ? String(combinacion.precio_total) : "",
+    moneda: toMonedaSimple(String(combinacion.moneda || "USD")),
+    mostrar_precio_por_pasajero: Boolean(metadata.mostrar_precio_por_pasajero),
+    precio_label: String(metadata.precio_label || "Precio total"),
+    composicion_precio_texto: String(metadata.composicion_precio_texto || ""),
+    tarifas_pasajeros_texto: stringifyTarifaLines(metadata.tarifas_pasajeros),
+    promociones_texto: stringifyPromoLines(metadata.promociones),
+    descuentos_texto: stringifyPromoLines(metadata.descuentos),
+    formas_pago_texto: stringifyPaymentLines(metadata.formas_pago),
+    precio_contado: combinacion.precio_contado ? String(combinacion.precio_contado) : "",
+    precio_transferencia: combinacion.precio_transferencia ? String(combinacion.precio_transferencia) : "",
+    precio_tarjeta: combinacion.precio_tarjeta ? String(combinacion.precio_tarjeta) : "",
+    precio_financiado: combinacion.precio_financiado ? String(combinacion.precio_financiado) : "",
+    cuotas,
+    valor_cuota: valorCuota,
+    tarjeta: String(metadata.tarjeta || ""),
+    banco: String(metadata.banco || ""),
+    con_interes: Boolean(metadata.con_interes),
+    seña: combinacion.seña ? String(combinacion.seña) : "",
+    saldo: combinacion.saldo ? String(combinacion.saldo) : "",
+    incluye_resumen: combinacion.incluye_resumen || "",
+    no_incluye_resumen: combinacion.no_incluye_resumen || "",
+    forma_pago_resumen: combinacion.forma_pago_resumen || "",
+    condiciones_pago: combinacion.condiciones_pago || "",
+    promocion_utilizada: String(metadata.promocion_utilizada || combinacion.etiqueta || ""),
+    destacada: Boolean(combinacion.destacada),
+    visible_en_pdf: combinacion.visible_en_pdf !== false,
+    vuelos_ids: vuelosIds,
+    hoteles_ids: hotelesIds,
+    servicios_ids: serviciosIds
+  };
 }
 
 function PresupuestoManualModal({
@@ -3405,7 +4048,8 @@ function PresupuestoManualModal({
   onSaveHotel,
   onSaveServicio,
   onSaveCombinacion,
-  onUploadImage
+  onUploadImage,
+  onPreviewPdf
 }: {
   presupuesto: PresupuestoV2;
   vuelos: PresupuestoVuelo[];
@@ -3420,22 +4064,24 @@ function PresupuestoManualModal({
   onSaveServicio: (draft: DraftServicio) => Promise<void>;
   onSaveCombinacion: (draft: DraftCombinacion) => Promise<void>;
   onUploadImage: (file: File) => Promise<UploadedImageResult | null>;
+  onPreviewPdf: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const manualDraftKey = getPresupuestoManualDraftKey(presupuesto.id);
-  const savedManualDraft = readJsonDraft<PresupuestoManualDraftStorage>(manualDraftKey);
+  const savedManualDraft = readJsonDraft<PrecioDraftStorage>(manualDraftKey);
 
   const [step, setStep] = useState<ManualWizardStep>(() => {
     if (savedManualDraft?.version === PRESUPUESTOS_DRAFT_VERSION && savedManualDraft.step) {
       return savedManualDraft.step;
     }
 
-    return "aereos";
+    return "precios";
   });
 
+  const [editingCombinacionId, setEditingCombinacionId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  const [vueloDraft, setVueloDraft] = useState(() => {
+  const [vueloDraft, setVueloDraft] = useState<ManualVueloDraft>(() => {
     if (savedManualDraft?.version === PRESUPUESTOS_DRAFT_VERSION && savedManualDraft.vueloDraft) {
       return savedManualDraft.vueloDraft;
     }
@@ -3444,9 +4090,9 @@ function PresupuestoManualModal({
       titulo: `Opción aérea ${vuelos.length + 1}`,
       raw_text: "",
       captura_url: "",
-      captura_path: null as string | null,
+      captura_path: null,
       precio_total: "",
-      moneda: "USD" as MonedaSimple,
+      moneda: "USD",
       mostrar_precio_en_pdf: false,
       incluir_en_pdf: true
     };
@@ -3468,13 +4114,13 @@ function PresupuestoManualModal({
     return null;
   });
 
-  const [hotelDraft, setHotelDraft] = useState(() => {
+  const [hotelDraft, setHotelDraft] = useState<ManualHotelDraft>(() => {
     if (savedManualDraft?.version === PRESUPUESTOS_DRAFT_VERSION && savedManualDraft.hotelDraft) {
       return savedManualDraft.hotelDraft;
     }
 
     return {
-      hotel_id: null as string | null,
+      hotel_id: null,
       nombre: "",
       destino: presupuesto.destino_principal || "",
       ubicacion: "",
@@ -3484,14 +4130,17 @@ function PresupuestoManualModal({
       descripcion: "",
       imagen_url: "",
       precio_total: "",
-      moneda: "USD" as MonedaSimple,
+      moneda: "USD",
       mostrar_precio_en_pdf: false,
       incluir_en_pdf: true
     };
   });
 
-  const [servicioDraft, setServicioDraft] = useState(() => {
-    if (savedManualDraft?.version === PRESUPUESTOS_DRAFT_VERSION && savedManualDraft.servicioDraft) {
+  const [servicioDraft, setServicioDraft] = useState<ManualServicioDraft>(() => {
+    if (
+      savedManualDraft?.version === PRESUPUESTOS_DRAFT_VERSION &&
+      savedManualDraft.servicioDraft
+    ) {
       return savedManualDraft.servicioDraft;
     }
 
@@ -3500,7 +4149,7 @@ function PresupuestoManualModal({
       nombre: "",
       descripcion: "",
       precio_total: "",
-      moneda: "USD" as MonedaSimple,
+      moneda: "USD",
       mostrar_precio_en_pdf: false,
       incluir_en_pdf: true,
       incluido: true,
@@ -3508,36 +4157,52 @@ function PresupuestoManualModal({
     };
   });
 
-  const [precioDraft, setPrecioDraft] = useState(() => {
+  const getEmptyPrecioDraft = (): ManualPrecioDraft => ({
+    nombre: `Opción ${combinaciones.length + 1}`,
+    subtitulo: "",
+    descripcion: "",
+    precio_total: "",
+    moneda: "USD",
+    mostrar_precio_por_pasajero: false,
+    precio_label: "Precio total",
+    composicion_precio_texto: "",
+    tarifas_pasajeros_texto: "",
+    promociones_texto: "",
+    descuentos_texto: "",
+    formas_pago_texto: "",
+    precio_contado: "",
+    precio_transferencia: "",
+    precio_tarjeta: "",
+    precio_financiado: "",
+    cuotas: "",
+    valor_cuota: "",
+    tarjeta: "",
+    banco: "",
+    con_interes: false,
+    seña: "",
+    saldo: "",
+    incluye_resumen: "",
+    no_incluye_resumen: "",
+    forma_pago_resumen: "",
+    condiciones_pago: "",
+    promocion_utilizada: "",
+    destacada: combinaciones.length === 0,
+    visible_en_pdf: true,
+    vuelos_ids: vuelos.map((item) => item.id),
+    hoteles_ids: hoteles.map((item) => item.id),
+    servicios_ids: servicios.map((item) => item.id)
+  });
+
+  const [precioDraft, setPrecioDraft] = useState<ManualPrecioDraft>(() => {
     if (savedManualDraft?.version === PRESUPUESTOS_DRAFT_VERSION && savedManualDraft.precioDraft) {
       return savedManualDraft.precioDraft;
     }
 
-    return {
-      nombre: `Opción ${combinaciones.length + 1}`,
-      subtitulo: "",
-      descripcion: "",
-      precio_total: "",
-      moneda: "USD" as MonedaSimple,
-      precio_contado: "",
-      precio_transferencia: "",
-      precio_tarjeta: "",
-      precio_financiado: "",
-      cuotas: "",
-      valor_cuota: "",
-      seña: "",
-      incluye_resumen: "",
-      no_incluye_resumen: "",
-      forma_pago_resumen: "",
-      condiciones_pago: "",
-      promocion_utilizada: "",
-      destacada: combinaciones.length === 0,
-      visible_en_pdf: true
-    };
+    return getEmptyPrecioDraft();
   });
 
   useEffect(() => {
-    writeJsonDraft<PresupuestoManualDraftStorage>(manualDraftKey, {
+    writeJsonDraft<PrecioDraftStorage>(manualDraftKey, {
       version: PRESUPUESTOS_DRAFT_VERSION,
       step,
       vueloDraft,
@@ -3567,6 +4232,22 @@ function PresupuestoManualModal({
   const precioTotalPreview = toNumberOrNull(precioDraft.precio_total);
   const precioPorPaxPreview = precioTotalPreview ? precioTotalPreview / totalPax : null;
 
+  function resetPrecioDraft() {
+    setEditingCombinacionId(null);
+    setPrecioDraft({
+      ...getEmptyPrecioDraft(),
+      nombre: `Opción ${combinaciones.length + 1}`,
+      destacada: combinaciones.length === 0
+    });
+  }
+
+  function editCombinacion(combinacion: PresupuestoCombinacion) {
+    setLocalError(null);
+    setEditingCombinacionId(combinacion.id);
+    setPrecioDraft(buildPrecioDraftFromCombinacion(combinacion, getEmptyPrecioDraft()));
+    setStep("precios");
+  }
+
   async function applyFlightImage(file: File) {
     if (!file.type.startsWith("image/")) {
       setLocalError("Solo podés cargar imágenes para el aéreo.");
@@ -3589,11 +4270,9 @@ function PresupuestoManualModal({
 
   async function handleUploadFile(event: ChangeEvent<HTMLInputElement>) {
     const file = Array.from(event.target.files || [])[0];
-
     event.target.value = "";
 
     if (!file) return;
-
     await applyFlightImage(file);
   }
 
@@ -3658,11 +4337,12 @@ function PresupuestoManualModal({
       incluir_en_pdf: vueloDraft.incluir_en_pdf,
       metadata: {
         carga_modo: "MANUAL_WIZARD",
-        mostrar_precio_en_pdf: vueloDraft.mostrar_precio_en_pdf
+        mostrar_precio_en_pdf: vueloDraft.mostrar_precio_en_pdf,
+        mostrar_raw_text_en_pdf: Boolean(vueloDraft.raw_text.trim())
       }
     });
 
-     setVueloDraft({
+    setVueloDraft({
       titulo: `Opción aérea ${vuelos.length + 2}`,
       raw_text: "",
       captura_url: "",
@@ -3713,7 +4393,7 @@ function PresupuestoManualModal({
     setSelectedHotelMaestro(null);
     setHotelSearch("");
 
-      setHotelDraft({
+    setHotelDraft({
       hotel_id: null,
       nombre: "",
       destino: presupuesto.destino_principal || "",
@@ -3777,6 +4457,8 @@ function PresupuestoManualModal({
     const precioTotal = toNumberOrNull(precioDraft.precio_total);
     const cuotas = Number(precioDraft.cuotas || 0);
     const valorCuota = toNumberOrNull(precioDraft.valor_cuota);
+    const seña = toNumberOrNull(precioDraft.seña);
+    const saldo = toNumberOrNull(precioDraft.saldo);
 
     if (!precioDraft.nombre.trim()) {
       setLocalError("La opción necesita nombre.");
@@ -3784,27 +4466,130 @@ function PresupuestoManualModal({
     }
 
     if (!precioTotal || precioTotal <= 0) {
-      setLocalError("Ingresá el precio total del paquete.");
+      setLocalError("Ingresá el precio total del paquete/opción.");
       return;
     }
 
     const promocionClean = precioDraft.promocion_utilizada.trim();
-    const promocionLabel = promocionClean
-      ? `PROMOCIÓN EXCLUSIVA ${promocionClean.toUpperCase()}`
-      : "";
 
-    const formaPagoParts = [
-      precioDraft.forma_pago_resumen.trim(),
+
+const formasPagoBase = parsePaymentLines(precioDraft.formas_pago_texto, precioDraft.moneda);
+
+const formasPagoBaseText = normalizeSearchText(
+  formasPagoBase
+    .map((item) => {
+      const record = item as Record<string, unknown>;
+      return [record.titulo, record.descripcion].filter(Boolean).join(" ");
+    })
+    .join(" ")
+);
+
+const formaPagoResumenClean = precioDraft.forma_pago_resumen.trim();
+
+
+   const formasPagoFlexibles = [
+  ...formasPagoBase,
+      formaPagoResumenClean && !formasPagoBaseText.includes(normalizeSearchText(formaPagoResumenClean))
+  ? {
+      id: "manual-payment-summary",
+      tipo: "RESUMEN",
+      titulo: "Forma de pago",
+      descripcion: formaPagoResumenClean,
+      moneda: precioDraft.moneda,
+      visible_en_pdf: true
+    }
+  : null,
       cuotas > 0 && valorCuota
-        ? `Tarjeta de crédito: ${cuotas} cuota${cuotas === 1 ? "" : "s"} de ${formatMoneyAR(
-            valorCuota,
-            precioDraft.moneda
-          )}`
-        : "",
-      promocionLabel
+        ? {
+            id: "manual-payment-installments",
+            tipo:
+              precioDraft.tarjeta.trim() || precioDraft.banco.trim()
+                ? "TARJETA_CUOTAS"
+                : "PAGOS_A_CUENTA",
+            titulo:
+              precioDraft.tarjeta.trim() || precioDraft.banco.trim()
+                ? [precioDraft.tarjeta || "Tarjeta", precioDraft.banco].filter(Boolean).join(" · ")
+                : "Pagos a cuenta",
+            descripcion:
+              precioDraft.tarjeta.trim() || precioDraft.banco.trim()
+                ? `${cuotas} cuota${cuotas === 1 ? "" : "s"} de ${formatMoneyAR(
+                    valorCuota,
+                    precioDraft.moneda
+                  )}. ${precioDraft.con_interes ? "Con interés." : "Sin interés."}`
+                : `${cuotas} pago${cuotas === 1 ? "" : "s"} a cuenta de ${formatMoneyAR(
+                    valorCuota,
+                    precioDraft.moneda
+                  )}.`,
+            moneda: precioDraft.moneda,
+            cuotas,
+            valor_cuota: valorCuota,
+            tarjeta: precioDraft.tarjeta || null,
+            banco: precioDraft.banco || null,
+            con_interes:
+              precioDraft.tarjeta.trim() || precioDraft.banco.trim()
+                ? precioDraft.con_interes
+                : null,
+            visible_en_pdf: true
+          }
+        : null,
+      seña || saldo
+        ? {
+            id: "manual-payment-down-balance",
+            tipo: "SENIA_SALDO",
+            titulo: "Pago inicial + saldo",
+            descripcion: [
+              seña ? `Pago inicial / seña: ${formatMoneyAR(seña, precioDraft.moneda)}.` : "",
+              saldo ? `Saldo: ${formatMoneyAR(saldo, precioDraft.moneda)}.` : ""
+            ]
+              .filter(Boolean)
+              .join(" "),
+            moneda: precioDraft.moneda,
+            visible_en_pdf: true
+          }
+        : null
     ].filter(Boolean);
 
+ const promocionesBase = parsePromoLines(
+  precioDraft.promociones_texto,
+  "promo",
+  precioDraft.moneda
+);
+
+const promocionesBaseText = normalizeSearchText(
+  promocionesBase
+    .map((item) => {
+      const record = item as Record<string, unknown>;
+      return [record.nombre, record.descripcion].filter(Boolean).join(" ");
+    })
+    .join(" ")
+);
+
+const promociones = [
+  ...promocionesBase,
+  promocionClean && !promocionesBaseText.includes(normalizeSearchText(promocionClean))
+    ? {
+        id: "manual-promo-main",
+        nombre: promocionClean,
+        descripcion: `Promoción aplicada: ${promocionClean}.`,
+        moneda: precioDraft.moneda,
+        visible_en_pdf: true
+      }
+    : null
+].filter(Boolean);
+
+    const descuentos = parsePromoLines(precioDraft.descuentos_texto, "discount", precioDraft.moneda);
+
+    const resumenRefs = makeOptionSummaryFromIds({
+      vuelos,
+      hoteles,
+      servicios,
+      vuelosIds: precioDraft.vuelos_ids,
+      hotelesIds: precioDraft.hoteles_ids,
+      serviciosIds: precioDraft.servicios_ids
+    });
+
     await onSaveCombinacion({
+      id: editingCombinacionId || undefined,
       presupuesto_id: presupuesto.id,
       nombre: precioDraft.nombre,
       subtitulo: precioDraft.subtitulo,
@@ -3815,48 +4600,44 @@ function PresupuestoManualModal({
       precio_transferencia: toNumberOrNull(precioDraft.precio_transferencia),
       precio_tarjeta: toNumberOrNull(precioDraft.precio_tarjeta),
       precio_financiado: toNumberOrNull(precioDraft.precio_financiado),
-      seña: toNumberOrNull(precioDraft.seña),
+      seña,
+      saldo,
       incluye_resumen: precioDraft.incluye_resumen,
       no_incluye_resumen: precioDraft.no_incluye_resumen,
-      forma_pago_resumen: formaPagoParts.join("\n"),
+      forma_pago_resumen: precioDraft.forma_pago_resumen,
       condiciones_pago: precioDraft.condiciones_pago,
       destacada: precioDraft.destacada,
       visible_en_pdf: precioDraft.visible_en_pdf,
-      etiqueta: promocionLabel || null,
+      etiqueta: promocionClean || null,
       metadata: {
         carga_modo: "MANUAL_WIZARD",
+        precio_es_total_paquete: true,
+        mostrar_precio_por_pasajero: precioDraft.mostrar_precio_por_pasajero,
+        precio_label: precioDraft.precio_label || "Precio total",
+        pasajeros_cantidad: totalPax,
+        precio_por_pasajero: precioDraft.mostrar_precio_por_pasajero ? precioTotal / totalPax : null,
+        composicion_precio_texto: precioDraft.composicion_precio_texto || null,
+        tarifas_pasajeros: parseTarifaLines(precioDraft.tarifas_pasajeros_texto, precioDraft.moneda),
+        promociones,
+        descuentos,
+        formas_pago: formasPagoFlexibles,
         promocion_utilizada: promocionClean || null,
-        promocion_label: promocionLabel || null,
         cuotas: cuotas || null,
         valor_cuota: valorCuota,
-        precio_es_total_paquete: true,
-        pasajeros_cantidad: totalPax,
-        precio_por_pasajero: precioTotal / totalPax
+        tarjeta: precioDraft.tarjeta || null,
+        banco: precioDraft.banco || null,
+        con_interes:
+          precioDraft.tarjeta.trim() || precioDraft.banco.trim() ? precioDraft.con_interes : null,
+        pagos_a_cuenta:
+          cuotas > 0 && valorCuota && !precioDraft.tarjeta.trim() && !precioDraft.banco.trim(),
+        vuelos_ids: precioDraft.vuelos_ids,
+        hoteles_ids: precioDraft.hoteles_ids,
+        servicios_ids: precioDraft.servicios_ids,
+        ...resumenRefs
       }
     });
 
-    setPrecioDraft({
-      nombre: `Opción ${combinaciones.length + 2}`,
-      subtitulo: "",
-      descripcion: "",
-      precio_total: "",
-      moneda: "USD",
-      precio_contado: "",
-      precio_transferencia: "",
-      precio_tarjeta: "",
-      precio_financiado: "",
-      cuotas: "",
-      valor_cuota: "",
-      seña: "",
-      incluye_resumen: "",
-      no_incluye_resumen: "",
-      forma_pago_resumen: "",
-      condiciones_pago: "",
-      promocion_utilizada: "",
-      destacada: combinaciones.length === 0,
-      visible_en_pdf: true
-    });
-
+    resetPrecioDraft();
     removeJsonDraft(manualDraftKey);
   }
 
@@ -3872,10 +4653,10 @@ function PresupuestoManualModal({
     if (step === "hoteles") setStep("aereos");
   }
 
-  return (
+    return (
     <ModalShell
-      title="Carga manual de presupuesto"
-      subtitle={`${presupuesto.numero || "Presupuesto"} · carga paso a paso: aéreos, hoteles, servicios y precios.`}
+      title="Editar contenido del presupuesto"
+      subtitle={`${presupuesto.numero || "Presupuesto"} · cargá recursos y armá opciones comerciales.`}
       onClose={onClose}
       maxWidth="max-w-7xl"
     >
@@ -3913,13 +4694,13 @@ function PresupuestoManualModal({
           active={step === "precios"}
           done={combinaciones.length > 0}
           number={4}
-          title="Precios"
+          title="Opciones"
           subtitle={`${combinaciones.length} opción${combinaciones.length === 1 ? "" : "es"}`}
           onClick={() => setStep("precios")}
         />
       </div>
 
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_330px]">
+      <div className="grid min-w-0 gap-3 2xl:grid-cols-[minmax(0,1fr)_340px]">
         <main className="min-w-0">
           {step === "aereos" ? (
             <section className="rounded-[16px] border border-black/10 bg-[#f8fafc] p-3">
@@ -3927,12 +4708,11 @@ function PresupuestoManualModal({
                 <div>
                   <h3 className="flex items-center gap-2 text-[14px] font-semibold text-[#172033]">
                     <Plane size={15} />
-                    Paso 1 · Aéreos
+                    Aéreos
                   </h3>
 
                   <p className="text-[11.5px] font-normal text-[#64748b]">
-                    Podés cargar varias opciones. Pegá captura con Cmd/Ctrl+V, arrastrá una imagen
-                    o escribí el detalle.
+                    Cargá las opciones aéreas disponibles. Después las vinculás a cada opción comercial.
                   </p>
                 </div>
 
@@ -3950,7 +4730,11 @@ function PresupuestoManualModal({
                   onClick={() => fileInputRef.current?.click()}
                   className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] disabled:opacity-50"
                 >
-                  {uploading ? <Loader2 size={13} className="animate-spin" /> : <ImageIcon size={13} />}
+                  {uploading ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <ImageIcon size={13} />
+                  )}
                   Cargar imagen
                 </button>
               </div>
@@ -3961,22 +4745,6 @@ function PresupuestoManualModal({
                 onDrop={(event) => void handleDropFlight(event)}
                 className="mb-3 rounded-[16px] border border-dashed border-[#4f7c90]/35 bg-white p-3"
               >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-[12px] font-semibold text-[#172033]">
-                      Imagen / captura del aéreo
-                    </div>
-
-                    <div className="text-[11px] font-normal text-[#64748b]">
-                      Hacé click en cargar imagen, pegá con Cmd/Ctrl+V o arrastrá la captura acá.
-                    </div>
-                  </div>
-
-                  <span className="rounded-md bg-[#eef6f7] px-2 py-1 text-[10px] font-medium text-[#4f7c90]">
-                    Opcional
-                  </span>
-                </div>
-
                 {vueloDraft.captura_url ? (
                   <div className="overflow-hidden rounded-[14px] border border-black/10 bg-[#f8fafc]">
                     <img
@@ -3986,11 +4754,11 @@ function PresupuestoManualModal({
                     />
                   </div>
                 ) : (
-                  <div className="flex min-h-[180px] items-center justify-center rounded-[14px] bg-[#f8fafc] text-center">
+                  <div className="flex min-h-[150px] items-center justify-center rounded-[14px] bg-[#f8fafc] text-center">
                     <div>
                       <ImageIcon size={28} className="mx-auto mb-2 text-[#94a3b8]" />
                       <div className="text-[12px] font-semibold text-[#334155]">
-                        Todavía no hay imagen cargada
+                        Sin imagen cargada
                       </div>
                       <div className="mt-1 text-[11px] font-normal text-[#64748b]">
                         Pegá, arrastrá o cargá una captura del aéreo.
@@ -4006,7 +4774,7 @@ function PresupuestoManualModal({
                   <TextInput
                     value={vueloDraft.titulo}
                     onChange={(titulo) => setVueloDraft((current) => ({ ...current, titulo }))}
-                    placeholder="Ej: Opción aérea 1"
+                    placeholder="Ej: Opción aérea Copa"
                   />
                 </div>
 
@@ -4038,13 +4806,11 @@ function PresupuestoManualModal({
               </div>
 
               <div>
-                <FieldLabel>Texto libre / condiciones</FieldLabel>
+                <FieldLabel>Texto visible debajo de la imagen / condiciones</FieldLabel>
                 <TextArea
                   value={vueloDraft.raw_text}
-                  onChange={(raw_text) =>
-                    setVueloDraft((current) => ({ ...current, raw_text }))
-                  }
-                  placeholder="Pegá o escribí detalle del aéreo, equipaje incluido/no incluido, condiciones, tarifa, selección de asientos, etc."
+                  onChange={(raw_text) => setVueloDraft((current) => ({ ...current, raw_text }))}
+                  placeholder="Detalle del aéreo, escalas, equipaje, condiciones, tarifa, asientos, etc. Este texto se muestra debajo de la imagen en el PDF."
                   minHeight={150}
                 />
               </div>
@@ -4091,19 +4857,13 @@ function PresupuestoManualModal({
                 <div>
                   <h3 className="flex items-center gap-2 text-[14px] font-semibold text-[#172033]">
                     <Hotel size={15} />
-                    Paso 2 · Hoteles
+                    Hoteles
                   </h3>
 
                   <p className="text-[11.5px] font-normal text-[#64748b]">
-                    El hotel se busca desde hoteles_maestros. Podés cargar varias opciones.
+                    Buscá en hoteles_maestros. Las imágenes quedan disponibles para el PDF.
                   </p>
                 </div>
-
-                {selectedHotelMaestro ? (
-                  <span className="rounded-md border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                    Hotel seleccionado
-                  </span>
-                ) : null}
               </div>
 
               <div className="grid gap-2.5">
@@ -4134,7 +4894,7 @@ function PresupuestoManualModal({
                     <FieldLabel>Nombre</FieldLabel>
                     <TextInput
                       value={hotelDraft.nombre}
-                      onChange={(nombre) => setHotelDraft((current) => ({ ...current, nombre }))}
+                      onChange={() => undefined}
                       placeholder="Seleccioná desde la base"
                       disabled
                     />
@@ -4192,7 +4952,7 @@ function PresupuestoManualModal({
                     />
                   </div>
 
-                                    <div>
+                  <div>
                     <FieldLabel>Precio hotel</FieldLabel>
                     <TextInput
                       value={hotelDraft.precio_total}
@@ -4264,11 +5024,11 @@ function PresupuestoManualModal({
             </section>
           ) : null}
 
-          {step === "servicios" ? (
+                    {step === "servicios" ? (
             <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
               <h3 className="mb-3 flex items-center gap-2 text-[14px] font-semibold text-[#172033]">
                 <PackageCheck size={15} />
-                Paso 3 · Servicios
+                Servicios
               </h3>
 
               <div className="grid gap-2.5 md:grid-cols-3">
@@ -4285,9 +5045,7 @@ function PresupuestoManualModal({
                   <FieldLabel>Nombre</FieldLabel>
                   <TextInput
                     value={servicioDraft.nombre}
-                    onChange={(nombre) =>
-                      setServicioDraft((current) => ({ ...current, nombre }))
-                    }
+                    onChange={(nombre) => setServicioDraft((current) => ({ ...current, nombre }))}
                     placeholder="Traslado / Asistencia / Excursión"
                   />
                 </div>
@@ -4381,262 +5139,476 @@ function PresupuestoManualModal({
 
           {step === "precios" ? (
             <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
-              <h3 className="mb-3 flex items-center gap-2 text-[14px] font-semibold text-[#172033]">
-                <BadgeDollarSign size={15} />
-                Paso 4 · Precio total / opción comercial
-              </h3>
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="flex items-center gap-2 text-[14px] font-semibold text-[#172033]">
+                    <BadgeDollarSign size={15} />
+                    Opciones comerciales
+                  </h3>
 
-              <div className="mb-3 rounded-[14px] border border-[#4f7c90]/20 bg-[#eef6f7] p-3 text-[12px] font-normal text-[#31596a]">
-                El precio total se muestra como total del paquete y también dividido por la
-                cantidad de pasajeros:
-                <strong className="font-semibold">
-                  {" "}
-                  {totalPax} pasajero{totalPax === 1 ? "" : "s"}
-                </strong>
-                .
+                  <p className="mt-0.5 text-[11.5px] font-normal text-[#64748b]">
+                    {editingCombinacionId
+                      ? "Estás editando una opción guardada."
+                      : "Creá una nueva opción comercial."}
+                  </p>
+                </div>
+
+                {editingCombinacionId ? (
+                  <button
+                    type="button"
+                    onClick={resetPrecioDraft}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+                  >
+                    <Plus size={14} />
+                    Nueva opción
+                  </button>
+                ) : null}
               </div>
 
-              <div className="grid gap-2.5 md:grid-cols-3">
-                <div>
-                  <FieldLabel>Nombre</FieldLabel>
-                  <TextInput
-                    value={precioDraft.nombre}
-                    onChange={(nombre) =>
-                      setPrecioDraft((current) => ({ ...current, nombre }))
-                    }
-                    placeholder="Opción 1"
-                  />
-                </div>
+              <div className="mb-3 rounded-[14px] border border-[#4f7c90]/20 bg-[#eef6f7] p-3 text-[12px] font-normal leading-5 text-[#31596a]">
+                Cada opción puede combinar distintos vuelos, hoteles, servicios, tarifas, promos y formas de pago.
+                <strong className="font-semibold"> No se divide por pasajero automáticamente</strong>; solo se muestra si lo marcás.
+                Las cuotas sin tarjeta/banco se muestran como <strong className="font-semibold">pagos a cuenta</strong>, no como tarjeta de crédito.
+              </div>
 
-                <div>
-                  <FieldLabel>Precio total paquete</FieldLabel>
-                  <TextInput
-                    value={precioDraft.precio_total}
-                    onChange={(precio_total) =>
-                      setPrecioDraft((current) => ({ ...current, precio_total }))
-                    }
-                    placeholder="0,00"
-                    inputMode="decimal"
-                  />
-                </div>
+              <div className="grid gap-3">
+                <section className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                  <h4 className="mb-3 text-[13px] font-semibold text-[#172033]">
+                    1. Servicios que usa esta opción
+                  </h4>
 
-                <div>
-                  <FieldLabel>Moneda</FieldLabel>
-                  <NosturSelect
-                    value={precioDraft.moneda}
-                    onChange={(moneda) =>
-                      setPrecioDraft((current) => ({
-                        ...current,
-                        moneda: toMonedaSimple(moneda)
-                      }))
-                    }
-                    options={MONEDA_OPTIONS}
-                  />
-                </div>
+                  <div className="grid min-w-0 gap-2.5 xl:grid-cols-3">
+                    <ResourceCheckList
+                      title="Aéreos"
+                      empty="No hay aéreos cargados."
+                      items={vuelos}
+                      selectedIds={precioDraft.vuelos_ids}
+                      getTitle={(item) => item.titulo || item.ruta_resumen || "Aéreo"}
+                      getSubtitle={(item) =>
+                        item.raw_text || item.ruta_resumen || item.aerolinea || "Sin detalle"
+                      }
+                      onChange={(vuelos_ids) =>
+                        setPrecioDraft((current) => ({ ...current, vuelos_ids }))
+                      }
+                    />
 
-                <div>
-                  <FieldLabel>Precio por pasajero</FieldLabel>
-                  <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-medium text-[#172033]">
-                    {precioPorPaxPreview ? formatMoneyAR(precioPorPaxPreview, precioDraft.moneda) : "—"}
+                    <ResourceCheckList
+                      title="Hoteles"
+                      empty="No hay hoteles cargados."
+                      items={hoteles}
+                      selectedIds={precioDraft.hoteles_ids}
+                      getTitle={(item) => item.nombre || item.titulo || "Hotel"}
+                      getSubtitle={(item) =>
+                        [item.destino, item.regimen, item.habitacion].filter(Boolean).join(" · ") ||
+                        "Sin detalle"
+                      }
+                      onChange={(hoteles_ids) =>
+                        setPrecioDraft((current) => ({ ...current, hoteles_ids }))
+                      }
+                    />
+
+                    <ResourceCheckList
+                      title="Servicios"
+                      empty="No hay servicios cargados."
+                      items={servicios}
+                      selectedIds={precioDraft.servicios_ids}
+                      getTitle={(item) => item.nombre || "Servicio"}
+                      getSubtitle={(item) => item.descripcion || item.tipo || "Sin detalle"}
+                      onChange={(servicios_ids) =>
+                        setPrecioDraft((current) => ({ ...current, servicios_ids }))
+                      }
+                    />
                   </div>
+                </section>
+
+                <section className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                  <h4 className="mb-3 text-[13px] font-semibold text-[#172033]">
+                    2. Precio y presentación
+                  </h4>
+
+                  <div className="grid gap-2.5 md:grid-cols-3">
+                    <div>
+                      <FieldLabel>Nombre</FieldLabel>
+                      <TextInput
+                        value={precioDraft.nombre}
+                        onChange={(nombre) => setPrecioDraft((current) => ({ ...current, nombre }))}
+                        placeholder="Opción 1"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Precio total opción</FieldLabel>
+                      <TextInput
+                        value={precioDraft.precio_total}
+                        onChange={(precio_total) =>
+                          setPrecioDraft((current) => ({ ...current, precio_total }))
+                        }
+                        placeholder="0,00"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Moneda</FieldLabel>
+                      <NosturSelect
+                        value={precioDraft.moneda}
+                        onChange={(moneda) =>
+                          setPrecioDraft((current) => ({
+                            ...current,
+                            moneda: toMonedaSimple(moneda)
+                          }))
+                        }
+                        options={MONEDA_OPTIONS}
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Etiqueta precio</FieldLabel>
+                      <TextInput
+                        value={precioDraft.precio_label}
+                        onChange={(precio_label) =>
+                          setPrecioDraft((current) => ({ ...current, precio_label }))
+                        }
+                        placeholder="Precio total / Precio grupo / Precio final"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Precio por pasajero</FieldLabel>
+                      <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-medium text-[#172033]">
+                        {precioPorPaxPreview ? formatMoneyAR(precioPorPaxPreview, precioDraft.moneda) : "—"}
+                      </div>
+                    </div>
+
+                    <div className="flex items-end">
+                      <TogglePill
+                        checked={precioDraft.mostrar_precio_por_pasajero}
+                        label="Mostrar por pasajero"
+                        onChange={(mostrar_precio_por_pasajero) =>
+                          setPrecioDraft((current) => ({ ...current, mostrar_precio_por_pasajero }))
+                        }
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Subtítulo</FieldLabel>
+                      <TextInput
+                        value={precioDraft.subtitulo}
+                        onChange={(subtitulo) =>
+                          setPrecioDraft((current) => ({ ...current, subtitulo }))
+                        }
+                        placeholder="Ej: Vuelo Copa + Hotel Riu Palace + asistencia"
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Descripción de la opción</FieldLabel>
+                      <TextArea
+                        value={precioDraft.descripcion}
+                        onChange={(descripcion) =>
+                          setPrecioDraft((current) => ({ ...current, descripcion }))
+                        }
+                        placeholder="Detalle opcional de la propuesta."
+                        minHeight={70}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Composición del precio / tarifa</FieldLabel>
+                      <TextArea
+                        value={precioDraft.composicion_precio_texto}
+                        onChange={(composicion_precio_texto) =>
+                          setPrecioDraft((current) => ({ ...current, composicion_precio_texto }))
+                        }
+                        placeholder="Ej: Tarifa calculada para 2 adultos y 1 menor. El menor abona tarifa child. No se expresa valor individual porque la cotización es paquete familiar."
+                        minHeight={74}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Tarifas por pasajero / tipo de pasajero</FieldLabel>
+                      <TextArea
+                        value={precioDraft.tarifas_pasajeros_texto}
+                        onChange={(tarifas_pasajeros_texto) =>
+                          setPrecioDraft((current) => ({ ...current, tarifas_pasajeros_texto }))
+                        }
+                        placeholder={
+                          "Una línea por tarifa. Formato opcional:\nAdulto | 2 | 1800 | 3600 | Tarifa base\nMenor 8 años | 1 | 1250 | 1250 | Tarifa child"
+                        }
+                        minHeight={88}
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                  <h4 className="mb-3 text-[13px] font-semibold text-[#172033]">
+                    3. Promos, descuentos y pagos
+                  </h4>
+
+                  <div className="grid gap-2.5 md:grid-cols-3">
+                    <div>
+                      <FieldLabel>Precio contado</FieldLabel>
+                      <TextInput
+                        value={precioDraft.precio_contado}
+                        onChange={(precio_contado) =>
+                          setPrecioDraft((current) => ({ ...current, precio_contado }))
+                        }
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Precio transferencia</FieldLabel>
+                      <TextInput
+                        value={precioDraft.precio_transferencia}
+                        onChange={(precio_transferencia) =>
+                          setPrecioDraft((current) => ({ ...current, precio_transferencia }))
+                        }
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Precio tarjeta</FieldLabel>
+                      <TextInput
+                        value={precioDraft.precio_tarjeta}
+                        onChange={(precio_tarjeta) =>
+                          setPrecioDraft((current) => ({ ...current, precio_tarjeta }))
+                        }
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Precio financiado</FieldLabel>
+                      <TextInput
+                        value={precioDraft.precio_financiado}
+                        onChange={(precio_financiado) =>
+                          setPrecioDraft((current) => ({ ...current, precio_financiado }))
+                        }
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Pago inicial / seña</FieldLabel>
+                      <TextInput
+                        value={precioDraft.seña}
+                        onChange={(seña) => setPrecioDraft((current) => ({ ...current, seña }))}
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Saldo</FieldLabel>
+                      <TextInput
+                        value={precioDraft.saldo}
+                        onChange={(saldo) => setPrecioDraft((current) => ({ ...current, saldo }))}
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Cantidad de pagos / cuotas</FieldLabel>
+                      <TextInput
+                        value={precioDraft.cuotas}
+                        onChange={(cuotas) =>
+                          setPrecioDraft((current) => ({ ...current, cuotas }))
+                        }
+                        placeholder="Ej: 6"
+                        inputMode="numeric"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Valor de cada pago</FieldLabel>
+                      <TextInput
+                        value={precioDraft.valor_cuota}
+                        onChange={(valor_cuota) =>
+                          setPrecioDraft((current) => ({ ...current, valor_cuota }))
+                        }
+                        placeholder="Opcional"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div className="flex items-end">
+                      <TogglePill
+                        checked={!precioDraft.con_interes}
+                        label="Sin interés si aplica"
+                        onChange={(checked) =>
+                          setPrecioDraft((current) => ({ ...current, con_interes: !checked }))
+                        }
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Tarjeta, si corresponde</FieldLabel>
+                      <TextInput
+                        value={precioDraft.tarjeta}
+                        onChange={(tarjeta) =>
+                          setPrecioDraft((current) => ({ ...current, tarjeta }))
+                        }
+                        placeholder="Solo si es tarjeta"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Banco, si corresponde</FieldLabel>
+                      <TextInput
+                        value={precioDraft.banco}
+                        onChange={(banco) => setPrecioDraft((current) => ({ ...current, banco }))}
+                        placeholder="Solo si aplica"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Promoción principal</FieldLabel>
+                      <TextInput
+                        value={precioDraft.promocion_utilizada}
+                        onChange={(promocion_utilizada) =>
+                          setPrecioDraft((current) => ({ ...current, promocion_utilizada }))
+                        }
+                        placeholder="Black Friday, Semana Promo..."
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Promociones visibles</FieldLabel>
+                      <TextArea
+                        value={precioDraft.promociones_texto}
+                        onChange={(promociones_texto) =>
+                          setPrecioDraft((current) => ({ ...current, promociones_texto }))
+                        }
+                        placeholder={
+                          "Una línea por promo. Ej:\nBlack Friday: descuento especial vigente hasta agotar cupo\nSemana Sucursal: precio exclusivo reservando esta semana"
+                        }
+                        minHeight={74}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Descuentos visibles</FieldLabel>
+                      <TextArea
+                        value={precioDraft.descuentos_texto}
+                        onChange={(descuentos_texto) =>
+                          setPrecioDraft((current) => ({ ...current, descuentos_texto }))
+                        }
+                        placeholder={
+                          "Una línea por descuento. Ej:\nDescuento familia: aplicado sobre tarifa final\nPromo transferencia: descuento abonando por transferencia"
+                        }
+                        minHeight={74}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Formas de pago flexibles</FieldLabel>
+                      <TextArea
+                        value={precioDraft.formas_pago_texto}
+                        onChange={(formas_pago_texto) =>
+                          setPrecioDraft((current) => ({ ...current, formas_pago_texto }))
+                        }
+                        placeholder={
+                          "Una línea por forma de pago. Ej:\nTransferencia: USD 4.250 final\nPago mixto: 40% transferencia y saldo con pagos a cuenta\nPago mensual: 6 pagos a cuenta de USD 700"
+                        }
+                        minHeight={88}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Forma de pago general</FieldLabel>
+                      <TextArea
+                        value={precioDraft.forma_pago_resumen}
+                        onChange={(forma_pago_resumen) =>
+                          setPrecioDraft((current) => ({ ...current, forma_pago_resumen }))
+                        }
+                        placeholder="Texto general de forma de pago. Se suma a las formas flexibles."
+                        minHeight={70}
+                      />
+                    </div>
+
+                    <div className="md:col-span-3">
+                      <FieldLabel>Condiciones de pago</FieldLabel>
+                      <TextArea
+                        value={precioDraft.condiciones_pago}
+                        onChange={(condiciones_pago) =>
+                          setPrecioDraft((current) => ({ ...current, condiciones_pago }))
+                        }
+                        placeholder="Condiciones, vencimientos, financiación o aclaraciones."
+                        minHeight={70}
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+                  <h4 className="mb-3 text-[13px] font-semibold text-[#172033]">
+                    4. Incluye / No incluye
+                  </h4>
+
+                  <div className="grid gap-2.5">
+                    <div>
+                      <FieldLabel>Incluye</FieldLabel>
+                      <TextArea
+                        value={precioDraft.incluye_resumen}
+                        onChange={(incluye_resumen) =>
+                          setPrecioDraft((current) => ({ ...current, incluye_resumen }))
+                        }
+                        placeholder="Aéreos, alojamiento, traslados, asistencia..."
+                        minHeight={80}
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>No incluye</FieldLabel>
+                      <TextArea
+                        value={precioDraft.no_incluye_resumen}
+                        onChange={(no_incluye_resumen) =>
+                          setPrecioDraft((current) => ({ ...current, no_incluye_resumen }))
+                        }
+                        placeholder="Gastos personales, tasas no mencionadas..."
+                        minHeight={70}
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-[14px] border border-black/10 bg-white p-3">
+                  <div className="flex flex-wrap gap-2">
+                    <TogglePill
+                      checked={precioDraft.visible_en_pdf}
+                      label="Mostrar opción"
+                      onChange={(visible_en_pdf) =>
+                        setPrecioDraft((current) => ({ ...current, visible_en_pdf }))
+                      }
+                    />
+
+                    <TogglePill
+                      checked={precioDraft.destacada}
+                      label="Opción destacada"
+                      onChange={(destacada) =>
+                        setPrecioDraft((current) => ({ ...current, destacada }))
+                      }
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void savePrecio()}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white hover:bg-[#406b7d] disabled:opacity-50"
+                  >
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                    {editingCombinacionId ? "Actualizar opción comercial" : "Guardar opción comercial"}
+                  </button>
                 </div>
-
-
-                                <div>
-                  <FieldLabel>Cantidad de cuotas</FieldLabel>
-                  <TextInput
-                    value={precioDraft.cuotas}
-                    onChange={(cuotas) =>
-                      setPrecioDraft((current) => ({ ...current, cuotas }))
-                    }
-                    placeholder="Ej: 6"
-                    inputMode="numeric"
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Valor cuota</FieldLabel>
-                  <TextInput
-                    value={precioDraft.valor_cuota}
-                    onChange={(valor_cuota) =>
-                      setPrecioDraft((current) => ({ ...current, valor_cuota }))
-                    }
-                    placeholder="Opcional"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Promoción utilizada</FieldLabel>
-                  <TextInput
-                    value={precioDraft.promocion_utilizada}
-                    onChange={(promocion_utilizada) =>
-                      setPrecioDraft((current) => ({ ...current, promocion_utilizada }))
-                    }
-                    placeholder="Hot Week, Hot Sale..."
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Precio contado</FieldLabel>
-                  <TextInput
-                    value={precioDraft.precio_contado}
-                    onChange={(precio_contado) =>
-                      setPrecioDraft((current) => ({ ...current, precio_contado }))
-                    }
-                    placeholder="Opcional"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Precio transferencia</FieldLabel>
-                  <TextInput
-                    value={precioDraft.precio_transferencia}
-                    onChange={(precio_transferencia) =>
-                      setPrecioDraft((current) => ({ ...current, precio_transferencia }))
-                    }
-                    placeholder="Opcional"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Precio tarjeta</FieldLabel>
-                  <TextInput
-                    value={precioDraft.precio_tarjeta}
-                    onChange={(precio_tarjeta) =>
-                      setPrecioDraft((current) => ({ ...current, precio_tarjeta }))
-                    }
-                    placeholder="Opcional"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Precio financiado</FieldLabel>
-                  <TextInput
-                    value={precioDraft.precio_financiado}
-                    onChange={(precio_financiado) =>
-                      setPrecioDraft((current) => ({ ...current, precio_financiado }))
-                    }
-                    placeholder="Opcional"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div>
-                  <FieldLabel>Seña</FieldLabel>
-                  <TextInput
-                    value={precioDraft.seña}
-                    onChange={(seña) =>
-                      setPrecioDraft((current) => ({ ...current, seña }))
-                    }
-                    placeholder="Opcional"
-                    inputMode="decimal"
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <FieldLabel>Subtítulo</FieldLabel>
-                  <TextInput
-                    value={precioDraft.subtitulo}
-                    onChange={(subtitulo) =>
-                      setPrecioDraft((current) => ({ ...current, subtitulo }))
-                    }
-                    placeholder="Hotel + vuelos + traslados"
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <FieldLabel>Descripción de la opción</FieldLabel>
-                  <TextArea
-                    value={precioDraft.descripcion}
-                    onChange={(descripcion) =>
-                      setPrecioDraft((current) => ({ ...current, descripcion }))
-                    }
-                    placeholder="Detalle opcional de la propuesta."
-                    minHeight={70}
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <FieldLabel>Forma de pago</FieldLabel>
-                  <TextArea
-                    value={precioDraft.forma_pago_resumen}
-                    onChange={(forma_pago_resumen) =>
-                      setPrecioDraft((current) => ({ ...current, forma_pago_resumen }))
-                    }
-                    placeholder="Ej: Seña para reservar y saldo 30 días antes de viajar."
-                    minHeight={70}
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <FieldLabel>Incluye</FieldLabel>
-                  <TextArea
-                    value={precioDraft.incluye_resumen}
-                    onChange={(incluye_resumen) =>
-                      setPrecioDraft((current) => ({ ...current, incluye_resumen }))
-                    }
-                    placeholder="Aéreos, alojamiento, traslados, asistencia..."
-                    minHeight={80}
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <FieldLabel>No incluye</FieldLabel>
-                  <TextArea
-                    value={precioDraft.no_incluye_resumen}
-                    onChange={(no_incluye_resumen) =>
-                      setPrecioDraft((current) => ({ ...current, no_incluye_resumen }))
-                    }
-                    placeholder="Gastos personales, tasas no mencionadas..."
-                    minHeight={70}
-                  />
-                </div>
-
-                <div className="md:col-span-3">
-                  <FieldLabel>Condiciones de pago</FieldLabel>
-                  <TextArea
-                    value={precioDraft.condiciones_pago}
-                    onChange={(condiciones_pago) =>
-                      setPrecioDraft((current) => ({ ...current, condiciones_pago }))
-                    }
-                    placeholder="Condiciones, vencimientos, financiación o aclaraciones."
-                    minHeight={70}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap gap-2">
-                  <TogglePill
-                    checked={precioDraft.visible_en_pdf}
-                    label="Mostrar opción"
-                    onChange={(visible_en_pdf) =>
-                      setPrecioDraft((current) => ({ ...current, visible_en_pdf }))
-                    }
-                  />
-
-                  <TogglePill
-                    checked={precioDraft.destacada}
-                    label="Opción destacada"
-                    onChange={(destacada) =>
-                      setPrecioDraft((current) => ({ ...current, destacada }))
-                    }
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => void savePrecio()}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white hover:bg-[#406b7d] disabled:opacity-50"
-                >
-                  {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                  Guardar precio
-                </button>
               </div>
             </section>
           ) : null}
@@ -4651,8 +5623,19 @@ function PresupuestoManualModal({
               Anterior
             </button>
 
-            <div className="text-[11.5px] font-normal text-[#64748b]">
-              Guardá todas las opciones necesarias antes de cerrar.
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={onPreviewPdf}
+                className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+              >
+                <FileText size={14} />
+                Vista previa PDF
+              </button>
+
+              <div className="text-[11.5px] font-normal text-[#64748b]">
+                Guardá todas las opciones necesarias antes de cerrar.
+              </div>
             </div>
 
             {step === "precios" ? (
@@ -4661,7 +5644,7 @@ function PresupuestoManualModal({
                 onClick={onClose}
                 className="h-8 rounded-[10px] bg-[#172033] px-4 text-[12px] font-medium text-white hover:bg-black"
               >
-                Cerrar carga manual
+                Cerrar edición
               </button>
             ) : (
               <button
@@ -4675,7 +5658,6 @@ function PresupuestoManualModal({
           </div>
         </main>
 
-
                 <aside className="grid content-start gap-2.5">
           <section className="rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
             <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Resumen cargado</h3>
@@ -4683,12 +5665,20 @@ function PresupuestoManualModal({
             <div className="grid grid-cols-2 gap-2">
               <SmallMetric label="Aéreos" value={vuelos.length} icon={<Plane size={16} />} />
               <SmallMetric label="Hoteles" value={hoteles.length} icon={<BedDouble size={16} />} />
-              <SmallMetric label="Servicios" value={servicios.length} icon={<PackageCheck size={16} />} />
-              <SmallMetric label="Precios" value={combinaciones.length} icon={<BadgeDollarSign size={16} />} />
+              <SmallMetric
+                label="Servicios"
+                value={servicios.length}
+                icon={<PackageCheck size={16} />}
+              />
+              <SmallMetric
+                label="Opciones"
+                value={combinaciones.length}
+                icon={<BadgeDollarSign size={16} />}
+              />
             </div>
           </section>
 
-          <SectionSummaryList title="Aéreos cargados" emptyText="Todavía no hay aéreos.">
+          <SummaryCard title="Aéreos cargados" empty="Todavía no hay aéreos.">
             {vuelos.length > 0 ? (
               <div className="grid gap-1.5">
                 {vuelos.map((item) => (
@@ -4696,12 +5686,26 @@ function PresupuestoManualModal({
                     key={item.id}
                     className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]"
                   >
-                    <div className="font-semibold text-[#172033]">
-                      {item.titulo || "Aéreo"}
-                    </div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-[#172033]">
+                          {item.titulo || "Aéreo"}
+                        </div>
 
-                    <div className="mt-0.5 line-clamp-2 text-[11px] font-normal text-[#64748b]">
-                      {item.raw_text || item.ruta_resumen || item.ida_detalle || item.vuelta_detalle || "Sin texto"}
+                        <div className="mt-0.5 line-clamp-2 text-[11px] font-normal text-[#64748b]">
+                          {item.raw_text ||
+                            item.ruta_resumen ||
+                            item.ida_detalle ||
+                            item.vuelta_detalle ||
+                            "Sin texto"}
+                        </div>
+                      </div>
+
+                      {item.captura_url ? (
+                        <span className="shrink-0 rounded-md bg-sky-50 px-1.5 py-0.5 text-[9px] font-medium uppercase text-sky-700 ring-1 ring-sky-100">
+                          Imagen
+                        </span>
+                      ) : null}
                     </div>
 
                     {item.precio_total ? (
@@ -4713,9 +5717,9 @@ function PresupuestoManualModal({
                 ))}
               </div>
             ) : null}
-          </SectionSummaryList>
+          </SummaryCard>
 
-          <SectionSummaryList title="Hoteles cargados" emptyText="Todavía no hay hoteles.">
+          <SummaryCard title="Hoteles cargados" empty="Todavía no hay hoteles.">
             {hoteles.length > 0 ? (
               <div className="grid gap-1.5">
                 {hoteles.map((item) => (
@@ -4741,9 +5745,9 @@ function PresupuestoManualModal({
                 ))}
               </div>
             ) : null}
-          </SectionSummaryList>
+          </SummaryCard>
 
-          <SectionSummaryList title="Servicios cargados" emptyText="Todavía no hay servicios.">
+          <SummaryCard title="Servicios cargados" empty="Todavía no hay servicios.">
             {servicios.length > 0 ? (
               <div className="grid gap-1.5">
                 {servicios.map((item) => (
@@ -4751,12 +5755,22 @@ function PresupuestoManualModal({
                     key={item.id}
                     className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]"
                   >
-                    <div className="font-semibold text-[#172033]">
-                      {item.nombre || "Servicio"}
-                    </div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-[#172033]">
+                          {item.nombre || "Servicio"}
+                        </div>
 
-                    <div className="mt-0.5 text-[11px] font-normal text-[#64748b]">
-                      {item.descripcion || item.tipo}
+                        <div className="mt-0.5 line-clamp-2 text-[11px] font-normal text-[#64748b]">
+                          {item.descripcion || item.tipo}
+                        </div>
+                      </div>
+
+                      {item.incluido ? (
+                        <span className="shrink-0 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium uppercase text-emerald-700 ring-1 ring-emerald-100">
+                          Incluido
+                        </span>
+                      ) : null}
                     </div>
 
                     {item.precio_total ? (
@@ -4768,45 +5782,92 @@ function PresupuestoManualModal({
                 ))}
               </div>
             ) : null}
-          </SectionSummaryList>
+          </SummaryCard>
 
-          <SectionSummaryList title="Opciones comerciales" emptyText="Todavía no hay precios cargados.">
+          <SummaryCard title="Opciones comerciales" empty="Todavía no hay opciones cargadas.">
             {combinaciones.length > 0 ? (
               <div className="grid gap-1.5">
-                {combinaciones.map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]"
-                  >
-                    <div className="font-semibold text-[#172033]">
-                      {item.nombre || "Opción"}
-                    </div>
+                {combinaciones.map((item) => {
+                  const metadata = getCombinacionMetadata(item);
+                  const esPagoACuenta = Boolean(metadata.pagos_a_cuenta);
 
-                    <div className="mt-1 font-semibold text-emerald-700">
-                      {formatMoneyAR(item.precio_total, item.moneda)}
-                    </div>
+                  return (
+                    <div
+                      key={item.id}
+                      className={[
+                        "rounded-[12px] border p-3 text-[12px] transition",
+                        editingCombinacionId === item.id
+                          ? "border-[#4f7c90]/40 bg-[#eef6f7]"
+                          : "border-black/10 bg-[#f8fafc]"
+                      ].join(" ")}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold text-[#172033]">
+                            {item.nombre || "Opción"}
+                          </div>
 
-                    {item.etiqueta ? (
-                      <div className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[10px] font-medium uppercase text-amber-700">
-                        {item.etiqueta}
+                          {item.subtitulo ? (
+                            <div className="mt-0.5 line-clamp-2 text-[11px] font-normal text-[#64748b]">
+                              {item.subtitulo}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => editCombinacion(item)}
+                          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-[9px] bg-white px-2 text-[10.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+                        >
+                          <Pencil size={12} />
+                          Editar
+                        </button>
                       </div>
-                    ) : null}
 
-                    {item.destacada ? (
-                      <div className="mt-1 rounded-md bg-emerald-50 px-2 py-1 text-[10px] font-medium uppercase text-emerald-700">
-                        Destacada
+                      <div className="mt-1 font-semibold text-emerald-700">
+                        {formatMoneyAR(item.precio_total, item.moneda)}
                       </div>
-                    ) : null}
-                  </div>
-                ))}
+
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {item.etiqueta ? (
+                          <div className="rounded-md bg-amber-50 px-2 py-1 text-[10px] font-medium uppercase text-amber-700 ring-1 ring-amber-100">
+                            {item.etiqueta}
+                          </div>
+                        ) : null}
+
+                        {item.destacada ? (
+                          <div className="rounded-md bg-emerald-50 px-2 py-1 text-[10px] font-medium uppercase text-emerald-700 ring-1 ring-emerald-100">
+                            Destacada
+                          </div>
+                        ) : null}
+
+                        {esPagoACuenta ? (
+                          <div className="rounded-md bg-sky-50 px-2 py-1 text-[10px] font-medium uppercase text-sky-700 ring-1 ring-sky-100">
+                            Pagos a cuenta
+                          </div>
+                        ) : null}
+
+                        {item.visible_en_pdf === false ? (
+                          <div className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-medium uppercase text-slate-600 ring-1 ring-slate-200">
+                            Oculta PDF
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
-          </SectionSummaryList>
+          </SummaryCard>
         </aside>
       </div>
     </ModalShell>
   );
 }
+
+/* =========================================================
+   CONFIRM DELETE
+========================================================= */
 
 function ConfirmDeleteModal({
   presupuesto,
@@ -4856,8 +5917,63 @@ function ConfirmDeleteModal({
   );
 }
 
+
+function PdfPreviewModal({
+  title,
+  html,
+  onClose
+}: {
+  title: string;
+  html: string;
+  onClose: () => void;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  function handlePrint() {
+    const frameWindow = iframeRef.current?.contentWindow;
+
+    if (!frameWindow) return;
+
+    frameWindow.focus();
+    frameWindow.print();
+  }
+
+  return (
+    <ModalShell
+      title={title}
+      subtitle="Vista previa del presupuesto. Desde acá podés imprimir o guardar como PDF."
+      onClose={onClose}
+      maxWidth="max-w-7xl"
+    >
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[12px] font-normal text-[#64748b]">
+          Para generar el PDF final: tocá imprimir y elegí “Guardar como PDF”.
+        </div>
+
+        <button
+          type="button"
+          onClick={handlePrint}
+          className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d]"
+        >
+          <FileText size={14} />
+          Imprimir / Guardar PDF
+        </button>
+      </div>
+
+      <div className="overflow-hidden rounded-[16px] border border-black/10 bg-white shadow-sm">
+        <iframe
+          ref={iframeRef}
+          title={title}
+          srcDoc={html}
+          className="h-[calc(100vh-190px)] w-full bg-white"
+        />
+      </div>
+    </ModalShell>
+  );
+}
+
 /* =========================================================
-   TABLA / LISTADO
+   TABLA
 ========================================================= */
 
 function PresupuestosTable({
@@ -4886,8 +6002,7 @@ function PresupuestosTable({
   onSendLiveNos: (id: string) => void;
 }) {
   const grid =
-  "xl:grid-cols-[105px_minmax(150px,0.95fr)_minmax(170px,1.15fr)_95px_90px_125px_315px]";
-
+    "xl:grid-cols-[105px_minmax(150px,0.95fr)_minmax(170px,1.15fr)_95px_90px_125px_315px]";
 
   if (loading) {
     return (
@@ -4968,6 +6083,9 @@ function PresupuestosTable({
                 </div>
 
                 <div className="truncate text-[10.5px] font-normal text-[#64748b]">
+                  {presupuesto.destino_detalle
+                    ? `${presupuesto.destino_detalle} · `
+                    : ""}
                   {formatDate(presupuesto.fecha_salida)} al {formatDate(presupuesto.fecha_regreso)}
                 </div>
               </div>
@@ -4988,33 +6106,33 @@ function PresupuestosTable({
                     : "—"}
               </div>
 
-          <div className="flex min-w-[300px] flex-nowrap items-center justify-end gap-1.5">
-  <ActionButton
-    label="Editar"
-    onClick={() => onEdit(presupuesto.id)}
-    icon={<Pencil size={13} />}
-  />
+              <div className="flex min-w-[300px] flex-nowrap items-center justify-end gap-1.5">
+                <ActionButton
+                  label="Editar"
+                  onClick={() => onEdit(presupuesto.id)}
+                  icon={<Pencil size={13} />}
+                />
 
-  <ActionButton
-    label="IA"
-    primary
-    onClick={() => onEditIa(presupuesto.id)}
-    icon={<Sparkles size={13} />}
-  />
+                <ActionButton
+                  label="IA"
+                  primary
+                  onClick={() => onEditIa(presupuesto.id)}
+                  icon={<Sparkles size={13} />}
+                />
 
-  <ActionButton
-    label="PDF"
-    onClick={() => onPdf(presupuesto.id)}
-    icon={<FileText size={13} />}
-  />
+                <ActionButton
+                  label="PDF"
+                  onClick={() => onPdf(presupuesto.id)}
+                  icon={<FileText size={13} />}
+                />
 
-  <RowMoreMenu
-    onDuplicate={() => onDuplicate(presupuesto.id)}
-    onPreview={() => onPreview(presupuesto.id)}
-    onSendLiveNos={() => onSendLiveNos(presupuesto.id)}
-    onDelete={() => onDelete(presupuesto.id)}
-  />
-</div>
+                <RowMoreMenu
+                  onDuplicate={() => onDuplicate(presupuesto.id)}
+                  onPreview={() => onPreview(presupuesto.id)}
+                  onSendLiveNos={() => onSendLiveNos(presupuesto.id)}
+                  onDelete={() => onDelete(presupuesto.id)}
+                />
+              </div>
             </div>
           );
         })}
@@ -5039,13 +6157,12 @@ export function PresupuestosV2Panel() {
   const hoteles = usePresupuestosV2Store((state: PresupuestosState) => state.hoteles);
   const servicios = usePresupuestosV2Store((state: PresupuestosState) => state.servicios);
   const combinaciones = usePresupuestosV2Store((state: PresupuestosState) => state.combinaciones);
+  const currentProfile = usePresupuestosV2Store((state: PresupuestosState) => state.currentProfile);
   const vendedores = usePresupuestosV2Store((state: PresupuestosState) => state.vendedores);
   const sucursales = usePresupuestosV2Store((state: PresupuestosState) => state.sucursales);
   const filters = usePresupuestosV2Store((state: PresupuestosState) => state.filters);
 
-  const loadPresupuestos = usePresupuestosV2Store(
-    (state: PresupuestosState) => state.loadPresupuestos
-  );
+  const loadPresupuestos = usePresupuestosV2Store((state: PresupuestosState) => state.loadPresupuestos);
   const loadPresupuestoFull = usePresupuestosV2Store(
     (state: PresupuestosState) => state.loadPresupuestoFull
   );
@@ -5066,12 +6183,15 @@ export function PresupuestosV2Panel() {
 
   const addVuelo = usePresupuestosV2Store((state: PresupuestosState) => state.addVuelo);
   const updateVuelo = usePresupuestosV2Store((state: PresupuestosState) => state.updateVuelo);
+  const deleteVuelo = usePresupuestosV2Store((state: PresupuestosState) => state.deleteVuelo);
 
   const addHotel = usePresupuestosV2Store((state: PresupuestosState) => state.addHotel);
   const updateHotel = usePresupuestosV2Store((state: PresupuestosState) => state.updateHotel);
+  const deleteHotel = usePresupuestosV2Store((state: PresupuestosState) => state.deleteHotel);
 
   const addServicio = usePresupuestosV2Store((state: PresupuestosState) => state.addServicio);
   const updateServicio = usePresupuestosV2Store((state: PresupuestosState) => state.updateServicio);
+  const deleteServicio = usePresupuestosV2Store((state: PresupuestosState) => state.deleteServicio);
 
   const addCombinacion = usePresupuestosV2Store(
     (state: PresupuestosState) => state.addCombinacion
@@ -5079,21 +6199,20 @@ export function PresupuestosV2Panel() {
   const updateCombinacion = usePresupuestosV2Store(
     (state: PresupuestosState) => state.updateCombinacion
   );
+  const deleteCombinacion = usePresupuestosV2Store(
+    (state: PresupuestosState) => state.deleteCombinacion
+  );
   const setCombinacionRecomendada = usePresupuestosV2Store(
     (state: PresupuestosState) => state.setCombinacionRecomendada
   );
 
-  const uploadAdjunto = usePresupuestosV2Store(
-    (state: PresupuestosState) => state.uploadAdjunto
-  );
-
+  const uploadAdjunto = usePresupuestosV2Store((state: PresupuestosState) => state.uploadAdjunto);
   const selectPresupuesto = usePresupuestosV2Store(
     (state: PresupuestosState) => state.selectPresupuesto
   );
   const setFilter = usePresupuestosV2Store((state: PresupuestosState) => state.setFilter);
   const resetFilters = usePresupuestosV2Store((state: PresupuestosState) => state.resetFilters);
   const clearError = usePresupuestosV2Store((state: PresupuestosState) => state.clearError);
-
   const getFilteredPresupuestos = usePresupuestosV2Store(
     (state: PresupuestosState) => state.getFilteredPresupuestos
   );
@@ -5107,6 +6226,8 @@ export function PresupuestosV2Panel() {
   const [toast, setToast] = useState<ToastState>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [destinosOptions, setDestinosOptions] = useState<SelectOption[]>([]);
+  const [pdfPreviewHtml, setPdfPreviewHtml] = useState<string | null>(null);
+const [pdfPreviewTitle, setPdfPreviewTitle] = useState("Vista previa PDF");
 
   useEffect(() => {
     void loadCatalogs();
@@ -5153,7 +6274,11 @@ export function PresupuestosV2Panel() {
       ? await updateVuelo({ id: draft.id, ...draft })
       : Boolean(await addVuelo({ ...draft, presupuesto_id: currentPresupuesto.id }));
 
-    if (ok) showToast("Aéreo guardado.");
+    if (ok) {
+      await loadPresupuestoFull(currentPresupuesto.id, true);
+      await loadPresupuestos(true);
+      showToast("Aéreo guardado.");
+    }
   }
 
   async function handleSaveHotel(draft: DraftHotel) {
@@ -5172,7 +6297,11 @@ export function PresupuestosV2Panel() {
           })
         );
 
-    if (ok) showToast("Hotel guardado.");
+    if (ok) {
+      await loadPresupuestoFull(currentPresupuesto.id, true);
+      await loadPresupuestos(true);
+      showToast("Hotel guardado.");
+    }
   }
 
   async function handleSaveServicio(draft: DraftServicio) {
@@ -5191,7 +6320,11 @@ export function PresupuestosV2Panel() {
           })
         );
 
-    if (ok) showToast("Servicio guardado.");
+    if (ok) {
+      await loadPresupuestoFull(currentPresupuesto.id, true);
+      await loadPresupuestos(true);
+      showToast("Servicio guardado.");
+    }
   }
 
   async function handleSaveCombinacion(draft: DraftCombinacion) {
@@ -5200,29 +6333,33 @@ export function PresupuestosV2Panel() {
 
     if (!currentPresupuesto) return;
 
-    const id = draft.id
-      ? null
-      : await addCombinacion({
-          ...draft,
-          presupuesto_id: currentPresupuesto.id,
-          nombre: draft.nombre
-        });
+    let combinacionId: string | null = draft.id || null;
+    let ok = false;
 
-    const ok = draft.id ? await updateCombinacion({ id: draft.id, ...draft }) : Boolean(id);
+    if (draft.id) {
+      ok = await updateCombinacion({ id: draft.id, ...draft });
+    } else {
+      combinacionId = await addCombinacion({
+        ...draft,
+        presupuesto_id: currentPresupuesto.id,
+        nombre: draft.nombre
+      });
+
+      ok = Boolean(combinacionId);
+    }
 
     if (ok) {
-      const combinacionId = draft.id || id;
-
       if (draft.destacada && combinacionId) {
         await setCombinacionRecomendada(combinacionId);
       }
 
-      showToast("Opción comercial guardada.");
+      await loadPresupuestoFull(currentPresupuesto.id, true);
+      await loadPresupuestos(true);
+      showToast(draft.id ? "Opción comercial actualizada." : "Opción comercial guardada.");
     }
   }
 
-
-    async function handleDeleteSelected() {
+  async function handleDeleteSelected() {
     if (!deleteTargetId) return;
 
     const ok = await deletePresupuesto(deleteTargetId);
@@ -5236,39 +6373,56 @@ export function PresupuestosV2Panel() {
 
   async function handleDuplicate(id: string) {
     await ensureSelected(id);
-
     const newId = await duplicatePresupuesto(id);
 
-    if (newId) {
-      showToast("Presupuesto duplicado.");
-    }
+    if (newId) showToast("Presupuesto duplicado.");
   }
 
-  async function handleOpenPdf(id: string) {
-    await ensureSelected(id);
+async function handleOpenPdf(id: string) {
+  await ensureSelected(id);
 
-    const state = usePresupuestosV2Store.getState();
+  const state = usePresupuestosV2Store.getState();
 
-    if (!state.presupuesto) {
-      showToast("No se pudo abrir el presupuesto.", "error");
-      return;
-    }
-
-    const ok = openPresupuestoPreview({
-      presupuesto: state.presupuesto,
-      vuelos: state.vuelos,
-      hoteles: state.hoteles,
-      servicios: state.servicios,
-      combinaciones: state.combinaciones
-    });
-
-    if (!ok) {
-      showToast(
-        "No se pudo abrir la vista previa. Revisá si el navegador bloqueó ventanas emergentes.",
-        "error"
-      );
-    }
+  if (!state.presupuesto) {
+    showToast("No se pudo abrir el presupuesto.", "error");
+    return;
   }
+
+  const presupuestoPdf = withPdfExtraFields(state.presupuesto, state.vendedores || []);
+
+  const html = buildPresupuestoHtml({
+    presupuesto: presupuestoPdf,
+    vuelos: state.vuelos,
+    hoteles: state.hoteles,
+    servicios: state.servicios,
+    combinaciones: state.combinaciones
+  });
+
+  setPdfPreviewTitle(state.presupuesto.numero || "Vista previa PDF");
+  setPdfPreviewHtml(html);
+}
+
+function handlePreviewCurrentPdf() {
+  const state = usePresupuestosV2Store.getState();
+
+  if (!state.presupuesto) {
+    showToast("No se pudo abrir el presupuesto.", "error");
+    return;
+  }
+
+  const presupuestoPdf = withPdfExtraFields(state.presupuesto, state.vendedores || []);
+
+  const html = buildPresupuestoHtml({
+    presupuesto: presupuestoPdf,
+    vuelos: state.vuelos,
+    hoteles: state.hoteles,
+    servicios: state.servicios,
+    combinaciones: state.combinaciones
+  });
+
+  setPdfPreviewTitle(state.presupuesto.numero || "Vista previa PDF");
+  setPdfPreviewHtml(html);
+}
 
   async function handleSendLiveNos(id: string) {
     await ensureSelected(id);
@@ -5351,247 +6505,86 @@ export function PresupuestosV2Panel() {
     );
 
     for (const item of combinacionesIa) {
-      await usePresupuestosV2Store.getState().deleteCombinacion(item.id);
+      await deleteCombinacion(item.id);
     }
 
     for (const item of serviciosIa) {
-      await usePresupuestosV2Store.getState().deleteServicio(item.id);
+      await deleteServicio(item.id);
     }
 
     for (const item of hotelesIa) {
-      await usePresupuestosV2Store.getState().deleteHotel(item.id);
+      await deleteHotel(item.id);
     }
 
     for (const item of vuelosIa) {
-      await usePresupuestosV2Store.getState().deleteVuelo(item.id);
+      await deleteVuelo(item.id);
     }
 
     await loadPresupuestoFull(currentPresupuesto.id, true);
 
+    const createdVueloIds: string[] = [];
+    const createdHotelIds: string[] = [];
+    const createdServicioIds: string[] = [];
 
-        const vueloTextCandidates = vuelosParsed
-      .map((item) => {
-        const metadata =
-          item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
-            ? (item.metadata as Record<string, unknown>)
-            : {};
+    for (const vueloItem of vuelosParsed) {
+      const metadata = safeRecord(vueloItem.metadata);
+      const title = String(vueloItem.titulo || vueloItem.nombre || `Vuelo ${createdVuelos + 1}`).trim();
+      const raw = buildFlightRawText(vueloItem, payload.raw_text);
 
-        return [
-          item.raw_text,
-          item.texto_libre,
-          item.ida_detalle,
-          item.vuelta_detalle,
-          item.ruta_resumen,
-          metadata.raw_text_original,
-          metadata.texto_ia_resumido
-        ]
-          .map((value) => String(value || "").trim())
-          .filter(Boolean)
-          .join("\n");
-      })
-      .filter(Boolean);
+      const vueloPayload = {
+        presupuesto_id: currentPresupuesto.id,
+        titulo: title,
+        aerolinea: String(vueloItem.aerolinea || vueloItem.compania || "") || null,
+        ruta_resumen: String(vueloItem.ruta_resumen || vueloItem.ruta || "") || null,
+        ida_origen: String(vueloItem.ida_origen || vueloItem.origen || "") || null,
+        ida_destino: String(vueloItem.ida_destino || vueloItem.destino || "") || null,
+        ida_fecha:
+          String(vueloItem.ida_fecha || vueloItem.fecha_salida || currentPresupuesto.fecha_salida || "") ||
+          null,
+        ida_hora_salida: String(vueloItem.ida_hora_salida || vueloItem.hora_salida || "") || null,
+        ida_hora_llegada: String(vueloItem.ida_hora_llegada || vueloItem.hora_llegada || "") || null,
+        ida_escalas: String(vueloItem.ida_escalas || vueloItem.escalas || "") || null,
+        ida_detalle: String(vueloItem.ida_detalle || raw || "") || null,
+        vuelta_origen: String(vueloItem.vuelta_origen || "") || null,
+        vuelta_destino: String(vueloItem.vuelta_destino || "") || null,
+        vuelta_fecha: String(vueloItem.vuelta_fecha || currentPresupuesto.fecha_regreso || "") || null,
+        vuelta_hora_salida: String(vueloItem.vuelta_hora_salida || "") || null,
+        vuelta_hora_llegada: String(vueloItem.vuelta_hora_llegada || "") || null,
+        vuelta_escalas: String(vueloItem.vuelta_escalas || "") || null,
+        vuelta_detalle: String(vueloItem.vuelta_detalle || "") || null,
+        equipaje: String(vueloItem.equipaje || "") || null,
+        tarifa_familia: String(vueloItem.tarifa_familia || vueloItem.clase || "") || null,
+        condiciones: String(vueloItem.condiciones || "") || null,
+        precio_total:
+          typeof vueloItem.precio_total === "number"
+            ? vueloItem.precio_total
+            : toNumberOrNull(String(vueloItem.precio_total || "")),
+        moneda: toMonedaSimple(
+          String(vueloItem.moneda || currentPresupuesto.moneda_principal || "USD")
+        ),
+        raw_text: raw,
+        incluir_en_pdf: vueloItem.incluir_en_pdf === undefined ? true : Boolean(vueloItem.incluir_en_pdf),
+        es_principal: createdVuelos === 0,
+        metadata: {
+          ...metadata,
+          carga_modo: "IA",
+          origen: "PRESUPUESTO_IA",
+          mostrar_precio_en_pdf: Boolean(vueloItem.mostrar_precio_en_pdf),
+          mostrar_raw_text_en_pdf: Boolean(raw),
+          parsed: vueloItem
+        }
+      } as CreateVueloDraft;
 
-    const vueloTextForParser = [String(payload.raw_text || "").trim(), vueloTextCandidates.join("\n\n")]
-      .filter(Boolean)
-      .join("\n\n");
+      const id = await addVuelo(vueloPayload);
 
-    let vuelosParseados: Awaited<ReturnType<typeof parseVuelos>> | null = null;
-
-    if (vueloTextForParser.trim()) {
-      try {
-        vuelosParseados = await parseVuelos({
-          text: vueloTextForParser,
-          presupuesto_id: currentPresupuesto.id,
-          contexto: {
-            fecha_salida: currentPresupuesto.fecha_salida || undefined,
-            fecha_regreso: currentPresupuesto.fecha_regreso || undefined,
-            destino:
-              currentPresupuesto.destino_principal ||
-              currentPresupuesto.destino_detalle ||
-              undefined
-          }
-        });
-      } catch (error) {
-        console.error("parse-vuelos error", error);
-        vuelosParseados = null;
+      if (id) {
+        createdVuelos += 1;
+        createdVueloIds.push(id);
       }
     }
 
-    const idaTramos: ReturnType<typeof getTramosByDireccion> = vuelosParseados
-      ? getTramosByDireccion(vuelosParseados, "ida")
-      : [];
-
-    const vueltaTramos: ReturnType<typeof getTramosByDireccion> = vuelosParseados
-      ? getTramosByDireccion(vuelosParseados, "vuelta")
-      : [];
-
-    const idaResumen = getResumenDireccion(idaTramos);
-    const vueltaResumen = getResumenDireccion(vueltaTramos);
-
-    if (idaResumen && idaTramos.length) {
-      const vueloPayload = {
-        presupuesto_id: currentPresupuesto.id,
-        titulo: "Vuelo Ida",
-        aerolinea: idaResumen.aerolinea,
-        ruta_resumen: `${idaResumen.origen || "Origen"} → ${idaResumen.destino || "Destino"}`,
-
-        ida_origen: idaResumen.origen,
-        ida_destino: idaResumen.destino,
-        ida_fecha: idaResumen.fecha_salida,
-        ida_hora_salida: idaResumen.hora_salida,
-        ida_hora_llegada: idaResumen.hora_llegada,
-        ida_escalas:
-          idaTramos.length > 1
-            ? idaTramos
-                .map((tramo) => tramo.escala_posterior)
-                .filter(Boolean)
-                .map((escala) =>
-                  [escala?.ciudad, escala?.iata ? `(${escala.iata})` : "", escala?.espera]
-                    .filter(Boolean)
-                    .join(" ")
-                )
-                .join(" · ")
-            : null,
-        ida_detalle: idaTramos
-          .map((tramo) =>
-            [
-              tramo.numero_vuelo,
-              tramo.aerolinea,
-              tramo.fecha_salida,
-              `${tramo.hora_salida || ""} ${tramo.origen?.iata || tramo.origen?.ciudad || ""}`.trim(),
-              "→",
-              `${tramo.hora_llegada || ""} ${tramo.destino?.iata || tramo.destino?.ciudad || ""}`.trim(),
-              tramo.duracion
-            ]
-              .filter(Boolean)
-              .join(" · ")
-          )
-          .join("\n"),
-
-        vuelta_origen: null,
-        vuelta_destino: null,
-        vuelta_fecha: null,
-        vuelta_hora_salida: null,
-        vuelta_hora_llegada: null,
-        vuelta_escalas: null,
-        vuelta_detalle: null,
-
-        equipaje: idaResumen.equipaje,
-        tarifa_familia: idaTramos.map((tramo) => tramo.clase).filter(Boolean)[0] || null,
-        condiciones: null,
-        precio_total: null,
-        moneda: currentPresupuesto.moneda_principal || "USD",
-        raw_text: vueloTextForParser,
-        incluir_en_pdf: true,
-        es_principal: true,
-
-        metadata: {
-          carga_modo: "IA",
-          origen: "PRESUPUESTO_IA",
-          tipo_tramo: "IDA",
-          mostrar_precio_en_pdf: false,
-          seleccion_asientos: "Sujeta a disponibilidad y condiciones de la tarifa.",
-          raw_text_original: vueloTextForParser,
-          parse_vuelos_resultado: vuelosParseados,
-          tramos: idaTramos,
-          parsed: {
-            source: "parse-vuelos",
-            direccion: "ida",
-            tramos: idaTramos
-          }
-        }
-      } as CreateVueloDraft;
-
-      const id = await addVuelo(vueloPayload);
-
-      if (id) createdVuelos += 1;
-    }
-
-        if (vueltaResumen && vueltaTramos.length) {
-      const vueloPayload = {
-        presupuesto_id: currentPresupuesto.id,
-        titulo: "Vuelo Vuelta",
-        aerolinea: vueltaResumen.aerolinea,
-        ruta_resumen: `${vueltaResumen.origen || "Origen"} → ${vueltaResumen.destino || "Destino"}`,
-
-        ida_origen: null,
-        ida_destino: null,
-        ida_fecha: null,
-        ida_hora_salida: null,
-        ida_hora_llegada: null,
-        ida_escalas: null,
-        ida_detalle: null,
-
-        vuelta_origen: vueltaResumen.origen,
-        vuelta_destino: vueltaResumen.destino,
-        vuelta_fecha: vueltaResumen.fecha_salida,
-        vuelta_hora_salida: vueltaResumen.hora_salida,
-        vuelta_hora_llegada: vueltaResumen.hora_llegada,
-        vuelta_escalas:
-          vueltaTramos.length > 1
-            ? vueltaTramos
-                .map((tramo) => tramo.escala_posterior)
-                .filter(Boolean)
-                .map((escala) =>
-                  [escala?.ciudad, escala?.iata ? `(${escala.iata})` : "", escala?.espera]
-                    .filter(Boolean)
-                    .join(" ")
-                )
-                .join(" · ")
-            : null,
-        vuelta_detalle: vueltaTramos
-          .map((tramo) =>
-            [
-              tramo.numero_vuelo,
-              tramo.aerolinea,
-              tramo.fecha_salida,
-              `${tramo.hora_salida || ""} ${tramo.origen?.iata || tramo.origen?.ciudad || ""}`.trim(),
-              "→",
-              `${tramo.hora_llegada || ""} ${tramo.destino?.iata || tramo.destino?.ciudad || ""}`.trim(),
-              tramo.duracion
-            ]
-              .filter(Boolean)
-              .join(" · ")
-          )
-          .join("\n"),
-
-        equipaje: vueltaResumen.equipaje,
-        tarifa_familia: vueltaTramos.map((tramo) => tramo.clase).filter(Boolean)[0] || null,
-        condiciones: null,
-        precio_total: null,
-        moneda: currentPresupuesto.moneda_principal || "USD",
-        raw_text: vueloTextForParser,
-        incluir_en_pdf: true,
-        es_principal: createdVuelos === 0,
-
-        metadata: {
-          carga_modo: "IA",
-          origen: "PRESUPUESTO_IA",
-          tipo_tramo: "VUELTA",
-          mostrar_precio_en_pdf: false,
-          seleccion_asientos: "Sujeta a disponibilidad y condiciones de la tarifa.",
-          raw_text_original: vueloTextForParser,
-          parse_vuelos_resultado: vuelosParseados,
-          tramos: vueltaTramos,
-          parsed: {
-            source: "parse-vuelos",
-            direccion: "vuelta",
-            tramos: vueltaTramos
-          }
-        }
-      } as CreateVueloDraft;
-
-      const id = await addVuelo(vueloPayload);
-
-      if (id) createdVuelos += 1;
-    }
-
     for (const hotelItem of hotelesParsed) {
-      const metadata =
-        hotelItem.metadata && typeof hotelItem.metadata === "object" && !Array.isArray(hotelItem.metadata)
-          ? (hotelItem.metadata as Record<string, unknown>)
-          : {};
-
+      const metadata = safeRecord(hotelItem.metadata);
       const nombre = String(hotelItem.nombre || hotelItem.titulo || `Hotel ${createdHoteles + 1}`).trim();
 
       if (!nombre) continue;
@@ -5603,95 +6596,125 @@ export function PresupuestosV2Panel() {
           ""
       ).trim();
 
-      const direccion = extractDireccionFromHotelItem(hotelItem);
-
-      const googleResponse = await enrichHotelWithGooglePlaces({
-        nombre,
-        destino,
-        direccion
-      });
-
-      const googleHotel = googleResponse?.ok ? googleResponse.hotel || null : null;
-
       const descripcionOriginal = buildHotelDescription(hotelItem);
-      const descripcionGoogle = String(googleHotel?.descripcion || "").trim();
 
-      const descripcionFinal =
-        descripcionGoogle ||
-        descripcionOriginal ||
-        (direccion ? `Ubicado en ${direccion}.` : "");
+  let googleHotel: Record<string, unknown> | null = null;
 
-      const direccionOriginal =
-        direccion ||
-        String(googleHotel?.direccion || "").trim() ||
-        String(hotelItem.direccion || hotelItem.address || hotelItem.formatted_address || "").trim();
-
-      const hotelPayload = {
-        presupuesto_id: currentPresupuesto.id,
-        nombre,
-        titulo: String(hotelItem.titulo || nombre),
+try {
+  const { data: enrichData, error: enrichError } = await supabase.functions.invoke(
+    "hotel-google-enrich",
+    {
+      body: {
+        hotel_nombre: nombre,
         destino,
-        zona: String(hotelItem.zona || hotelItem.ubicacion || direccionOriginal || "") || null,
-        categoria: String(hotelItem.categoria || "") || null,
-        regimen: String(hotelItem.regimen || "") || null,
-        habitacion: String(hotelItem.habitacion || "") || null,
-        ocupacion: String(hotelItem.ocupacion || "") || null,
-        check_in: String(hotelItem.check_in || currentPresupuesto.fecha_salida || "") || null,
-        check_out: String(hotelItem.check_out || currentPresupuesto.fecha_regreso || "") || null,
-        noches:
-          typeof hotelItem.noches === "number"
-            ? hotelItem.noches
-            : currentPresupuesto.noches || diffNights(currentPresupuesto.fecha_salida, currentPresupuesto.fecha_regreso),
+        direccion: String(
+          hotelItem.zona ||
+            hotelItem.ubicacion ||
+            hotelItem.direccion ||
+            ""
+        )
+      }
+    }
+  );
 
-        descripcion: descripcionFinal,
-        beneficios: String(hotelItem.beneficios || "") || null,
-        condiciones: String(hotelItem.condiciones || "") || null,
-        politica_cancelacion: String(hotelItem.politica_cancelacion || "") || null,
+  if (enrichError) {
+    console.warn("hotel-google-enrich error:", enrichError);
+  } else if (
+    enrichData &&
+    typeof enrichData === "object" &&
+    "hotel" in enrichData
+  ) {
+    googleHotel = (enrichData as { hotel?: Record<string, unknown> }).hotel || null;
+    console.info("hotel-google-enrich ok:", googleHotel);
+  }
+} catch (enrichCatch) {
+  console.warn("hotel-google-enrich catch:", enrichCatch);
+}
 
-        imagen_url: googleHotel?.foto_url || String(hotelItem.imagen_url || hotelItem.foto_url || "") || null,
-        captura_url: String(hotelItem.captura_url || "") || null,
-        captura_path: String(hotelItem.captura_path || "") || null,
+const googleFotos = Array.isArray(googleHotel?.fotos)
+  ? googleHotel.fotos
+      .map((foto) => {
+        if (!foto || typeof foto !== "object" || Array.isArray(foto)) return "";
 
-        precio_total:
-          typeof hotelItem.precio_total === "number"
-            ? hotelItem.precio_total
-            : toNumberOrNull(String(hotelItem.precio_total || "")),
+        const record = foto as Record<string, unknown>;
+        return String(record.url || "").trim();
+      })
+      .filter(Boolean)
+  : [];
 
-        moneda: toMonedaSimple(String(hotelItem.moneda || currentPresupuesto.moneda_principal || "USD")),
-        incluir_en_pdf: hotelItem.incluir_en_pdf === undefined ? true : Boolean(hotelItem.incluir_en_pdf),
-        es_principal: createdHoteles === 0,
-        raw_text: String(hotelItem.raw_text || hotelItem.texto_libre || descripcionOriginal || payload.raw_text || ""),
+const googleDescripcion = String(googleHotel?.descripcion || "").trim();
+const googleDireccion = String(googleHotel?.direccion || "").trim();
+const googleFotoUrl = String(googleHotel?.foto_url || "").trim();
+const googleNombre = String(googleHotel?.nombre || "").trim();
 
-        metadata: {
-          ...metadata,
-          carga_modo: "IA",
-          origen: "PRESUPUESTO_IA",
-          mostrar_precio_en_pdf: Boolean(hotelItem.mostrar_precio_en_pdf),
-          direccion_original: direccionOriginal,
-          google_hotel: googleHotel || null,
-          google_places_enriched_at: googleHotel ? new Date().toISOString() : null,
-          google_places_error: googleHotel ? null : googleResponse?.error || "Google Places no devolvió hotel.",
-          google_places_response: googleHotel ? null : googleResponse || null,
-          google_places_query: {
-            nombre,
-            destino,
-            direccion
-          },
-          parsed: hotelItem
-        }
-      } as CreateHotelDraft;
+const hotelPayload = {
+  presupuesto_id: currentPresupuesto.id,
+  nombre: googleNombre || nombre,
+  titulo: String(hotelItem.titulo || googleNombre || nombre),
+  destino,
+  zona:
+    googleDireccion ||
+    String(hotelItem.zona || hotelItem.ubicacion || hotelItem.direccion || "") ||
+    null,
+  categoria: String(hotelItem.categoria || "") || null,
+  regimen: String(hotelItem.regimen || "") || null,
+  habitacion: String(hotelItem.habitacion || "") || null,
+  ocupacion: String(hotelItem.ocupacion || "") || null,
+  check_in: String(hotelItem.check_in || currentPresupuesto.fecha_salida || "") || null,
+  check_out: String(hotelItem.check_out || currentPresupuesto.fecha_regreso || "") || null,
+  noches:
+    typeof hotelItem.noches === "number"
+      ? hotelItem.noches
+      : currentPresupuesto.noches ||
+        diffNights(currentPresupuesto.fecha_salida, currentPresupuesto.fecha_regreso),
+  descripcion: googleDescripcion || descripcionOriginal,
+  beneficios: String(hotelItem.beneficios || "") || null,
+  condiciones: String(hotelItem.condiciones || "") || null,
+  politica_cancelacion: String(hotelItem.politica_cancelacion || "") || null,
+  imagen_url: googleFotoUrl || String(hotelItem.imagen_url || hotelItem.foto_url || "") || null,
+  captura_url: String(hotelItem.captura_url || "") || null,
+  captura_path: String(hotelItem.captura_path || "") || null,
+  precio_total:
+    typeof hotelItem.precio_total === "number"
+      ? hotelItem.precio_total
+      : toNumberOrNull(String(hotelItem.precio_total || "")),
+  moneda: toMonedaSimple(
+    String(hotelItem.moneda || currentPresupuesto.moneda_principal || "USD")
+  ),
+  incluir_en_pdf: hotelItem.incluir_en_pdf === undefined ? true : Boolean(hotelItem.incluir_en_pdf),
+  es_principal: createdHoteles === 0,
 
-      const id = await addHotel(hotelPayload);
+  // Importante: no metemos payload.raw_text completo porque contamina el hotel con texto de vuelos/prompt.
+  raw_text: String(hotelItem.raw_text || hotelItem.texto_libre || descripcionOriginal || ""),
 
-      if (id) createdHoteles += 1;
+  metadata: {
+    ...metadata,
+    carga_modo: "IA",
+    origen: "PRESUPUESTO_IA",
+    mostrar_precio_en_pdf: Boolean(hotelItem.mostrar_precio_en_pdf),
+    google_place: googleHotel,
+    fotos: googleFotos,
+    google_maps_url: googleHotel?.google_maps_url || null,
+    website: googleHotel?.website || null,
+    telefono: googleHotel?.telefono || null,
+    rating: googleHotel?.rating || null,
+    user_ratings_total: googleHotel?.user_ratings_total || null,
+    parsed: hotelItem
+  }
+} as CreateHotelDraft;
+
+const id = await addHotel(hotelPayload);
+
+if (id) {
+  createdHoteles += 1;
+  createdHotelIds.push(id);
+
+
+}
     }
 
-        for (const servicioItem of serviciosParsed) {
-      const metadata =
-        servicioItem.metadata && typeof servicioItem.metadata === "object" && !Array.isArray(servicioItem.metadata)
-          ? (servicioItem.metadata as Record<string, unknown>)
-          : {};
-
+    for (const servicioItem of serviciosParsed) {
+      const metadata = safeRecord(servicioItem.metadata);
       const nombre = String(servicioItem.nombre || servicioItem.titulo || `Servicio ${createdServicios + 1}`);
 
       const servicioPayload = {
@@ -5701,15 +6724,15 @@ export function PresupuestosV2Panel() {
         descripcion: String(servicioItem.descripcion || servicioItem.texto_libre || servicioItem.raw_text || ""),
         incluido: servicioItem.incluido === undefined ? true : Boolean(servicioItem.incluido),
         opcional: Boolean(servicioItem.opcional),
-
         precio_total:
           typeof servicioItem.precio_total === "number"
             ? servicioItem.precio_total
             : toNumberOrNull(String(servicioItem.precio_total || "")),
-
-        moneda: toMonedaSimple(String(servicioItem.moneda || currentPresupuesto.moneda_principal || "USD")),
-        incluir_en_pdf: servicioItem.incluir_en_pdf === undefined ? true : Boolean(servicioItem.incluir_en_pdf),
-
+        moneda: toMonedaSimple(
+          String(servicioItem.moneda || currentPresupuesto.moneda_principal || "USD")
+        ),
+        incluir_en_pdf:
+          servicioItem.incluir_en_pdf === undefined ? true : Boolean(servicioItem.incluir_en_pdf),
         metadata: {
           ...metadata,
           carga_modo: "IA",
@@ -5721,14 +6744,15 @@ export function PresupuestosV2Panel() {
 
       const id = await addServicio(servicioPayload);
 
-      if (id) createdServicios += 1;
+      if (id) {
+        createdServicios += 1;
+        createdServicioIds.push(id);
+      }
     }
 
     for (const opcionItem of opcionesParsed) {
-      const metadata =
-        opcionItem.metadata && typeof opcionItem.metadata === "object" && !Array.isArray(opcionItem.metadata)
-          ? (opcionItem.metadata as Record<string, unknown>)
-          : {};
+      const metadata = safeRecord(opcionItem.metadata);
+      const parsedMetadata = safeRecord(opcionItem.metadata);
 
       const precioTotal =
         typeof opcionItem.precio_total === "number"
@@ -5737,40 +6761,91 @@ export function PresupuestosV2Panel() {
 
       if (!precioTotal || precioTotal <= 0) continue;
 
+      const formasPago =
+        getArray(opcionItem.formas_pago).length > 0
+          ? getArray(opcionItem.formas_pago)
+          : getArray(parsedMetadata.formas_pago);
+
+      const promociones =
+        getArray(opcionItem.promociones).length > 0
+          ? getArray(opcionItem.promociones)
+          : getArray(parsedMetadata.promociones);
+
+      const descuentos =
+        getArray(opcionItem.descuentos).length > 0
+          ? getArray(opcionItem.descuentos)
+          : getArray(parsedMetadata.descuentos);
+
+      const tarifasPasajeros =
+        getArray(opcionItem.tarifas_pasajeros).length > 0
+          ? getArray(opcionItem.tarifas_pasajeros)
+          : getArray(parsedMetadata.tarifas_pasajeros);
+
+      const opcionVueloIds = getStringArray(opcionItem.vuelos_ids || metadata.vuelos_ids);
+      const opcionHotelIds = getStringArray(opcionItem.hoteles_ids || metadata.hoteles_ids);
+      const opcionServicioIds = getStringArray(opcionItem.servicios_ids || metadata.servicios_ids);
+
       const combinacionPayload = {
         presupuesto_id: currentPresupuesto.id,
         nombre: String(opcionItem.nombre || opcionItem.titulo || `Opción ${createdOpciones + 1}`),
         subtitulo: String(opcionItem.subtitulo || "Paquete completo"),
         descripcion: String(opcionItem.descripcion || ""),
         precio_total: precioTotal,
-        moneda: toMonedaSimple(String(opcionItem.moneda || currentPresupuesto.moneda_principal || "USD")),
-
+        moneda: toMonedaSimple(
+          String(opcionItem.moneda || currentPresupuesto.moneda_principal || "USD")
+        ),
+        precio_contado:
+          typeof opcionItem.precio_contado === "number"
+            ? opcionItem.precio_contado
+            : toNumberOrNull(String(opcionItem.precio_contado || "")),
+        precio_transferencia:
+          typeof opcionItem.precio_transferencia === "number"
+            ? opcionItem.precio_transferencia
+            : toNumberOrNull(String(opcionItem.precio_transferencia || "")),
+        precio_tarjeta:
+          typeof opcionItem.precio_tarjeta === "number"
+            ? opcionItem.precio_tarjeta
+            : toNumberOrNull(String(opcionItem.precio_tarjeta || "")),
+        precio_financiado:
+          typeof opcionItem.precio_financiado === "number"
+            ? opcionItem.precio_financiado
+            : toNumberOrNull(String(opcionItem.precio_financiado || "")),
         seña:
           typeof opcionItem.seña === "number"
             ? opcionItem.seña
             : toNumberOrNull(String(opcionItem.seña || "")),
-
         saldo:
           typeof opcionItem.saldo === "number"
             ? opcionItem.saldo
             : toNumberOrNull(String(opcionItem.saldo || "")),
-
         forma_pago_resumen: String(opcionItem.forma_pago_resumen || opcionItem.forma_pago || ""),
         condiciones_pago: String(opcionItem.condiciones_pago || ""),
-        incluye_resumen: String(opcionItem.incluye_resumen || opcionItem.incluye || parsed.incluye_general || ""),
+        incluye_resumen: String(
+          opcionItem.incluye_resumen || opcionItem.incluye || parsed.incluye_general || ""
+        ),
         no_incluye_resumen: String(
           opcionItem.no_incluye_resumen || opcionItem.no_incluye || parsed.no_incluye_general || ""
         ),
         notas: String(opcionItem.notas || parsed.condiciones_generales || ""),
         destacada: createdOpciones === 0,
         visible_en_pdf: opcionItem.visible_en_pdf === undefined ? true : Boolean(opcionItem.visible_en_pdf),
-
         metadata: {
           ...metadata,
           carga_modo: "IA",
           origen: "PRESUPUESTO_IA",
           raw_text: payload.raw_text,
           precio_es_total_paquete: true,
+          mostrar_precio_por_pasajero: Boolean(opcionItem.mostrar_precio_por_pasajero),
+          composicion_precio_texto:
+            String(opcionItem.composicion_precio_texto || metadata.composicion_precio_texto || "") ||
+            null,
+          formas_pago: formasPago,
+          promociones,
+          descuentos,
+          tarifas_pasajeros: tarifasPasajeros,
+          vuelos_ids: opcionVueloIds.length ? opcionVueloIds : createdVueloIds,
+          hoteles_ids: opcionHotelIds.length ? opcionHotelIds : createdHotelIds,
+          servicios_ids: opcionServicioIds.length ? opcionServicioIds : createdServicioIds,
           parsed: opcionItem
         }
       } as CreateCombinacionDraft;
@@ -5780,22 +6855,27 @@ export function PresupuestosV2Panel() {
       if (id) createdOpciones += 1;
     }
 
+    const destinosIa = getDestinosFromParsedIa(parsed, currentPresupuesto);
+    const destinoPrincipalIa = buildDestinoPrincipalFromDraft(destinosIa);
+    const destinoDetalleIa = buildDestinoDetalleFromDraft(destinosIa);
+
     await updatePresupuesto({
       id: currentPresupuesto.id,
       origen_carga: "IA",
+      destino_principal: destinoPrincipalIa || currentPresupuesto.destino_principal,
+      destino_detalle: destinoDetalleIa || currentPresupuesto.destino_detalle,
       metadata: {
         ...(currentPresupuesto.metadata || {}),
+        destinos_presupuestados: destinosIa,
         presupuesto_ia_raw_text: payload.raw_text,
         presupuesto_ia_parsed_at: new Date().toISOString(),
-        presupuesto_ia_resultado: parsed,
-        parse_vuelos_resultado: vuelosParseados
+        presupuesto_ia_resultado: parsed
       }
     });
 
     await loadPresupuestoFull(currentPresupuesto.id, true);
     await loadPresupuestos(true);
-
-    setModalMode(null);
+    setModalMode("manual");
 
     showToast(
       `IA aplicada: ${createdVuelos} aéreo(s), ${createdHoteles} hotel(es), ${createdServicios} servicio(s), ${createdOpciones} opción(es).`
@@ -5818,7 +6898,7 @@ export function PresupuestosV2Panel() {
             </div>
 
             <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-              Propuestas para pasajeros. Crear, editar, procesar con IA, enviar y controlar.
+              Armá propuestas con IA, opciones comerciales, pagos flexibles, promos y PDF.
             </p>
           </div>
 
@@ -5848,7 +6928,7 @@ export function PresupuestosV2Panel() {
         </div>
       </header>
 
-            <main className="min-h-0 flex-1 overflow-auto p-3.5">
+      <main className="min-h-0 flex-1 overflow-auto p-3.5">
         {error ? <InlineError message={error} onClose={clearError} /> : null}
 
         <section className="relative z-[60] mb-3 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
@@ -5860,14 +6940,12 @@ export function PresupuestosV2Panel() {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <Filter size={14} className="text-[#4f7c90]" />
-
                 <h2 className="text-[12px] font-semibold text-[#172033]">Filtros</h2>
-
-               
               </div>
 
-                           <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
-                Estado: {filters.estado} · Marca: {filters.marca} · Vendedor: {filters.vendedorId} · Sucursal: {filters.sucursalId}
+              <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
+                Estado: {filters.estado} · Marca: {filters.marca} · Vendedor:{" "}
+                {filters.vendedorId} · Sucursal: {filters.sucursalId}
               </div>
             </button>
 
@@ -5948,11 +7026,12 @@ export function PresupuestosV2Panel() {
         </section>
       </main>
 
-            {modalMode === "nuevo" ? (
+      {modalMode === "nuevo" ? (
         <NuevoPresupuestoModal
           vendedores={vendedores}
           sucursales={sucursales}
           destinos={destinosOptions.length > 0 ? destinosOptions : COMMON_DESTINOS}
+          currentProfile={currentProfile}
           saving={saving}
           onClose={() => setModalMode(null)}
           onCreate={handleCreatePresupuesto}
@@ -5983,6 +7062,7 @@ export function PresupuestosV2Panel() {
           onSaveServicio={handleSaveServicio}
           onSaveCombinacion={handleSaveCombinacion}
           onUploadImage={handleUploadVueloImage}
+          onPreviewPdf={handlePreviewCurrentPdf}
         />
       ) : null}
 
@@ -5997,6 +7077,14 @@ export function PresupuestosV2Panel() {
           onConfirm={handleDeleteSelected}
         />
       ) : null}
+
+      {pdfPreviewHtml ? (
+  <PdfPreviewModal
+    title={pdfPreviewTitle}
+    html={pdfPreviewHtml}
+    onClose={() => setPdfPreviewHtml(null)}
+  />
+) : null}
 
       <Toast toast={toast} onClose={() => setToast(null)} />
     </div>

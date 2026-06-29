@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 
 export type ImportCatalogType =
+  | "clientes"
   | "destinos"
   | "metodos_contacto"
   | "servicios"
@@ -11,6 +12,7 @@ export type ImportCatalogType =
   | "cajas"
   | "hoteles_maestros"
   | "carritos"
+  | "carritos_files_historicos"
   | "live_contactos"
   | "live_conversaciones"
   | "live_mensajes";
@@ -49,14 +51,23 @@ type ExistingCatalogItem = {
   ubicacion?: string | null;
   nombre_comercial?: string | null;
   numero_carrito?: string | null;
+  numero_file?: string | null;
+  legacy_id?: string | null;
+  legacy_cliente_id?: string | null;
   live_contact_id?: string | null;
   live_conversation_id?: string | null;
   activo?: boolean | null;
+
+  nombre_completo?: string | null;
+  telefono?: string | null;
+  email?: string | null;
+  observaciones?: string | null;
 };
 
 type ClienteLookupItem = {
   id: string;
-  nombre_completo: string;
+  legacy_cliente_id?: string | null;
+  nombre_completo: string | null;
   telefono: string | null;
   email: string | null;
 };
@@ -92,6 +103,7 @@ type ImportadorCatalogosState = {
 };
 
 const CATALOG_LABELS: Record<ImportCatalogType, string> = {
+  clientes: "Clientes",
   destinos: "Destinos",
   metodos_contacto: "Métodos de contacto",
   servicios: "Servicios",
@@ -101,12 +113,14 @@ const CATALOG_LABELS: Record<ImportCatalogType, string> = {
   cajas: "Cajas",
   hoteles_maestros: "Hoteles maestros",
   carritos: "Carritos",
+  carritos_files_historicos: "Carritos / Files históricos",
   live_contactos: "Live Connect · Contactos",
   live_conversaciones: "Live Connect · Conversaciones",
   live_mensajes: "Live Connect · Mensajes"
 };
 
 const REQUIRED_FIELDS: Record<ImportCatalogType, string[]> = {
+  clientes: [],
   destinos: ["nombre"],
   metodos_contacto: ["nombre"],
   servicios: ["nombre"],
@@ -116,19 +130,29 @@ const REQUIRED_FIELDS: Record<ImportCatalogType, string[]> = {
   cajas: ["nombre"],
   hoteles_maestros: ["nombre"],
   carritos: ["telefono", "fecha_venta"],
+  carritos_files_historicos: ["legacy_id", "legacy_cliente_id", "fecha_venta"],
   live_contactos: ["live_contact_id"],
   live_conversaciones: ["live_conversation_id"],
   live_mensajes: ["live_conversation_id", "orden", "direction", "message_type"]
 };
 
 const DEFAULT_FIELD_MAP: Record<ImportCatalogType, string[]> = {
+  clientes: ["nombre_completo", "telefono", "email", "observaciones"],
+
   destinos: ["nombre", "pais", "activo"],
+
   metodos_contacto: ["nombre", "color", "activo"],
+
   servicios: ["nombre", "color", "activo"],
+
   formas_pago: ["nombre", "impacta_tesoreria", "activo"],
+
   operadores: ["nombre", "color", "razon_social", "cuit", "activo"],
+
   proveedores: ["nombre_comercial", "razon_social", "cuit", "telefono", "activo"],
+
   cajas: ["nombre", "tipo", "moneda", "sucursal_id", "descripcion", "orden", "activa", "activo"],
+
   hoteles_maestros: [
     "nombre",
     "ubicacion",
@@ -144,6 +168,7 @@ const DEFAULT_FIELD_MAP: Record<ImportCatalogType, string[]> = {
     "ultimo_uso",
     "activo"
   ],
+
   carritos: [
     "telefono",
     "email",
@@ -163,6 +188,64 @@ const DEFAULT_FIELD_MAP: Record<ImportCatalogType, string[]> = {
     "moneda",
     "observaciones"
   ],
+
+  carritos_files_historicos: [
+    "legacy_id",
+    "legacy_cliente_id",
+    "numero_carrito",
+    "numero_file",
+    "es_almundo",
+    "fecha_venta",
+    "fecha_in",
+    "fecha_out",
+    "solo_ida",
+    "importe",
+    "importe_bruto",
+    "importe_final",
+    "moneda",
+    "destino",
+    "servicio_id",
+    "servicio",
+    "metodo_contacto",
+    "forma_pago_id",
+    "forma_pago",
+    "vendedor_id",
+    "sucursal_id",
+    "promocode",
+    "importe_promocode",
+    "derivado_control",
+    "utilidad_neta",
+    "regalias",
+    "utilidad_bruta",
+    "importe_facturar",
+    "facturado",
+    "numero_factura",
+    "numero_factura_arca",
+    "cobrado",
+    "controlado",
+    "fecha_cobro",
+    "fecha_factura",
+    "tipo_cambio_usado",
+    "operador_id",
+    "operador_mayorista",
+    "neto_operador",
+    "fecha_vencimiento_operador",
+    "saldo_pendiente_operador",
+    "estado_pago_operador",
+    "impacto_riesgo",
+    "riesgo_resuelto",
+    "riesgo_resuelto_at",
+    "riesgo_resuelto_por",
+    "cancelado",
+    "fecha_cancelacion",
+    "motivo_cancelacion",
+    "distinta_moneda_liquidacion",
+    "moneda_liquidacion",
+    "importe_liquidacion",
+    "created_at",
+    "updated_at"
+  ],
+
   live_contactos: [
     "live_contact_id",
     "nombre",
@@ -191,6 +274,7 @@ const DEFAULT_FIELD_MAP: Record<ImportCatalogType, string[]> = {
     "live_fecha_creado",
     "live_fecha_editado"
   ],
+
   live_conversaciones: [
     "live_conversation_id",
     "etiqueta",
@@ -214,6 +298,7 @@ const DEFAULT_FIELD_MAP: Record<ImportCatalogType, string[]> = {
     "html_url_original",
     "html_raw"
   ],
+
   live_mensajes: [
     "live_conversation_id",
     "orden",
@@ -249,6 +334,10 @@ function normalizeError(error: unknown): string {
       return "La importación intentó vincular un dato que no existe en la base actual. Revisá el mapeo o dejá ese campo sin mapear.";
     }
 
+    if (message.toLowerCase().includes("column") && message.toLowerCase().includes("does not exist")) {
+      return `Hay una columna que no existe en la tabla destino. Detalle: ${message}`;
+    }
+
     return message;
   }
 
@@ -279,6 +368,12 @@ function nullableText(value: unknown): string | null {
   return cleaned ? cleaned : null;
 }
 
+function nullableUuid(value: unknown): string | null {
+  const cleaned = cleanText(value);
+  if (!cleaned) return null;
+  return isUuid(cleaned) ? cleaned : null;
+}
+
 function titleCase(value: string): string {
   const cleaned = cleanText(value).toLowerCase();
 
@@ -300,7 +395,7 @@ function parseBoolean(value: unknown, defaultValue = true): boolean {
 
   if (!normalized) return defaultValue;
 
-  if (["true", "si", "sí", "1", "activo", "activa", "yes", "y"].includes(normalized)) {
+  if (["true", "si", "sí", "1", "activo", "activa", "yes", "y", "x"].includes(normalized)) {
     return true;
   }
 
@@ -366,7 +461,17 @@ function normalizeCajaTipo(value: unknown): string {
 }
 
 function normalizePhone(value: unknown): string {
-  return String(value || "").replace(/\D/g, "");
+  let phone = String(value || "").replace(/\D/g, "");
+
+  if (!phone) return "";
+
+  phone = phone.replace(/^00+/, "");
+
+  if (phone.startsWith("5499") && phone.length >= 14) {
+    phone = `549${phone.slice(4)}`;
+  }
+
+  return phone;
 }
 
 function normalizeEmail(value: unknown): string {
@@ -384,6 +489,11 @@ function parseDate(value: unknown): string | null {
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     return raw;
+  }
+
+  const dateTimeMatch = raw.match(/^(\d{4}-\d{2}-\d{2})[ T]/);
+  if (dateTimeMatch) {
+    return dateTimeMatch[1];
   }
 
   const slashMatch = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -509,6 +619,13 @@ function generateHistoricCartNumber(index: number, fechaVenta: string | null, te
   const indexPart = String(index).padStart(5, "0");
 
   return `HIST-${datePart}-${phonePart}-${indexPart}`;
+}
+
+function generateHistoricFileNumber(index: number, fechaVenta: string | null, legacyId: string): string {
+  const datePart = (fechaVenta || "0000-00-00").replace(/\D/g, "").slice(0, 8) || "00000000";
+  const idPart = cleanText(legacyId).replace(/\D/g, "").slice(-5) || String(index).padStart(5, "0");
+
+  return `FILE-HIST-${datePart}-${idPart}`;
 }
 
 function splitCsvRecords(text: string): string[] {
@@ -694,6 +811,33 @@ function guessColumn(columns: string[], possibleNames: string[]): string {
 function buildInitialMap(catalogType: ImportCatalogType, columns: string[]): ImportColumnMap {
   const map: ImportColumnMap = {};
 
+  if (catalogType === "clientes") {
+    map.nombre_completo = guessColumn(columns, [
+      "nombre_pasajero",
+      "nombre pasajero",
+      "pasajero",
+      "cliente",
+      "nombre_cliente",
+      "nombre cliente",
+      "nombre_completo",
+      "nombre completo",
+      "fullname",
+      "full name"
+    ]);
+
+    map.telefono = guessColumn(columns, ["telefono", "teléfono", "tel", "celular", "whatsapp", "phone"]);
+    map.email = guessColumn(columns, ["email", "mail", "correo", "correo electronico", "correo electrónico"]);
+
+    map.observaciones = guessColumn(columns, [
+      "notas_adicionales",
+      "notas adicionales",
+      "observaciones",
+      "notas",
+      "comentarios",
+      "detalle"
+    ]);
+  }
+
   if (catalogType === "destinos") {
     map.nombre = guessColumn(columns, ["nombre", "destino", "ciudad", "lugar", "name"]);
     map.pais = guessColumn(columns, ["pais", "país", "country"]);
@@ -804,10 +948,99 @@ function buildInitialMap(catalogType: ImportCatalogType, columns: string[]): Imp
     map.destino = guessColumn(columns, ["destino", "ciudad", "lugar"]);
     map.fecha_in = guessColumn(columns, ["fecha_in", "fecha in", "desde", "salida"]);
     map.fecha_out = guessColumn(columns, ["fecha_out", "fecha out", "hasta", "regreso"]);
-    map.solo_ida = guessColumn(columns, ["solo_ida", "solo ida"]);
+    map.solo_ida = guessColumn(columns, ["solo_ida", "ida_solo", "solo ida"]);
     map.importe = guessColumn(columns, ["importe", "monto", "precio", "total", "venta"]);
     map.moneda = guessColumn(columns, ["moneda", "currency", "divisa"]);
     map.observaciones = guessColumn(columns, ["observaciones", "notas", "notas_adicionales", "comentarios"]);
+  }
+
+  if (catalogType === "carritos_files_historicos") {
+    map.legacy_id = guessColumn(columns, ["id", "legacy_id", "id viejo"]);
+    map.legacy_cliente_id = guessColumn(columns, ["cliente_id", "legacy_cliente_id", "cliente id"]);
+
+    map.numero_carrito = guessColumn(columns, ["numero_carrito", "número carrito", "carrito"]);
+    map.numero_file = guessColumn(columns, ["numero_file", "número file", "file"]);
+
+    map.es_almundo = guessColumn(columns, ["es_almundo", "es almundo", "almundo"]);
+
+    map.fecha_venta = guessColumn(columns, ["fecha_venta", "fecha venta", "fecha"]);
+    map.fecha_in = guessColumn(columns, ["fecha_in", "fecha in", "desde", "salida"]);
+    map.fecha_out = guessColumn(columns, ["fecha_out", "fecha out", "hasta", "regreso"]);
+    map.solo_ida = guessColumn(columns, ["ida_solo", "solo_ida", "solo ida"]);
+
+    map.importe = guessColumn(columns, ["importe", "monto", "precio", "venta"]);
+    map.importe_bruto = guessColumn(columns, ["importe_bruto", "importe bruto"]);
+    map.importe_final = guessColumn(columns, ["importe_final", "importe final"]);
+    map.moneda = guessColumn(columns, ["moneda", "currency", "divisa"]);
+    map.destino = guessColumn(columns, ["destino", "ciudad", "lugar"]);
+
+    map.servicio_id = guessColumn(columns, ["servicio_id"]);
+    map.servicio = guessColumn(columns, ["servicio", "producto", "tipo_servicio"]);
+    map.metodo_contacto = guessColumn(columns, ["metodo_contacto", "método contacto", "origen"]);
+
+    map.forma_pago_id = guessColumn(columns, ["forma_pago_id", "metodo_pago_id"]);
+    map.forma_pago = guessColumn(columns, ["forma_pago", "forma pago", "medio_pago", "pago"]);
+
+    map.vendedor_id = guessColumn(columns, ["vendedor_id"]);
+    map.sucursal_id = guessColumn(columns, ["sucursal_id"]);
+
+    map.promocode = guessColumn(columns, ["promocode", "promo", "codigo promo"]);
+    map.importe_promocode = guessColumn(columns, ["importe_promocode", "importe promocode", "descuento"]);
+
+    map.derivado_control = guessColumn(columns, ["derivado_control", "derivado control"]);
+    map.utilidad_neta = guessColumn(columns, ["utilidad_neta", "utilidad neta"]);
+    map.regalias = guessColumn(columns, ["regalias", "regalías"]);
+    map.utilidad_bruta = guessColumn(columns, ["utilidad_bruta", "utilidad bruta"]);
+    map.importe_facturar = guessColumn(columns, ["importe_facturar", "importe facturar"]);
+
+    map.facturado = guessColumn(columns, ["facturado"]);
+    map.numero_factura = guessColumn(columns, ["numero_factura", "número factura"]);
+    map.numero_factura_arca = guessColumn(columns, ["numero_factura_arca", "factura arca"]);
+    map.cobrado = guessColumn(columns, ["cobrado"]);
+    map.controlado = guessColumn(columns, ["controlado"]);
+    map.fecha_cobro = guessColumn(columns, ["fecha_cobro", "fecha cobro"]);
+    map.fecha_factura = guessColumn(columns, ["fecha_factura", "fecha factura"]);
+    map.tipo_cambio_usado = guessColumn(columns, ["tipo_cambio_usado", "tipo cambio usado", "tc"]);
+
+    map.operador_id = guessColumn(columns, ["operador_id"]);
+    map.operador_mayorista = guessColumn(columns, ["operador_mayorista", "operador mayorista", "operador", "mayorista"]);
+    map.neto_operador = guessColumn(columns, ["neto_operador", "neto operador", "neto"]);
+
+    map.fecha_vencimiento_operador = guessColumn(columns, [
+      "fecha_vencimiento_operador",
+      "fecha vencimiento operador",
+      "vencimiento operador"
+    ]);
+    map.saldo_pendiente_operador = guessColumn(columns, [
+      "saldo_pendiente_operador",
+      "saldo pendiente operador",
+      "saldo operador"
+    ]);
+    map.estado_pago_operador = guessColumn(columns, [
+      "estado_pago_operador",
+      "estado pago operador",
+      "pago operador"
+    ]);
+
+    map.impacto_riesgo = guessColumn(columns, ["impacto_riesgo", "impacto riesgo", "riesgo"]);
+    map.riesgo_resuelto = guessColumn(columns, ["riesgo_resuelto", "riesgo resuelto"]);
+    map.riesgo_resuelto_at = guessColumn(columns, ["riesgo_resuelto_at", "riesgo resuelto at"]);
+    map.riesgo_resuelto_por = guessColumn(columns, ["riesgo_resuelto_por", "riesgo resuelto por"]);
+
+    map.cancelado = guessColumn(columns, ["cancelado"]);
+    map.fecha_cancelacion = guessColumn(columns, ["fecha_cancelacion", "fecha cancelacion", "fecha cancelación"]);
+    map.motivo_cancelacion = guessColumn(columns, ["motivo_cancelacion", "motivo cancelacion", "motivo cancelación"]);
+
+    map.distinta_moneda_liquidacion = guessColumn(columns, [
+      "distinta_moneda_liquidacion",
+      "distinta moneda liquidacion",
+      "distinta moneda liquidación"
+    ]);
+    map.moneda_liquidacion = guessColumn(columns, ["moneda_liquidacion", "moneda liquidacion", "moneda liquidación"]);
+    map.importe_liquidacion = guessColumn(columns, ["importe_liquidacion", "importe liquidacion", "importe liquidación"]);
+
+    map.created_at = guessColumn(columns, ["created_at", "creado"]);
+    map.updated_at = guessColumn(columns, ["updated_at", "actualizado"]);
   }
 
   if (catalogType === "live_contactos") {
@@ -880,6 +1113,7 @@ function buildInitialMap(catalogType: ImportCatalogType, columns: string[]): Imp
 }
 
 function getTableName(catalogType: ImportCatalogType): string {
+  if (catalogType === "clientes") return "clientes";
   if (catalogType === "destinos") return "destinos";
   if (catalogType === "metodos_contacto") return "metodos_contacto";
   if (catalogType === "servicios") return "servicios";
@@ -889,6 +1123,7 @@ function getTableName(catalogType: ImportCatalogType): string {
   if (catalogType === "cajas") return "cajas";
   if (catalogType === "hoteles_maestros") return "hoteles_maestros";
   if (catalogType === "carritos") return "carritos";
+  if (catalogType === "carritos_files_historicos") return "carritos";
   if (catalogType === "live_contactos") return "comunicaciones_live_contactos";
   if (catalogType === "live_conversaciones") return "comunicaciones_live_conversaciones";
   if (catalogType === "live_mensajes") return "comunicaciones_live_mensajes";
@@ -897,6 +1132,16 @@ function getTableName(catalogType: ImportCatalogType): string {
 }
 
 function getExistingKey(catalogType: ImportCatalogType, item: ExistingCatalogItem): string {
+  if (catalogType === "clientes") {
+    const phone = normalizePhone(item.telefono);
+    const email = normalizeEmail(item.email);
+
+    if (phone) return `phone:${phone}`;
+    if (email) return `email:${email}`;
+
+    return `name:${normalizeText(item.nombre_completo)}`;
+  }
+
   if (catalogType === "destinos") {
     return `${normalizeText(item.nombre)}|${normalizeText(item.pais || "Sin especificar")}`;
   }
@@ -911,6 +1156,10 @@ function getExistingKey(catalogType: ImportCatalogType, item: ExistingCatalogIte
 
   if (catalogType === "carritos") {
     return normalizeText(item.numero_carrito);
+  }
+
+  if (catalogType === "carritos_files_historicos") {
+    return normalizeText(item.legacy_id);
   }
 
   if (catalogType === "live_contactos") {
@@ -929,12 +1178,45 @@ function getMappedValue(row: ImportRawRow, column?: string): string {
   return cleanText(row[column]);
 }
 
+function isHistoricFileRow(mapped: Record<string, ImportMappedValue>): boolean {
+  const tipoHistorico = cleanText(mapped.tipo_historico);
+
+  if (tipoHistorico === "file") return true;
+  if (tipoHistorico === "carrito") return false;
+
+  const esAlmundoRaw = cleanText(mapped.es_almundo);
+
+  if (esAlmundoRaw) {
+    return !parseBoolean(esAlmundoRaw, true);
+  }
+
+  return (
+    Boolean(cleanText(mapped.numero_file)) ||
+    Boolean(cleanText(mapped.operador)) ||
+    parseMoney(mapped.neto_operador, 0) > 0
+  );
+}
+
 function mapRow(
   catalogType: ImportCatalogType,
   row: ImportRawRow,
   columnMap: ImportColumnMap,
   index = 1
 ): Record<string, ImportMappedValue> {
+  if (catalogType === "clientes") {
+    const nombreCompleto = titleCase(getMappedValue(row, columnMap.nombre_completo));
+    const telefono = normalizePhone(getMappedValue(row, columnMap.telefono));
+    const email = normalizeEmail(getMappedValue(row, columnMap.email));
+    const observaciones = nullableText(getMappedValue(row, columnMap.observaciones));
+
+    return {
+      nombre_completo: nombreCompleto,
+      telefono: telefono || null,
+      email: email || null,
+      observaciones
+    };
+  }
+
   if (catalogType === "destinos") {
     return {
       nombre: titleCase(getMappedValue(row, columnMap.nombre)),
@@ -1024,7 +1306,7 @@ function mapRow(
   }
 
   if (catalogType === "carritos") {
-    const telefono = cleanText(getMappedValue(row, columnMap.telefono));
+    const telefono = normalizePhone(getMappedValue(row, columnMap.telefono));
     const email = normalizeEmail(getMappedValue(row, columnMap.email));
     const fechaVenta = parseDate(getMappedValue(row, columnMap.fecha_venta) || getMappedValue(row, columnMap.fecha_in));
     const numeroCarrito = cleanText(getMappedValue(row, columnMap.numero_carrito)) || generateHistoricCartNumber(index, fechaVenta, telefono);
@@ -1040,10 +1322,10 @@ function mapRow(
       nombre_pasajero: titleCase(getMappedValue(row, columnMap.nombre_pasajero)),
       numero_carrito: numeroCarrito,
       fecha_venta: fechaVenta,
-      servicio_id: nullableText(getMappedValue(row, columnMap.servicio_id)),
+      servicio_id: nullableUuid(getMappedValue(row, columnMap.servicio_id)),
       servicio: nullableText(getMappedValue(row, columnMap.servicio)),
       metodo_contacto: nullableText(getMappedValue(row, columnMap.metodo_contacto)),
-      forma_pago_id: nullableText(getMappedValue(row, columnMap.forma_pago_id)),
+      forma_pago_id: nullableUuid(getMappedValue(row, columnMap.forma_pago_id)),
       forma_pago: nullableText(getMappedValue(row, columnMap.forma_pago)),
       destino: nullableText(getMappedValue(row, columnMap.destino)),
       fecha_in: fechaIn,
@@ -1059,6 +1341,146 @@ function mapRow(
       visible_en_carritos: true
     };
   }
+
+if (catalogType === "carritos_files_historicos") {
+  const legacyId = cleanText(getMappedValue(row, columnMap.legacy_id));
+  const legacyClienteId = cleanText(getMappedValue(row, columnMap.legacy_cliente_id));
+  const fechaVenta = parseDate(getMappedValue(row, columnMap.fecha_venta));
+  const fechaIn = parseDate(getMappedValue(row, columnMap.fecha_in));
+  const soloIda = parseBoolean(getMappedValue(row, columnMap.solo_ida), false);
+  const fechaOut = soloIda ? null : parseDate(getMappedValue(row, columnMap.fecha_out));
+
+  const importe = parseMoney(getMappedValue(row, columnMap.importe), 0);
+  const importeBruto = parseMoney(getMappedValue(row, columnMap.importe_bruto), importe);
+  const importeFinal = parseMoney(getMappedValue(row, columnMap.importe_final), importe || importeBruto);
+
+  const impactoRiesgo = parseMoney(getMappedValue(row, columnMap.impacto_riesgo), 0);
+  const riesgo = impactoRiesgo !== 0 || parseBoolean(getMappedValue(row, columnMap.impacto_riesgo), false);
+
+  const esAlmundoRaw = cleanText(getMappedValue(row, columnMap.es_almundo));
+  const esAlmundo = esAlmundoRaw ? parseBoolean(esAlmundoRaw, true) : true;
+
+  const numeroFileRaw = cleanText(getMappedValue(row, columnMap.numero_file));
+  const operadorRaw = nullableText(getMappedValue(row, columnMap.operador_mayorista));
+  const netoOperador = parseMoney(getMappedValue(row, columnMap.neto_operador), 0);
+
+  const isFile =
+    !esAlmundo ||
+    Boolean(numeroFileRaw) ||
+    Boolean(operadorRaw) ||
+    netoOperador > 0;
+
+  const numeroCarrito =
+    cleanText(getMappedValue(row, columnMap.numero_carrito)) ||
+    generateHistoricCartNumber(index, fechaVenta, legacyId);
+
+  const numeroFile = isFile
+    ? numeroFileRaw || generateHistoricFileNumber(index, fechaVenta, legacyId)
+    : null;
+
+  const promocodeRaw = cleanText(getMappedValue(row, columnMap.promocode));
+  const importePromocode = parseMoney(getMappedValue(row, columnMap.importe_promocode), 0);
+  const cancelado = parseBoolean(getMappedValue(row, columnMap.cancelado), false);
+
+  return {
+    tipo_historico: isFile ? "file" : "carrito",
+
+    legacy_id: legacyId,
+    legacy_cliente_id: legacyClienteId,
+    cliente_id: null,
+
+    numero_carrito: numeroCarrito,
+    numero_file: numeroFile,
+    es_almundo: esAlmundoRaw,
+
+    fecha_venta: fechaVenta,
+    fecha_in: fechaIn,
+    fecha_out: fechaOut,
+    solo_ida: soloIda,
+
+    importe,
+    importe_bruto: importeBruto,
+    importe_final: importeFinal,
+    moneda: normalizeMoneda(getMappedValue(row, columnMap.moneda)),
+    destino: nullableText(getMappedValue(row, columnMap.destino)),
+
+    servicio_id: nullableUuid(getMappedValue(row, columnMap.servicio_id)),
+    servicio: nullableText(getMappedValue(row, columnMap.servicio)),
+    metodo_contacto: nullableText(getMappedValue(row, columnMap.metodo_contacto)),
+
+    forma_pago_id: nullableUuid(getMappedValue(row, columnMap.forma_pago_id)),
+    forma_pago: nullableText(getMappedValue(row, columnMap.forma_pago)),
+
+vendedor_id: null,
+sucursal_id: null,
+
+    promocode_aplicado: Boolean(promocodeRaw) || importePromocode > 0,
+    promocode_importe: importePromocode,
+
+    derivado_control: parseBoolean(getMappedValue(row, columnMap.derivado_control), false),
+    utilidad_neta: parseMoney(getMappedValue(row, columnMap.utilidad_neta), 0),
+    regalias: parseMoney(getMappedValue(row, columnMap.regalias), 0),
+    utilidad_bruta: parseMoney(getMappedValue(row, columnMap.utilidad_bruta), 0),
+    importe_facturar: parseMoney(getMappedValue(row, columnMap.importe_facturar), 0),
+
+    facturado: parseBoolean(getMappedValue(row, columnMap.facturado), false),
+    numero_factura: nullableText(getMappedValue(row, columnMap.numero_factura)),
+    numero_factura_arca: nullableText(getMappedValue(row, columnMap.numero_factura_arca)),
+    cobrado: parseBoolean(getMappedValue(row, columnMap.cobrado), false),
+    controlado: parseBoolean(getMappedValue(row, columnMap.controlado), false),
+    fecha_cobro: parseDate(getMappedValue(row, columnMap.fecha_cobro)),
+    fecha_factura: parseDate(getMappedValue(row, columnMap.fecha_factura)),
+    tipo_cambio_usado: parseMoney(getMappedValue(row, columnMap.tipo_cambio_usado), 0),
+
+    operador_id: null,
+    operador: operadorRaw,
+    neto_operador: netoOperador,
+
+    fecha_vencimiento_operador: parseDate(getMappedValue(row, columnMap.fecha_vencimiento_operador)),
+    saldo_pendiente_operador: parseMoney(getMappedValue(row, columnMap.saldo_pendiente_operador), 0),
+    estado_pago_operador: nullableText(getMappedValue(row, columnMap.estado_pago_operador)),
+
+    riesgo,
+    riesgo_motivo: riesgo ? "Importado desde histórico con impacto de riesgo." : null,
+    importe_riesgo: impactoRiesgo,
+    riesgo_resuelto: parseBoolean(getMappedValue(row, columnMap.riesgo_resuelto), false),
+    riesgo_resuelto_at: parseDateTime(getMappedValue(row, columnMap.riesgo_resuelto_at)),
+    riesgo_resuelto_by: null,
+
+    cancelado,
+    fecha_cancelacion: parseDate(getMappedValue(row, columnMap.fecha_cancelacion)),
+    motivo_cancelacion: nullableText(getMappedValue(row, columnMap.motivo_cancelacion)),
+
+    distinta_moneda_liquidacion: parseBoolean(getMappedValue(row, columnMap.distinta_moneda_liquidacion), false),
+    moneda_liquidacion: nullableText(getMappedValue(row, columnMap.moneda_liquidacion)),
+    importe_liquidacion: parseMoney(getMappedValue(row, columnMap.importe_liquidacion), 0),
+
+    estado: cancelado ? "CANCELADO" : "NUEVO",
+
+    observaciones: nullableText(
+      [
+        promocodeRaw ? `Promocode histórico: ${promocodeRaw}` : "",
+        cleanText(getMappedValue(row, columnMap.motivo_cancelacion))
+          ? `Motivo cancelación: ${cleanText(getMappedValue(row, columnMap.motivo_cancelacion))}`
+          : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    ),
+
+    activo: !cancelado,
+   created_at:
+  parseDateTime(getMappedValue(row, columnMap.created_at)) ||
+  parseDateTime(getMappedValue(row, columnMap.fecha_venta)) ||
+  new Date().toISOString(),
+
+updated_at:
+  parseDateTime(getMappedValue(row, columnMap.updated_at)) ||
+  parseDateTime(getMappedValue(row, columnMap.created_at)) ||
+  parseDateTime(getMappedValue(row, columnMap.fecha_venta)) ||
+  new Date().toISOString()
+  };
+}
 
   if (catalogType === "live_contactos") {
     const nombre = titleCase(getMappedValue(row, columnMap.nombre));
@@ -1160,6 +1582,16 @@ function mapRow(
 }
 
 function getMappedKey(catalogType: ImportCatalogType, mapped: Record<string, ImportMappedValue>): string {
+  if (catalogType === "clientes") {
+    const phone = normalizePhone(mapped.telefono);
+    const email = normalizeEmail(mapped.email);
+
+    if (phone) return `phone:${phone}`;
+    if (email) return `email:${email}`;
+
+    return `name:${normalizeText(mapped.nombre_completo)}`;
+  }
+
   if (catalogType === "destinos") {
     return `${normalizeText(mapped.nombre)}|${normalizeText(mapped.pais || "Sin especificar")}`;
   }
@@ -1174,6 +1606,11 @@ function getMappedKey(catalogType: ImportCatalogType, mapped: Record<string, Imp
 
   if (catalogType === "carritos") {
     return normalizeText(mapped.numero_carrito);
+  }
+
+  if (catalogType === "carritos_files_historicos") {
+    const tipo = cleanText(mapped.tipo_historico) || (isHistoricFileRow(mapped) ? "file" : "carrito");
+    return `${tipo}:${normalizeText(mapped.legacy_id)}`;
   }
 
   if (catalogType === "live_contactos") {
@@ -1199,6 +1636,20 @@ function validateMappedRow(catalogType: ImportCatalogType, mapped: Record<string
 
     if (!cleanText(value)) {
       return `Falta ${getImportFieldLabel(field)}.`;
+    }
+  }
+
+  if (catalogType === "clientes") {
+    const nombreCompleto = cleanText(mapped.nombre_completo);
+    const telefono = normalizePhone(mapped.telefono);
+    const email = normalizeEmail(mapped.email);
+
+    if (!nombreCompleto) {
+      return "Falta nombre del cliente.";
+    }
+
+    if (!telefono && !email) {
+      return "Falta teléfono o email para identificar al cliente.";
     }
   }
 
@@ -1233,6 +1684,31 @@ function validateMappedRow(catalogType: ImportCatalogType, mapped: Record<string
     if (!cleanText(mapped.numero_carrito)) return "No se pudo generar número de carrito histórico.";
   }
 
+  if (catalogType === "carritos_files_historicos") {
+    const isFile = isHistoricFileRow(mapped);
+    mapped.tipo_historico = isFile ? "file" : "carrito";
+
+    if (!isUuid(mapped.legacy_id)) {
+      return "Falta ID histórico o no es UUID válido.";
+    }
+
+    if (!isUuid(mapped.legacy_cliente_id)) {
+      return "Falta cliente_id histórico o no es UUID válido.";
+    }
+
+    if (!cleanText(mapped.fecha_venta)) {
+      return "Falta Fecha de venta o no se pudo interpretar.";
+    }
+
+    if (isFile && !cleanText(mapped.numero_file)) {
+      mapped.numero_file = generateHistoricFileNumber(0, cleanText(mapped.fecha_venta), cleanText(mapped.legacy_id));
+    }
+
+    if (!isFile && !cleanText(mapped.numero_carrito)) {
+      return "Falta número de carrito o no se pudo generar.";
+    }
+  }
+
   if (catalogType === "live_contactos") {
     if (!cleanText(mapped.live_contact_id)) return "Falta ID contacto Live.";
   }
@@ -1252,18 +1728,22 @@ function validateMappedRow(catalogType: ImportCatalogType, mapped: Record<string
 }
 
 function buildClienteLookup(clientes: ClienteLookupItem[]) {
+  const byLegacyId = new Map<string, ClienteLookupItem>();
   const byPhone = new Map<string, ClienteLookupItem>();
   const byEmail = new Map<string, ClienteLookupItem>();
 
   clientes.forEach((cliente) => {
+    const legacyId = cleanText(cliente.legacy_cliente_id);
     const phone = normalizePhone(cliente.telefono);
     const email = normalizeEmail(cliente.email);
 
+    if (legacyId && !byLegacyId.has(legacyId)) byLegacyId.set(legacyId, cliente);
     if (phone && !byPhone.has(phone)) byPhone.set(phone, cliente);
     if (email && !byEmail.has(email)) byEmail.set(email, cliente);
   });
 
   return {
+    byLegacyId,
     byPhone,
     byEmail
   };
@@ -1283,6 +1763,35 @@ function enrichHistoricCartRow(
 
   if (!cliente) {
     return "No encontré cliente ya importado por teléfono/email.";
+  }
+
+  mapped.cliente_id = cliente.id;
+
+  const servicioId = cleanText(mapped.servicio_id);
+  if (servicioId && (!isUuid(servicioId) || !validServicioIds.has(servicioId))) {
+    mapped.servicio_id = null;
+  }
+
+  const formaPagoId = cleanText(mapped.forma_pago_id);
+  if (formaPagoId && (!isUuid(formaPagoId) || !validFormaPagoIds.has(formaPagoId))) {
+    mapped.forma_pago_id = null;
+  }
+
+  return null;
+}
+
+function enrichHistoricCarritoFileRow(
+  mapped: Record<string, ImportMappedValue>,
+  clientes: ClienteLookupItem[],
+  validServicioIds: Set<string>,
+  validFormaPagoIds: Set<string>
+): string | null {
+  const lookup = buildClienteLookup(clientes);
+  const legacyClienteId = cleanText(mapped.legacy_cliente_id);
+  const cliente = legacyClienteId ? lookup.byLegacyId.get(legacyClienteId) : undefined;
+
+  if (!cliente) {
+    return "No encontré cliente por legacy_cliente_id. Primero hay que completar clientes.legacy_cliente_id.";
   }
 
   mapped.cliente_id = cliente.id;
@@ -1328,10 +1837,188 @@ function buildLiveContactFromConversationRow(mapped: Record<string, ImportMapped
   };
 }
 
+function toHistoricCarritoInsertRow(mapped: Record<string, ImportMappedValue>): Record<string, ImportMappedValue> {
+  return {
+    legacy_id: mapped.legacy_id,
+    legacy_cliente_id: mapped.legacy_cliente_id,
+    cliente_id: mapped.cliente_id,
+    contacto_id: null,
+
+    numero_carrito: mapped.numero_carrito,
+    fecha_venta: mapped.fecha_venta,
+
+    servicio_id: mapped.servicio_id,
+    servicio: mapped.servicio,
+    metodo_contacto: mapped.metodo_contacto,
+
+    forma_pago_id: mapped.forma_pago_id,
+    forma_pago: mapped.forma_pago,
+
+    destino: mapped.destino,
+    fecha_in: mapped.fecha_in,
+    fecha_out: mapped.fecha_out,
+    solo_ida: mapped.solo_ida,
+
+    importe: mapped.importe,
+    importe_bruto: mapped.importe_bruto,
+    promocode_aplicado: mapped.promocode_aplicado,
+    promocode_importe: mapped.promocode_importe,
+    importe_final: mapped.importe_final,
+
+    pago_parcial: false,
+    total_pagado: mapped.cobrado ? mapped.importe_final : 0,
+    saldo_cta_cte: 0,
+
+    moneda: mapped.moneda,
+
+    vendedor: null,
+    vendedor_id: mapped.vendedor_id,
+    sucursal_id: mapped.sucursal_id,
+
+    estado: mapped.estado,
+    observaciones: mapped.observaciones,
+
+    activo: mapped.activo,
+    visible_en_carritos: true,
+    fecha_visible_carritos: mapped.fecha_venta,
+
+    riesgo: mapped.riesgo,
+    riesgo_motivo: mapped.riesgo_motivo,
+    importe_riesgo: mapped.importe_riesgo,
+    riesgo_resuelto: mapped.riesgo_resuelto,
+    riesgo_resuelto_at: mapped.riesgo_resuelto_at,
+    riesgo_resuelto_by: mapped.riesgo_resuelto_by,
+    riesgo_observaciones: null,
+
+    confirmado_vendedor: false,
+    confirmado_at: null,
+    enviado_control_at: null,
+    fecha_ingreso_gastos: null,
+
+    derivado_control: mapped.derivado_control,
+    utilidad_neta: mapped.utilidad_neta,
+    regalias: mapped.regalias,
+    utilidad_bruta: mapped.utilidad_bruta,
+    importe_facturar: mapped.importe_facturar,
+
+    facturado: mapped.facturado,
+    numero_factura: mapped.numero_factura,
+    numero_factura_arca: mapped.numero_factura_arca,
+    cobrado: mapped.cobrado,
+    controlado: mapped.controlado,
+    fecha_cobro: mapped.fecha_cobro,
+    fecha_factura: mapped.fecha_factura,
+    tipo_cambio_usado: mapped.tipo_cambio_usado,
+
+    cancelado: mapped.cancelado,
+    fecha_cancelacion: mapped.fecha_cancelacion,
+    motivo_cancelacion: mapped.motivo_cancelacion,
+
+    distinta_moneda_liquidacion: mapped.distinta_moneda_liquidacion,
+    moneda_liquidacion: mapped.moneda_liquidacion,
+    importe_liquidacion: mapped.importe_liquidacion,
+
+   created_at: mapped.created_at || new Date().toISOString(),
+updated_at: mapped.updated_at || mapped.created_at || new Date().toISOString()
+  };
+}
+
+function toHistoricFileInsertRow(mapped: Record<string, ImportMappedValue>): Record<string, ImportMappedValue> {
+  return {
+    legacy_id: mapped.legacy_id,
+    legacy_cliente_id: mapped.legacy_cliente_id,
+    cliente_id: mapped.cliente_id,
+
+    numero_file: mapped.numero_file,
+
+    operador_id: mapped.operador_id,
+    operador: mapped.operador,
+
+    fecha_venta: mapped.fecha_venta,
+
+    servicio_id: mapped.servicio_id,
+    servicio: mapped.servicio,
+    metodo_contacto: mapped.metodo_contacto,
+
+    destino: mapped.destino,
+    fecha_in: mapped.fecha_in,
+    fecha_out: mapped.fecha_out,
+    solo_ida: mapped.solo_ida,
+
+    importe_bruto: mapped.importe_bruto,
+    importe_final: mapped.importe_final,
+    moneda: mapped.moneda,
+
+    neto_operador: mapped.neto_operador,
+
+    pago_parcial: false,
+    total_pagado: mapped.cobrado ? mapped.importe_final : 0,
+    saldo_cta_cte: 0,
+
+    visible_en_files: true,
+    fecha_visible_files: mapped.fecha_venta,
+
+    riesgo: mapped.riesgo,
+    riesgo_motivo: mapped.riesgo_motivo,
+    importe_riesgo: mapped.importe_riesgo,
+
+    confirmado_vendedor: false,
+    confirmado_at: null,
+
+    estado: mapped.estado,
+    observaciones: mapped.observaciones,
+
+    vendedor: null,
+    vendedor_id: mapped.vendedor_id,
+    sucursal_id: mapped.sucursal_id,
+
+    activo: mapped.activo,
+
+    derivado_control: mapped.derivado_control,
+    utilidad_neta: mapped.utilidad_neta,
+    utilidad_bruta: mapped.utilidad_bruta,
+    regalias: mapped.regalias,
+    importe_facturar: mapped.importe_facturar,
+
+    facturado: mapped.facturado,
+    numero_factura: mapped.numero_factura,
+    numero_factura_arca: mapped.numero_factura_arca,
+    cobrado: mapped.cobrado,
+    controlado: mapped.controlado,
+    fecha_cobro: mapped.fecha_cobro,
+    fecha_factura: mapped.fecha_factura,
+    tipo_cambio_usado: mapped.tipo_cambio_usado,
+
+    fecha_vencimiento_operador: mapped.fecha_vencimiento_operador,
+    saldo_pendiente_operador: mapped.saldo_pendiente_operador,
+    estado_pago_operador: mapped.estado_pago_operador,
+
+    cancelado: mapped.cancelado,
+    fecha_cancelacion: mapped.fecha_cancelacion,
+    motivo_cancelacion: mapped.motivo_cancelacion,
+
+    distinta_moneda_liquidacion: mapped.distinta_moneda_liquidacion,
+    moneda_liquidacion: mapped.moneda_liquidacion,
+    importe_liquidacion: mapped.importe_liquidacion,
+
+   created_at: mapped.created_at || new Date().toISOString(),
+updated_at: mapped.updated_at || mapped.created_at || new Date().toISOString()
+  };
+}
+
 function toInsertRow(
   catalogType: ImportCatalogType,
   mapped: Record<string, ImportMappedValue>
 ): Record<string, ImportMappedValue> {
+  if (catalogType === "clientes") {
+    return {
+      nombre_completo: mapped.nombre_completo,
+      telefono: mapped.telefono,
+      email: mapped.email,
+      observaciones: mapped.observaciones
+    };
+  }
+
   if (catalogType === "live_contactos") {
     return {
       live_contact_id: mapped.live_contact_id,
@@ -1476,6 +2163,38 @@ function toInsertRow(
 async function loadExisting(catalogType: ImportCatalogType): Promise<ExistingCatalogItem[]> {
   const tableName = getTableName(catalogType);
 
+  if (catalogType === "clientes") {
+    const { data, error } = await supabase
+      .from(tableName)
+      .select("id, nombre_completo, telefono, email, observaciones, legacy_cliente_id");
+
+    if (error) throw error;
+
+    return (data || []) as ExistingCatalogItem[];
+  }
+
+  if (catalogType === "carritos_files_historicos") {
+    const [carritosResult, filesResult] = await Promise.all([
+      supabase.from("carritos").select("id, legacy_id, numero_carrito"),
+      supabase.from("files").select("id, legacy_id, numero_file")
+    ]);
+
+    if (carritosResult.error) throw carritosResult.error;
+    if (filesResult.error) throw filesResult.error;
+
+    const carritos = (carritosResult.data || []).map((item) => ({
+      ...item,
+      legacy_id: item.legacy_id ? `carrito:${item.legacy_id}` : null
+    }));
+
+    const files = (filesResult.data || []).map((item) => ({
+      ...item,
+      legacy_id: item.legacy_id ? `file:${item.legacy_id}` : null
+    }));
+
+    return [...carritos, ...files] as ExistingCatalogItem[];
+  }
+
   if (catalogType === "live_contactos") {
     const { data, error } = await supabase.from(tableName).select("id, live_contact_id");
 
@@ -1504,11 +2223,29 @@ async function loadExisting(catalogType: ImportCatalogType): Promise<ExistingCat
 }
 
 async function loadClientesLookup(): Promise<ClienteLookupItem[]> {
-  const { data, error } = await supabase.from("clientes").select("id, nombre_completo, telefono, email");
+  const { data, error } = await supabase
+    .from("clientes_legacy_map")
+    .select(`
+      legacy_cliente_id,
+      cliente:clientes (
+        id,
+        nombre_completo,
+        telefono,
+        email
+      )
+    `);
 
   if (error) throw error;
 
-  return (data || []) as ClienteLookupItem[];
+  return (data || [])
+    .map((item: any) => ({
+      id: item.cliente?.id,
+      legacy_cliente_id: item.legacy_cliente_id,
+      nombre_completo: item.cliente?.nombre_completo || null,
+      telefono: item.cliente?.telefono || null,
+      email: item.cliente?.email || null
+    }))
+    .filter((item) => Boolean(item.id)) as ClienteLookupItem[];
 }
 
 async function loadValidIdSet(tableName: string): Promise<Set<string>> {
@@ -1621,9 +2358,12 @@ export const useImportadorCatalogosStore = create<ImportadorCatalogosState>((set
       const existingKeys = new Set(existing.map((item) => getExistingKey(catalogType, item)));
       const batchKeys = new Set<string>();
 
-      const clientes = catalogType === "carritos" ? await loadClientesLookup() : [];
-      const validServicioIds = catalogType === "carritos" ? await loadValidIdSet("servicios") : new Set<string>();
-      const validFormaPagoIds = catalogType === "carritos" ? await loadValidIdSet("formas_pago") : new Set<string>();
+      const needsClientes = catalogType === "carritos" || catalogType === "carritos_files_historicos";
+      const needsIds = catalogType === "carritos" || catalogType === "carritos_files_historicos";
+
+      const clientes = needsClientes ? await loadClientesLookup() : [];
+      const validServicioIds = needsIds ? await loadValidIdSet("servicios") : new Set<string>();
+      const validFormaPagoIds = needsIds ? await loadValidIdSet("formas_pago") : new Set<string>();
 
       const previewRows: ImportPreviewRow[] = rawRows.map((row, index) => {
         const mapped = mapRow(catalogType, row, columnMap, index + 1);
@@ -1632,6 +2372,10 @@ export const useImportadorCatalogosStore = create<ImportadorCatalogosState>((set
 
         if (!validationError && catalogType === "carritos") {
           validationError = enrichHistoricCartRow(mapped, clientes, validServicioIds, validFormaPagoIds);
+        }
+
+        if (!validationError && catalogType === "carritos_files_historicos") {
+          validationError = enrichHistoricCarritoFileRow(mapped, clientes, validServicioIds, validFormaPagoIds);
         }
 
         const mappedKey = getMappedKey(catalogType, mapped);
@@ -1709,6 +2453,54 @@ export const useImportadorCatalogosStore = create<ImportadorCatalogosState>((set
     try {
       const rowsToImport = previewRows.filter((row) => row.status === "nuevo");
 
+      if (catalogType === "carritos_files_historicos") {
+        const carritosToInsert = rowsToImport
+          .filter((row) => !isHistoricFileRow(row.mapped))
+          .map((row) => toHistoricCarritoInsertRow(row.mapped));
+
+        const filesToInsert = rowsToImport
+          .filter((row) => isHistoricFileRow(row.mapped))
+          .map((row) => toHistoricFileInsertRow(row.mapped));
+
+        if (carritosToInsert.length > 0) {
+          const { error } = await supabase.from("carritos").insert(carritosToInsert);
+
+          if (error) {
+            set({
+              importing: false,
+              error: normalizeError(error)
+            });
+
+            return false;
+          }
+        }
+
+        if (filesToInsert.length > 0) {
+          const { error } = await supabase.from("files").insert(filesToInsert);
+
+          if (error) {
+            set({
+              importing: false,
+              error: normalizeError(error)
+            });
+
+            return false;
+          }
+        }
+
+        set({
+          importing: false,
+          result: {
+            inserted: carritosToInsert.length + filesToInsert.length,
+            skipped: previewRows.filter((row) => row.status === "duplicado").length,
+            invalid: previewRows.filter((row) => row.status === "invalido").length,
+            errors: []
+          }
+        });
+
+        return true;
+      }
+
       if (catalogType === "live_conversaciones") {
         const contactosMap = new Map<string, Record<string, ImportMappedValue>>();
 
@@ -1726,10 +2518,12 @@ export const useImportadorCatalogosStore = create<ImportadorCatalogosState>((set
         const contactos = Array.from(contactosMap.values());
 
         if (contactos.length > 0) {
-          const { error: contactosError } = await supabase.from("comunicaciones_live_contactos").upsert(contactos, {
-            onConflict: "live_contact_id",
-            ignoreDuplicates: false
-          });
+          const { error: contactosError } = await supabase
+            .from("comunicaciones_live_contactos")
+            .upsert(contactos, {
+              onConflict: "live_contact_id",
+              ignoreDuplicates: false
+            });
 
           if (contactosError) {
             set({
@@ -1742,10 +2536,12 @@ export const useImportadorCatalogosStore = create<ImportadorCatalogosState>((set
         }
 
         if (conversaciones.length > 0) {
-          const { error: conversacionesError } = await supabase.from("comunicaciones_live_conversaciones").upsert(conversaciones, {
-            onConflict: "live_conversation_id",
-            ignoreDuplicates: false
-          });
+          const { error: conversacionesError } = await supabase
+            .from("comunicaciones_live_conversaciones")
+            .upsert(conversaciones, {
+              onConflict: "live_conversation_id",
+              ignoreDuplicates: false
+            });
 
           if (conversacionesError) {
             set({
@@ -1893,7 +2689,19 @@ export function getImportFieldLabel(field: string): string {
     moneda: "Moneda",
     sucursal_id: "Sucursal ID",
     descripcion: "Descripción",
+    direccion: "Dirección",
+    ciudad: "Ciudad",
     orden: "Orden",
+
+    nombre_completo: "Nombre completo",
+    observaciones: "Observaciones",
+
+    legacy_id: "ID histórico",
+    legacy_cliente_id: "Cliente histórico ID",
+
+    nombre_pasajero: "Nombre pasajero",
+    notas_adicionales: "Notas adicionales",
+    fecha: "Fecha",
 
     ubicacion: "Ubicación",
     categoria: "Categoría",
@@ -1907,8 +2715,9 @@ export function getImportFieldLabel(field: string): string {
     ultimo_uso: "Último uso",
 
     email: "Email",
-    nombre_pasajero: "Nombre pasajero",
     numero_carrito: "Número carrito",
+    numero_file: "Número file",
+    es_almundo: "Es ALMUNDO",
     fecha_venta: "Fecha venta",
     servicio_id: "Servicio ID",
     servicio: "Servicio",
@@ -1920,20 +2729,58 @@ export function getImportFieldLabel(field: string): string {
     fecha_out: "Fecha OUT",
     solo_ida: "Solo ida",
     importe: "Importe",
-    observaciones: "Observaciones",
+    importe_bruto: "Importe bruto",
+    importe_final: "Importe final",
+
+    vendedor_id: "Vendedor ID",
+    promocode: "Promocode",
+    importe_promocode: "Importe promocode",
+    derivado_control: "Derivado control",
+    utilidad_neta: "Utilidad neta",
+    regalias: "Regalías",
+    utilidad_bruta: "Utilidad bruta",
+    importe_facturar: "Importe facturar",
+    facturado: "Facturado",
+    numero_factura: "Número factura",
+    numero_factura_arca: "Número factura ARCA",
+    cobrado: "Cobrado",
+    controlado: "Controlado",
+    fecha_cobro: "Fecha cobro",
+    fecha_factura: "Fecha factura",
+    tipo_cambio_usado: "Tipo cambio usado",
+
+    operador_id: "Operador ID",
+    operador_mayorista: "Operador mayorista",
+    neto_operador: "Neto operador",
+    fecha_vencimiento_operador: "Fecha vencimiento operador",
+    saldo_pendiente_operador: "Saldo pendiente operador",
+    estado_pago_operador: "Estado pago operador",
+
+    impacto_riesgo: "Impacto riesgo",
+    riesgo_resuelto: "Riesgo resuelto",
+    riesgo_resuelto_at: "Riesgo resuelto fecha",
+    riesgo_resuelto_por: "Riesgo resuelto por",
+
+    cancelado: "Cancelado",
+    fecha_cancelacion: "Fecha cancelación",
+    motivo_cancelacion: "Motivo cancelación",
+
+    distinta_moneda_liquidacion: "Distinta moneda liquidación",
+    moneda_liquidacion: "Moneda liquidación",
+    importe_liquidacion: "Importe liquidación",
+
+    created_at: "Creado",
+    updated_at: "Actualizado",
 
     live_contact_id: "ID contacto Live",
     live_conversation_id: "ID conversación Live",
     apellidos: "Apellidos",
-    nombre_completo: "Nombre completo",
     avatar_url: "Avatar",
     celular: "Celular",
     celular_normalizado: "Celular normalizado",
     tipo_documento: "Tipo documento",
     documento: "Documento",
-    ciudad: "Ciudad",
     genero: "Género",
-    direccion: "Dirección",
     fecha_cumpleanos: "Fecha cumpleaños",
     habeas_data: "Habeas data",
     etiquetas: "Etiquetas",

@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import {
   Bell,
+  Bot,
   CalendarClock,
   Clock3,
   FileText,
@@ -27,6 +28,8 @@ import {
   getVendedorName,
   isWindowOpen
 } from "./helpers";
+
+export const NIA_INTERNAL_ID = "__nia_internal__";
 
 function SoftTooltip({ text }: { text: string }) {
   return (
@@ -141,7 +144,10 @@ export function MessageStatusIcon({ message }: { message: Mensaje }) {
 
   if (status === "sent") {
     return (
-      <span aria-label="Enviado" className="inline-flex items-center text-[12px] font-semibold leading-none text-white/75">
+      <span
+        aria-label="Enviado"
+        className="inline-flex items-center text-[12px] font-semibold leading-none text-white/75"
+      >
         ✓
       </span>
     );
@@ -149,7 +155,10 @@ export function MessageStatusIcon({ message }: { message: Mensaje }) {
 
   if (status === "delivered") {
     return (
-      <span aria-label="Entregado" className="inline-flex items-center text-[12px] font-semibold leading-none tracking-[-0.18em] text-white/85">
+      <span
+        aria-label="Entregado"
+        className="inline-flex items-center text-[12px] font-semibold leading-none tracking-[-0.18em] text-white/85"
+      >
         ✓✓
       </span>
     );
@@ -157,7 +166,10 @@ export function MessageStatusIcon({ message }: { message: Mensaje }) {
 
   if (status === "read") {
     return (
-      <span aria-label="Leído" className="inline-flex items-center text-[12px] font-semibold leading-none tracking-[-0.18em] text-[#38d5ff]">
+      <span
+        aria-label="Leído"
+        className="inline-flex items-center text-[12px] font-semibold leading-none tracking-[-0.18em] text-[#38d5ff]"
+      >
         ✓✓
       </span>
     );
@@ -202,6 +214,63 @@ export function getNotaVisual(nota: NotaConversacion) {
     bubbleClass: "border-amber-200 bg-amber-50 text-amber-950",
     chipClass: "bg-amber-100 text-amber-700"
   };
+}
+
+export function NiaInternalConversationCard({
+  selectedId,
+  onSelect
+}: {
+  selectedId: string | null;
+  onSelect: (id: string) => void | Promise<void>;
+}) {
+  const active = selectedId === NIA_INTERNAL_ID;
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void onSelect(NIA_INTERNAL_ID);
+      }}
+      className={[
+        "w-full rounded-[18px] border px-3 py-3 text-left transition",
+        active
+          ? "border-[#8b2cff]/45 bg-gradient-to-br from-[#fdf2ff] to-[#f3e8ff] shadow-sm ring-2 ring-[#8b2cff]/10"
+          : "border-[#e9d5ff] bg-gradient-to-br from-white to-[#faf5ff] hover:border-[#8b2cff]/35 hover:shadow-sm"
+      ].join(" ")}
+    >
+      <div className="flex items-start gap-2.5">
+        <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#ff2f76] to-[#8b2cff] text-white shadow-sm">
+          <Bot size={17} />
+
+          <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-white text-[#8b2cff] shadow-sm ring-1 ring-purple-100">
+            <Sparkles size={10} strokeWidth={2.5} />
+          </span>
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="truncate text-[13px] font-semibold leading-tight text-[#581c87]">
+              NIA interno
+            </div>
+
+            <div className="shrink-0 rounded-full bg-[#f3e8ff] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#7e22ce]">
+              Fijado
+            </div>
+          </div>
+
+          <div className="mt-1 line-clamp-2 text-[11.5px] font-normal leading-snug text-[#6b21a8]">
+            Chat interno con vendedores · resúmenes, acciones y reportes comerciales.
+          </div>
+
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            <Pill>NIA</Pill>
+            <Pill>Interno</Pill>
+            <Pill>Acciones</Pill>
+          </div>
+        </div>
+      </div>
+    </button>
+  );
 }
 
 export function ConversationCard({
@@ -335,27 +404,120 @@ export function InboxList({
   );
 }
 
-export function SellersList({ profiles }: { profiles: ProfileLite[] }) {
+export function SellersList({
+  profiles,
+  sellerConversationCounts,
+  selectedSellerId,
+  canFilterBySeller,
+  onSelectSeller,
+  onClearSellerFilter
+}: {
+  profiles: ProfileLite[];
+  sellerConversationCounts: Record<string, number>;
+  selectedSellerId: string | null;
+  canFilterBySeller: boolean;
+  onSelectSeller: (sellerId: string) => void;
+  onClearSellerFilter: () => void;
+}) {
+  const totalAssigned = profiles.reduce((acc, profile) => {
+    return acc + (sellerConversationCounts[profile.id] || 0);
+  }, 0);
+
   return (
     <section className="shrink-0 rounded-[18px] border border-black/10 bg-white/78 p-2 shadow-sm">
-      <div className="mb-2 px-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[#64748b]">
-        Vendedores
+      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+        <div className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#64748b]">
+          Vendedores
+        </div>
+
+        <span className="rounded-full bg-[#eef2f7] px-2 py-0.5 text-[10px] font-medium text-[#475569]">
+          {totalAssigned}
+        </span>
       </div>
 
-      <div className="space-y-0.5">
-        {profiles.map((profile) => (
-          <div
-            key={profile.id}
-            className="flex h-7 items-center gap-2 rounded-lg px-2 text-[11.5px] font-normal text-[#475569]"
+      {canFilterBySeller ? (
+        <button
+          type="button"
+          onClick={onClearSellerFilter}
+          className={[
+            "mb-1 flex h-7 w-full items-center justify-between gap-2 rounded-lg px-2 text-left text-[11.5px] transition",
+            !selectedSellerId
+              ? "bg-[#4f7c90] text-white"
+              : "text-[#475569] hover:bg-[#eef6f7] hover:text-[#172033]"
+          ].join(" ")}
+        >
+          <span className="truncate font-medium">Todos</span>
+
+          <span
+            className={[
+              "flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-medium",
+              !selectedSellerId ? "bg-white/20 text-white" : "bg-[#eef2f7] text-[#475569]"
+            ].join(" ")}
           >
-            <span
-              className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: profile.color || "#4f7c90" }}
-            />
-            <span className="truncate">{getVendedorName(profile)}</span>
-          </div>
-        ))}
+            {totalAssigned}
+          </span>
+        </button>
+      ) : null}
+
+      <div className="space-y-0.5">
+        {profiles.map((profile) => {
+          const count = sellerConversationCounts[profile.id] || 0;
+          const selected = selectedSellerId === profile.id;
+
+          const content = (
+            <>
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: profile.color || "#4f7c90" }}
+              />
+
+              <span className="min-w-0 flex-1 truncate">{getVendedorName(profile)}</span>
+
+              <span
+                className={[
+                  "flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-medium",
+                  selected ? "bg-white/20 text-white" : "bg-[#eef2f7] text-[#475569]"
+                ].join(" ")}
+              >
+                {count}
+              </span>
+            </>
+          );
+
+          if (!canFilterBySeller) {
+            return (
+              <div
+                key={profile.id}
+                className="flex h-7 items-center gap-2 rounded-lg px-2 text-[11.5px] font-normal text-[#475569]"
+              >
+                {content}
+              </div>
+            );
+          }
+
+          return (
+            <button
+              key={profile.id}
+              type="button"
+              onClick={() => onSelectSeller(profile.id)}
+              className={[
+                "flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[11.5px] font-normal transition",
+                selected
+                  ? "bg-[#4f7c90] text-white shadow-sm"
+                  : "text-[#475569] hover:bg-[#eef6f7] hover:text-[#172033]"
+              ].join(" ")}
+            >
+              {content}
+            </button>
+          );
+        })}
       </div>
+
+      {!canFilterBySeller ? (
+        <div className="mt-2 rounded-xl bg-[#f8fafc] px-2 py-1.5 text-[10.5px] font-normal leading-snug text-[#94a3b8]">
+          Solo gerencia, administración o soporte pueden filtrar por vendedor.
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -428,12 +590,20 @@ export function ConversationsColumn({
       </div>
 
       <div className="min-h-0 flex-1 space-y-1.5 overflow-auto p-2.5">
+        <NiaInternalConversationCard
+          selectedId={selectedId}
+          onSelect={onSelectConversation}
+        />
+
         {loading ? (
           <div className="flex h-48 items-center justify-center">
             <Loader2 size={20} className="animate-spin text-[#4f7c90]" />
           </div>
         ) : filteredConversations.length === 0 ? (
-          <EmptyState title="Sin conversaciones" subtitle="Cuando ingresen mensajes por WhatsApp aparecerán acá." />
+          <EmptyState
+            title="Sin conversaciones"
+            subtitle="Cuando ingresen mensajes por WhatsApp aparecerán acá."
+          />
         ) : (
           filteredConversations.map((conv) => (
             <ConversationCard
@@ -487,14 +657,24 @@ export function LiveNosSidebar({
   activeInbox,
   inboxCounts,
   profiles,
+  sellerConversationCounts,
+  selectedSellerId,
+  canFilterBySeller,
   onChangeInbox,
-  onOpenNia
+  onOpenNia,
+  onSelectSeller,
+  onClearSellerFilter
 }: {
   activeInbox: InboxKey;
   inboxCounts: Record<InboxKey, number>;
   profiles: ProfileLite[];
+  sellerConversationCounts: Record<string, number>;
+  selectedSellerId: string | null;
+  canFilterBySeller: boolean;
   onChangeInbox: (inbox: InboxKey) => void;
   onOpenNia: () => void;
+  onSelectSeller: (sellerId: string) => void;
+  onClearSellerFilter: () => void;
 }) {
   return (
     <aside className="flex min-h-0 flex-col gap-2.5 overflow-hidden">
@@ -502,7 +682,14 @@ export function LiveNosSidebar({
 
       <InboxList activeInbox={activeInbox} inboxCounts={inboxCounts} onChangeInbox={onChangeInbox} />
 
-      <SellersList profiles={profiles} />
+      <SellersList
+        profiles={profiles}
+        sellerConversationCounts={sellerConversationCounts}
+        selectedSellerId={selectedSellerId}
+        canFilterBySeller={canFilterBySeller}
+        onSelectSeller={onSelectSeller}
+        onClearSellerFilter={onClearSellerFilter}
+      />
     </aside>
   );
 }

@@ -8,21 +8,19 @@ import {
   Clock3,
   DollarSign,
   FileText,
-  LogOut,
   MapPin,
   Plane,
   RefreshCcw,
   Target,
   TrendingUp,
   Trophy,
-  UserRound,
   Users,
   WalletCards,
   X
 } from "lucide-react";
 import { appRegistry } from "../registry/appRegistry";
 import { useBrowserStore } from "../store/browserStore";
-import { useAuthStore } from "../store/authStore";
+
 import { useNotificacionesStore } from "../store/notificacionesStore";
 import { useTableroDeControlStore } from "../store/tableroDeControlStore";
 import { supabase } from "../lib/supabase";
@@ -223,6 +221,40 @@ function clampProgress(value: string | number | null | undefined): number {
   return Math.max(0, Math.min(parseMoney(value), 100));
 }
 
+function getProgressTone(value: string | number | null | undefined): {
+  bar: string;
+  text: string;
+  pill: string;
+  label: "Bajo" | "Medio" | "Alto";
+} {
+  const percent = parseMoney(value);
+
+  if (percent >= 70) {
+    return {
+      bar: "bg-emerald-500",
+      text: "text-emerald-700",
+      pill: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+      label: "Alto"
+    };
+  }
+
+  if (percent >= 30) {
+    return {
+      bar: "bg-nostur-orange",
+      text: "text-nostur-orange",
+      pill: "bg-orange-50 text-nostur-orange ring-orange-100",
+      label: "Medio"
+    };
+  }
+
+  return {
+    bar: "bg-sky-500",
+    text: "text-sky-700",
+    pill: "bg-sky-50 text-sky-700 ring-sky-100",
+    label: "Bajo"
+  };
+}
+
 function getDashboardMonthLabel(filters: { mes?: string; anio?: string }) {
   const mes = String(filters?.mes || "").padStart(2, "0");
   const anio = String(filters?.anio || "");
@@ -247,16 +279,20 @@ function getDashboardMonthLabel(filters: { mes?: string; anio?: string }) {
 
 function ProgressLine({
   value,
-  color = "bg-nostur-orange"
+  color
 }: {
   value: number;
   color?: string;
 }) {
+  const safeValue = Math.max(0, Math.min(value, 100));
+  const tone = getProgressTone(safeValue);
+  const finalColor = color || tone.bar;
+
   return (
     <div className="h-1.5 overflow-hidden rounded-full bg-[#e5eaf1]">
       <div
-        className={["h-full rounded-full transition-all", color].join(" ")}
-        style={{ width: `${Math.max(0, Math.min(value, 100))}%` }}
+        className={["h-full rounded-full transition-all duration-500", finalColor].join(" ")}
+        style={{ width: `${safeValue}%` }}
       />
     </div>
   );
@@ -409,6 +445,8 @@ function SellerResume({
       ? parseMoney(seller.metaSemanalUsd)
       : parseMoney(seller.metaLogradoUsd || seller.metaMedioUsd || seller.metaPisoUsd);
 
+  const tone = getProgressTone(avance);
+
   return (
     <div className="rounded-2xl border border-black/10 bg-[#f8fafc] p-3">
       <div className="mb-3 flex items-center gap-2.5">
@@ -430,10 +468,10 @@ function SellerResume({
       <div className="mt-3">
         <div className="mb-1.5 flex items-center justify-between text-[11px] font-normal text-[#64748b]">
           <span>Avance</span>
-          <span>{formatPct(avance)}</span>
+          <span className={["font-semibold", tone.text].join(" ")}>{formatPct(avance)}</span>
         </div>
 
-        <ProgressLine value={avance} color={avance >= 100 ? "bg-emerald-500" : "bg-nostur-orange"} />
+        <ProgressLine value={avance} />
       </div>
 
       <div className="mt-2.5 flex items-center justify-between text-[11px] font-normal text-[#64748b]">
@@ -456,6 +494,7 @@ function MetaAlmundoContent({ data }: { data: HomeMetaAlmundo[] }) {
       {visible.slice(0, 2).map((item) => {
         const avance = clampProgress(item.avancePct);
         const falta = parseMoney(item.faltaUsd);
+        const tone = getProgressTone(avance);
 
         return (
           <div
@@ -474,7 +513,7 @@ function MetaAlmundoContent({ data }: { data: HomeMetaAlmundo[] }) {
               </div>
 
               <div className="shrink-0 text-right">
-                <div className="text-[16px] font-semibold leading-none text-nostur-orange">
+                <div className={["text-[16px] font-semibold leading-none", tone.text].join(" ")}>
                   {formatPct(avance)}
                 </div>
               </div>
@@ -512,6 +551,7 @@ function MetasSucursalContent({ data }: { data: HomeMetaSucursal[] }) {
     <div className="grid gap-2">
       {visible.slice(0, 3).map((item) => {
         const avance = clampProgress(item.avancePct);
+        const tone = getProgressTone(avance);
         const objetivo =
           parseMoney(item.metaLogradoUsd) ||
           parseMoney(item.metaMedioUsd) ||
@@ -534,21 +574,90 @@ function MetasSucursalContent({ data }: { data: HomeMetaSucursal[] }) {
               </div>
 
               <div className="shrink-0 text-right">
-                <div className="text-[16px] font-semibold leading-none text-nostur-orange">
+                <div className={["text-[16px] font-semibold leading-none", tone.text].join(" ")}>
                   {formatPct(avance)}
                 </div>
               </div>
             </div>
 
-            <ProgressLine
-              value={avance}
-              color={avance >= 100 ? "bg-emerald-500" : avance >= 60 ? "bg-blue-500" : "bg-nostur-orange"}
-            />
+            <ProgressLine value={avance} />
 
             <div className="mt-2.5 flex items-center justify-between gap-2 text-[11px] font-normal text-[#64748b]">
               <span>{item.proximaMetaLabel || "Avance"}</span>
               <span>{parseMoney(item.faltaUsd) > 0 ? `Faltan ${formatUsd(item.faltaUsd)}` : "Meta lograda"}</span>
             </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+function WeekRankingContent({ data }: { data: HomeRankingVendedor[] }) {
+  const visible = data.slice(0, 4);
+  const max = Math.max(...visible.map((item) => parseMoney(item.utilidadSemanalUsd)), 1);
+
+  if (visible.length === 0) {
+    return <EmptyMiniState text="Sin ventas semanales para mostrar." />;
+  }
+
+  return (
+    <div className="grid gap-2">
+      {visible.map((item, index) => {
+       const utilidad = parseMoney(item.utilidadSemanalUsd);
+
+  const metaSemanal = parseMoney(item.metaSemanalUsd);
+
+  const avanceSemanal = clampProgress(item.avanceSemanalPct);
+
+  const progressValue = avanceSemanal > 0 ? avanceSemanal : 0;
+
+  const tone = getProgressTone(avanceSemanal);
+
+        return (
+          <div
+            key={`${item.vendedorId || item.vendedor}-week-${index}`}
+            className="rounded-2xl border border-black/5 bg-[#f8fafc] p-2.5"
+          >
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div
+                  className={[
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-xl text-[11px] font-semibold",
+                    index === 0
+                      ? "bg-nostur-orange text-white"
+                      : "bg-white text-[#334155] ring-1 ring-black/10"
+                  ].join(" ")}
+                >
+                  #{index + 1}
+                </div>
+
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-semibold leading-tight text-[#111827]">
+                    {item.vendedor || "Sin vendedor"}
+                  </div>
+
+                  <div className="text-[10px] font-normal text-[#64748b]">
+                    Avance{" "}
+                    <span className={["font-semibold", tone.text].join(" ")}>
+                      {formatPct(avanceSemanal)}
+                    </span>
+                    {metaSemanal > 0 ? (
+                      <span className="text-[#94a3b8]"> · Meta {formatUsd(metaSemanal)}</span>
+                    ) : (
+                      <span className="text-[#94a3b8]"> · Sin meta semanal</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="shrink-0 text-right text-[12px] font-semibold text-[#111827]">
+                {formatUsd(utilidad)}
+              </div>
+            </div>
+
+            <ProgressLine value={progressValue} color={tone.bar} />
           </div>
         );
       })}
@@ -568,7 +677,10 @@ function MonthRankingContent({ data }: { data: HomeRankingVendedor[] }) {
     <div className="grid gap-2">
       {visible.map((item, index) => {
         const utilidad = parseMoney(item.utilidadUsd);
-        const avance = Math.max(6, Math.min((utilidad / max) * 100, 100));
+        const avanceMensual = clampProgress(item.avanceMensualPct);
+        const relativeFallback = Math.max(6, Math.min((utilidad / max) * 100, 100));
+        const progressValue = avanceMensual > 0 ? avanceMensual : relativeFallback;
+        const tone = getProgressTone(avanceMensual);
 
         return (
           <div
@@ -594,7 +706,7 @@ function MonthRankingContent({ data }: { data: HomeRankingVendedor[] }) {
                   </div>
 
                   <div className="text-[10px] font-normal text-[#64748b]">
-                    Avance {formatPct(item.avanceMensualPct)}
+                    Avance <span className={["font-semibold", tone.text].join(" ")}>{formatPct(avanceMensual)}</span>
                   </div>
                 </div>
               </div>
@@ -604,18 +716,7 @@ function MonthRankingContent({ data }: { data: HomeRankingVendedor[] }) {
               </div>
             </div>
 
-            <ProgressLine
-              value={avance}
-              color={
-                index === 0
-                  ? "bg-nostur-orange"
-                  : index === 1
-                    ? "bg-blue-500"
-                    : index === 2
-                      ? "bg-emerald-500"
-                      : "bg-slate-500"
-              }
-            />
+            <ProgressLine value={progressValue} color={tone.bar} />
           </div>
         );
       })}
@@ -740,8 +841,6 @@ function PaxHomeCard({
 
 export function Home() {
   const createTab = useBrowserStore((state) => state.createTab);
-  const signOut = useAuthStore((state) => state.signOut);
-  const user = useAuthStore((state) => state.user);
 
   const loadTablero = useTableroDeControlStore((state) => state.loadTablero);
   const goToPreviousMonth = useTableroDeControlStore((state) => state.goToPreviousMonth);
@@ -768,7 +867,6 @@ export function Home() {
   const notificacionesError = notificacionesStore.error || null;
 
   const [notificacionesOpen, setNotificacionesOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const [tcLoading, setTcLoading] = useState(false);
   const [tcSaving, setTcSaving] = useState(false);
@@ -837,11 +935,17 @@ export function Home() {
     );
   }, [internalApps]);
 
-  const rankingSemanalActual = useMemo(() => {
-    return [...rankingVendedores]
-      .sort((a, b) => parseMoney(b.utilidadSemanalUsd) - parseMoney(a.utilidadSemanalUsd))
-      .filter((item) => parseMoney(item.utilidadSemanalUsd) > 0 || parseMoney(item.metaSemanalUsd) > 0);
-  }, [rankingVendedores]);
+const rankingSemanalActual = useMemo(() => {
+  return [...rankingVendedores]
+    .sort((a, b) => {
+      const utilidadDiff = parseMoney(b.utilidadSemanalUsd) - parseMoney(a.utilidadSemanalUsd);
+
+      if (Math.abs(utilidadDiff) > 0.009) return utilidadDiff;
+
+      return parseMoney(b.avanceSemanalPct) - parseMoney(a.avanceSemanalPct);
+    })
+    .slice(0, 4);
+}, [rankingVendedores]);
 
   const rankingMensual = useMemo(() => {
     return [...rankingVendedores]
@@ -985,17 +1089,6 @@ export function Home() {
       appId,
       url,
       title: app.name,
-      activate: true
-    });
-  }
-
-  function openMyProfile() {
-    setUserMenuOpen(false);
-
-    createTab({
-      appId: "mi-perfil",
-      url: "internal://mi-perfil",
-      title: "Mi perfil",
       activate: true
     });
   }
@@ -1256,51 +1349,6 @@ export function Home() {
                 </>
               ) : null}
             </div>
-
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setUserMenuOpen((current) => !current)}
-                className="flex h-9 items-center gap-2 rounded-2xl bg-white/55 px-2.5 text-xs font-normal text-[#334155] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85"
-                title="Usuario"
-              >
-                <span className="flex h-6 w-6 items-center justify-center rounded-xl bg-[#172033] text-[10px] font-medium text-white">
-                  {getInitials(user?.email || "Jorge Luis Batica")}
-                </span>
-                <span className="hidden sm:block">Jorge</span>
-              </button>
-
-              {userMenuOpen ? (
-                <>
-                  <button
-                    type="button"
-                    className="fixed inset-0 z-[80] cursor-default bg-transparent"
-                    onClick={() => setUserMenuOpen(false)}
-                    tabIndex={-1}
-                  />
-
-                  <div className="absolute right-0 top-11 z-[130] w-[210px] overflow-hidden rounded-[20px] border border-black/10 bg-white p-1.5 shadow-2xl">
-                    <button
-                      type="button"
-                      onClick={openMyProfile}
-                      className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-[12px] font-medium text-[#334155] hover:bg-[#f1f5f9] hover:text-[#172033]"
-                    >
-                      <UserRound size={15} />
-                      Mi perfil
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={signOut}
-                      className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-[12px] font-medium text-red-600 hover:bg-red-50"
-                    >
-                      <LogOut size={15} />
-                      Cerrar sesión
-                    </button>
-                  </div>
-                </>
-              ) : null}
-            </div>
           </div>
         </header>
 
@@ -1376,16 +1424,12 @@ export function Home() {
             </div>
 
             <div className="grid gap-3 xl:grid-cols-2">
-              <DashboardHomeCard
-                title="Top vendedor semana actual"
-                icon={<Trophy size={16} strokeWidth={2} />}
-              >
-                {rankingSemanalActual[0] ? (
-                  <SellerResume seller={rankingSemanalActual[0]} mode="week" />
-                ) : (
-                  <EmptyMiniState />
-                )}
-              </DashboardHomeCard>
+             <DashboardHomeCard
+  title="Top vendedores de la semana"
+  icon={<Trophy size={16} strokeWidth={2} />}
+>
+  <WeekRankingContent data={rankingSemanalActual} />
+</DashboardHomeCard>
 
               <DashboardHomeCard
                 title="Top vendedores del mes"
@@ -1496,3 +1540,5 @@ export function Home() {
     </div>
   );
 }
+
+export default Home;

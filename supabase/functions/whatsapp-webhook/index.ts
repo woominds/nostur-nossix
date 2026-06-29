@@ -131,9 +131,13 @@ function fireAndForgetCandeReply(params: {
   source?: string;
 }) {
   const conversationId = String(params.conversationId || "").trim();
+  const inboundMessageId = String(params.inboundMessageId || "").trim();
 
-  if (!conversationId) {
-    console.warn("[whatsapp-webhook] CANDE no se dispara: falta conversationId.");
+  if (!conversationId || !inboundMessageId) {
+    console.warn("[whatsapp-webhook] cande-reply no se dispara: faltan ids.", {
+      conversationId,
+      inboundMessageId
+    });
     return;
   }
 
@@ -143,40 +147,44 @@ function fireAndForgetCandeReply(params: {
   const body = {
     conversation_id: conversationId,
     conversacion_id: conversationId,
-    inbound_message_id: params.inboundMessageId || null,
-    mensaje_id: params.inboundMessageId || null,
+    inbound_message_id: inboundMessageId,
+    mensaje_id: inboundMessageId,
     oportunidad_id: params.oportunidadId || null,
     source: params.source || "whatsapp-webhook"
   };
 
-  EdgeRuntime.waitUntil(
-    fetch(`${supabaseUrl}/functions/v1/cande-reply`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
+  const task = fetch(`${supabaseUrl}/functions/v1/cande-reply`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  })
+    .then(async (response) => {
+      let data: any = null;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
+      console.log("[whatsapp-webhook] cande-reply result", {
+        status: response.status,
+        ok: response.ok,
+        data
+      });
     })
-      .then(async (response) => {
-        let data: any = null;
+    .catch((error) => {
+      console.error("[whatsapp-webhook] cande-reply error", error?.message || error);
+    });
 
-        try {
-          data = await response.json();
-        } catch {
-          data = null;
-        }
+  const edgeRuntime = (globalThis as any).EdgeRuntime;
 
-        console.log("[whatsapp-webhook] cande-reply result", {
-          status: response.status,
-          ok: response.ok,
-          data
-        });
-      })
-      .catch((error) => {
-        console.error("[whatsapp-webhook] cande-reply error", error?.message || error);
-      })
-  );
+  if (edgeRuntime?.waitUntil) {
+    edgeRuntime.waitUntil(task);
+  }
 }
 
 function getMetaConfig() {
@@ -616,7 +624,7 @@ async function findOrCreateConversacion(params: {
         wa_phone: params.phone,
         titulo: params.contactName || params.phone,
         subject: params.contactName || params.phone,
-        inbox: existingRes.data.assigned_to ? "vendedor" : "general",
+inbox: existingRes.data.assigned_to ? "vendedor" : "general",
         status: "open",
         unread_count: unreadCount,
         last_message_at: getNowIso(),
@@ -651,7 +659,7 @@ async function findOrCreateConversacion(params: {
       contacto_id: params.contactoId,
       assigned_to: null,
       sucursal_id: null,
-      inbox: "general",
+     inbox: "general",
       status: "open",
       priority: 0,
       unread_count: 1,
@@ -1031,22 +1039,28 @@ serve(async (req) => {
               contactName,
               phoneNumberId
             });
-            if (result?.conversationId || result?.conversation_id || result?.conversacion_id) {
+         if (result?.conversationId || result?.conversation_id || result?.conversacion_id) {
+  const conversationId =
+    result.conversationId ||
+    result.conversation_id ||
+    result.conversacion_id;
+
+  const inboundMessageId =
+    result.messageId ||
+    result.message_id ||
+    result.mensaje_id ||
+    result.inboundMessageId ||
+    null;
+
+  const oportunidadId =
+    result.oportunidadId ||
+    result.oportunidad_id ||
+    null;
+
   fireAndForgetCandeReply({
-    conversationId:
-      result.conversationId ||
-      result.conversation_id ||
-      result.conversacion_id,
-    inboundMessageId:
-      result.messageId ||
-      result.message_id ||
-      result.mensaje_id ||
-      result.inboundMessageId ||
-      null,
-    oportunidadId:
-      result.oportunidadId ||
-      result.oportunidad_id ||
-      null,
+    conversationId,
+    inboundMessageId,
+    oportunidadId,
     source: "whatsapp-webhook"
   });
 }

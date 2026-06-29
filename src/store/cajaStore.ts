@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 
-export type CajaTipo = "CAJA" | "BANCO" | "BILLETERA" | "OTRA";
+export type CajaTipo = "CAJA" | "BANCO" | "BILLETERA" | "TARJETA" | "ALMUNDO" | "OTRA";
 export type CajaMoneda = "ARS" | "USD";
 export type CajaMovimientoTipo =
   | "INGRESO"
@@ -301,6 +301,11 @@ function nullableText(value: unknown): string | null {
   return clean ? clean : null;
 }
 
+function esCajaOperativa(caja: { tipo?: string | null; caja_tipo?: string | null }): boolean {
+  const tipo = String(caja.tipo || caja.caja_tipo || "").toUpperCase().trim();
+  return tipo !== "ALMUNDO";
+}
+
 async function getCurrentUserId(): Promise<string | null> {
   const { data } = await supabase.auth.getUser();
   return data.user?.id || null;
@@ -439,13 +444,14 @@ export const useCajaStore = create<CajaState>((set, get) => ({
 
     const filters = get().filters;
 
-    let movimientosQuery = supabase
-      .from("vw_caja_movimientos")
-      .select("*")
-      .gte("fecha", filters.desde)
-      .lte("fecha", filters.hasta)
-      .order("fecha", { ascending: false })
-      .order("created_at", { ascending: false });
+   let movimientosQuery = supabase
+  .from("vw_caja_movimientos")
+  .select("*")
+  .gte("fecha", filters.desde)
+  .lte("fecha", filters.hasta)
+  .neq("caja_tipo", "ALMUNDO")
+  .order("fecha", { ascending: false })
+  .order("created_at", { ascending: false });
 
     if (filters.moneda !== "todos") {
       movimientosQuery = movimientosQuery.eq("moneda", filters.moneda);
@@ -469,16 +475,18 @@ export const useCajaStore = create<CajaState>((set, get) => ({
 
     const [cajasRes, saldosRes, consolidadosRes, movimientosRes] = await Promise.all([
       supabase
-        .from("cajas")
-        .select("id,nombre,moneda,tipo,sucursal_id,descripcion,activa,activo,orden")
-        .order("orden", { ascending: true })
-        .order("nombre", { ascending: true }),
+  .from("cajas")
+  .select("id,nombre,moneda,tipo,sucursal_id,descripcion,activa,activo,orden")
+  .neq("tipo", "ALMUNDO")
+  .order("orden", { ascending: true })
+  .order("nombre", { ascending: true }),
 
-      supabase
-        .from("vw_caja_saldos")
-        .select("*")
-        .order("moneda", { ascending: true })
-        .order("orden", { ascending: true }),
+supabase
+  .from("vw_caja_saldos")
+  .select("*")
+  .neq("caja_tipo", "ALMUNDO")
+  .order("moneda", { ascending: true })
+  .order("orden", { ascending: true }),
 
       supabase
         .from("vw_caja_saldos_consolidados")
@@ -501,18 +509,24 @@ export const useCajaStore = create<CajaState>((set, get) => ({
       return;
     }
 
-    set({
-      loading: false,
-      error: null,
-      currentProfile,
-      canManageCaja,
-      cajas: (cajasRes.data || []) as CajaLite[],
-      saldos: (saldosRes.data || []) as CajaSaldo[],
-      saldosConsolidados: (consolidadosRes.data || []) as CajaSaldoConsolidado[],
-      movimientos: ((movimientosRes.data || []) as Partial<CajaMovimiento>[]).map(
-        normalizeMovimiento
-      )
-    });
+ const cajasOperativas = ((cajasRes.data || []) as CajaLite[]).filter(esCajaOperativa);
+
+const saldosOperativos = ((saldosRes.data || []) as CajaSaldo[]).filter(esCajaOperativa);
+
+const movimientosOperativos = ((movimientosRes.data || []) as Partial<CajaMovimiento>[])
+  .map(normalizeMovimiento)
+  .filter(esCajaOperativa);
+
+set({
+  loading: false,
+  error: null,
+  currentProfile,
+  canManageCaja,
+  cajas: cajasOperativas,
+  saldos: saldosOperativos,
+  saldosConsolidados: (consolidadosRes.data || []) as CajaSaldoConsolidado[],
+  movimientos: movimientosOperativos
+});
   },
 
   saveMovimiento: async (draft) => {
@@ -548,6 +562,13 @@ export const useCajaStore = create<CajaState>((set, get) => ({
 
     const caja = get().cajas.find((item) => item.id === draft.caja_id);
     const moneda = caja?.moneda || draft.moneda || "ARS";
+    if (caja && !esCajaOperativa(caja)) {
+  set({
+    saving: false,
+    error: "Las cajas Almundo son externas y no generan movimientos en caja NOSSIX."
+  });
+  return false;
+}
 
     const { error } = await supabase.from("caja_movimientos").insert({
       fecha: draft.fecha,
@@ -606,6 +627,13 @@ export const useCajaStore = create<CajaState>((set, get) => ({
 
     const cajaOrigen = get().cajas.find((item) => item.id === draft.caja_origen_id);
     const cajaDestino = get().cajas.find((item) => item.id === draft.caja_destino_id);
+    if ((cajaOrigen && !esCajaOperativa(cajaOrigen)) || (cajaDestino && !esCajaOperativa(cajaDestino))) {
+  set({
+    saving: false,
+    error: "Las cajas Almundo son externas y no participan en pases de caja NOSSIX."
+  });
+  return false;
+}
 
     if (cajaOrigen?.moneda !== cajaDestino?.moneda) {
       set({ saving: false, error: "El pase solo puede hacerse entre cajas de la misma moneda." });
@@ -657,6 +685,16 @@ export const useCajaStore = create<CajaState>((set, get) => ({
       set({ saving: false, error: "Seleccioná una caja." });
       return false;
     }
+
+    const caja = get().cajas.find((item) => item.id === draft.caja_id);
+
+if (caja && !esCajaOperativa(caja)) {
+  set({
+    saving: false,
+    error: "Las cajas Almundo son externas y no se concilian en caja NOSSIX."
+  });
+  return false;
+}
 
     const { error } = await supabase.rpc("conciliar_caja", {
       p_fecha: draft.fecha,
@@ -937,44 +975,49 @@ export const useCajaStore = create<CajaState>((set, get) => ({
     return saldos.find((saldo) => saldo.caja_id === selectedCajaId) || saldos[0] || null;
   },
 
-  getMetrics: () => {
-    const { saldosConsolidados } = get();
-    const movimientos = get().getFilteredMovimientos();
+ getMetrics: () => {
+  const saldos = get().saldos.filter(esCajaOperativa);
+  const movimientos = get().getFilteredMovimientos().filter(esCajaOperativa);
 
-    const ars = saldosConsolidados.find((item) => item.moneda === "ARS");
-    const usd = saldosConsolidados.find((item) => item.moneda === "USD");
+  const ars = saldos
+    .filter((item) => item.moneda === "ARS")
+    .reduce((total, item) => total + parseMoney(item.saldo_actual), 0);
 
-    return {
-      ars: parseMoney(ars?.saldo_total),
-      usd: parseMoney(usd?.saldo_total),
-      cajas: get().saldos.length,
-      movimientos: movimientos.length,
-      ingresosArs: movimientos
-        .filter(
-          (item) =>
-            item.moneda === "ARS" && parseMoney(item.importe_con_signo) > 0 && !item.anulado
-        )
-        .reduce((total, item) => total + parseMoney(item.importe_con_signo), 0),
-      egresosArs: movimientos
-        .filter(
-          (item) =>
-            item.moneda === "ARS" && parseMoney(item.importe_con_signo) < 0 && !item.anulado
-        )
-        .reduce((total, item) => total + Math.abs(parseMoney(item.importe_con_signo)), 0),
-      ingresosUsd: movimientos
-        .filter(
-          (item) =>
-            item.moneda === "USD" && parseMoney(item.importe_con_signo) > 0 && !item.anulado
-        )
-        .reduce((total, item) => total + parseMoney(item.importe_con_signo), 0),
-      egresosUsd: movimientos
-        .filter(
-          (item) =>
-            item.moneda === "USD" && parseMoney(item.importe_con_signo) < 0 && !item.anulado
-        )
-        .reduce((total, item) => total + Math.abs(parseMoney(item.importe_con_signo)), 0)
-    };
-  }
+  const usd = saldos
+    .filter((item) => item.moneda === "USD")
+    .reduce((total, item) => total + parseMoney(item.saldo_actual), 0);
+
+  return {
+    ars,
+    usd,
+    cajas: saldos.length,
+    movimientos: movimientos.length,
+    ingresosArs: movimientos
+      .filter(
+        (item) =>
+          item.moneda === "ARS" && parseMoney(item.importe_con_signo) > 0 && !item.anulado
+      )
+      .reduce((total, item) => total + parseMoney(item.importe_con_signo), 0),
+    egresosArs: movimientos
+      .filter(
+        (item) =>
+          item.moneda === "ARS" && parseMoney(item.importe_con_signo) < 0 && !item.anulado
+      )
+      .reduce((total, item) => total + Math.abs(parseMoney(item.importe_con_signo)), 0),
+    ingresosUsd: movimientos
+      .filter(
+        (item) =>
+          item.moneda === "USD" && parseMoney(item.importe_con_signo) > 0 && !item.anulado
+      )
+      .reduce((total, item) => total + parseMoney(item.importe_con_signo), 0),
+    egresosUsd: movimientos
+      .filter(
+        (item) =>
+          item.moneda === "USD" && parseMoney(item.importe_con_signo) < 0 && !item.anulado
+      )
+      .reduce((total, item) => total + Math.abs(parseMoney(item.importe_con_signo)), 0)
+  };
+}
 }));
 
 export function createInitialMovimientoDraft(caja?: CajaLite | null): MovimientoDraft {

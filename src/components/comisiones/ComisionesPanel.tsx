@@ -54,7 +54,20 @@ const MONTH_NAMES = [
   "Diciembre"
 ];
 
-const MONTH_SHORT_NAMES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+const MONTH_SHORT_NAMES = [
+  "ENE",
+  "FEB",
+  "MAR",
+  "ABR",
+  "MAY",
+  "JUN",
+  "JUL",
+  "AGO",
+  "SEP",
+  "OCT",
+  "NOV",
+  "DIC"
+];
 
 function parseMoney(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -200,7 +213,9 @@ function NosturSelect({
 
           <div className="absolute left-0 right-0 top-[36px] z-[150] max-h-56 overflow-auto rounded-[14px] border border-black/10 bg-white p-1 shadow-xl">
             {options.length === 0 ? (
-              <div className="px-3 py-2 text-[12px] font-normal text-[#94a3b8]">Sin opciones</div>
+              <div className="px-3 py-2 text-[12px] font-normal text-[#94a3b8]">
+                Sin opciones
+              </div>
             ) : (
               options.map((option) => {
                 const active = option.value === value;
@@ -379,7 +394,9 @@ function VentaCard({ venta }: { venta: VentaComision }) {
         <div className="truncate text-[11px] font-medium text-[#4f7c90]">
           {getOrigenLabel(venta.origen)}
         </div>
-        <div className="truncate text-[10.5px] font-normal text-[#64748b]">{formatDate(venta.fecha)}</div>
+        <div className="truncate text-[10.5px] font-normal text-[#64748b]">
+          {formatDate(venta.fecha)}
+        </div>
       </div>
 
       <div className="min-w-0">
@@ -407,7 +424,9 @@ function VentaCard({ venta }: { venta: VentaComision }) {
       </div>
 
       <div className="text-right">
-        <div className="text-[12px] font-semibold text-[#4f7c90]">{formatPct(porcentajeBruto)}</div>
+        <div className="text-[12px] font-semibold text-[#4f7c90]">
+          {formatPct(porcentajeBruto)}
+        </div>
         <div className="text-[11px] font-normal text-[#64748b]">% bruto</div>
       </div>
     </div>
@@ -449,7 +468,9 @@ function SelectedSellerPanel({ selected }: { selected: ComisionMensual | null })
         <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
           <FieldLabel>Avance de meta mensual</FieldLabel>
           <div className="mb-2 flex justify-between gap-3">
-            <strong className="font-semibold text-[#172033]">{formatUsd(selected.utilidad_total_usd)}</strong>
+            <strong className="font-semibold text-[#172033]">
+              {formatUsd(selected.utilidad_total_usd)}
+            </strong>
             <span className="font-semibold text-[#4f7c90]">{formatPct(avance)}</span>
           </div>
           <ProgressBar value={avance} />
@@ -479,7 +500,9 @@ function SelectedSellerPanel({ selected }: { selected: ComisionMensual | null })
 
         <div className="rounded-[14px] border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
           <FieldLabel>Comisión estimada</FieldLabel>
-          <div className="text-[18px] font-semibold">{formatUsd(selected.comision_estimada_usd)}</div>
+          <div className="text-[18px] font-semibold">
+            {formatUsd(selected.comision_estimada_usd)}
+          </div>
           <div className="text-[11px] font-medium">
             Porcentaje aplicado: {formatPct(selected.porcentaje_comision)}
           </div>
@@ -490,17 +513,23 @@ function SelectedSellerPanel({ selected }: { selected: ComisionMensual | null })
 
           <div className="flex justify-between gap-3 font-normal text-[#475569]">
             <span>Utilidad carritos</span>
-            <strong className="font-semibold text-[#172033]">{formatUsd(selected.utilidad_carritos_usd)}</strong>
+            <strong className="font-semibold text-[#172033]">
+              {formatUsd(selected.utilidad_carritos_usd)}
+            </strong>
           </div>
 
           <div className="flex justify-between gap-3 font-normal text-[#475569]">
             <span>Utilidad files</span>
-            <strong className="font-semibold text-[#172033]">{formatUsd(selected.utilidad_files_usd)}</strong>
+            <strong className="font-semibold text-[#172033]">
+              {formatUsd(selected.utilidad_files_usd)}
+            </strong>
           </div>
 
           <div className="mt-2 flex justify-between gap-3 border-t border-black/10 pt-2">
             <span className="font-semibold text-[#172033]">Utilidad total</span>
-            <strong className="font-semibold text-[#4f7c90]">{formatUsd(selected.utilidad_total_usd)}</strong>
+            <strong className="font-semibold text-[#4f7c90]">
+              {formatUsd(selected.utilidad_total_usd)}
+            </strong>
           </div>
         </div>
 
@@ -520,18 +549,24 @@ function SelectedSellerPanel({ selected }: { selected: ComisionMensual | null })
             <div className="rounded-[12px] border border-black/10 bg-white p-2">
               <div className="flex justify-between gap-3">
                 <span className="font-normal text-[#64748b]">Utilidad total</span>
-                <strong className="font-semibold text-[#172033]">{formatUsd(selected.utilidad_total_usd)}</strong>
+                <strong className="font-semibold text-[#172033]">
+                  {formatUsd(selected.utilidad_total_usd)}
+                </strong>
               </div>
               <div className="flex justify-between gap-3">
                 <span className="font-normal text-[#64748b]">Facturación total</span>
-                <strong className="font-semibold text-[#172033]">{formatUsd(selected.facturacion_total_usd)}</strong>
+                <strong className="font-semibold text-[#172033]">
+                  {formatUsd(selected.facturacion_total_usd)}
+                </strong>
               </div>
             </div>
 
             <div className="rounded-[12px] border border-emerald-200 bg-emerald-50 p-2 text-emerald-800">
               <div className="flex justify-between gap-3">
                 <span className="font-semibold">Comisión estimada</span>
-                <strong className="font-semibold">{formatUsd(selected.comision_estimada_usd)}</strong>
+                <strong className="font-semibold">
+                  {formatUsd(selected.comision_estimada_usd)}
+                </strong>
               </div>
               <div className="mt-1 text-[11px] font-medium">
                 Porcentaje aplicado: {formatPct(selected.porcentaje_comision)}
@@ -687,13 +722,17 @@ function MatrizAnual({ matriz }: { matriz: MatrizVendedorAnual[] }) {
         <table className="w-full min-w-[1180px] border-collapse text-left text-[12px]">
           <thead>
             <tr className="border-b border-black/10 bg-white/70 text-[10px] uppercase tracking-wide text-[#64748b]">
-              <th className="sticky left-0 z-10 min-w-[210px] bg-white/95 px-3 py-2 font-medium">Vendedor</th>
+              <th className="sticky left-0 z-10 min-w-[210px] bg-white/95 px-3 py-2 font-medium">
+                Vendedor
+              </th>
               {MONTH_SHORT_NAMES.map((month) => (
                 <th key={month} className="min-w-[82px] px-3 py-2 text-right font-medium">
                   {month}
                 </th>
               ))}
-              <th className="min-w-[105px] bg-white/80 px-3 py-2 text-right font-medium">Total</th>
+              <th className="min-w-[105px] bg-white/80 px-3 py-2 text-right font-medium">
+                Total
+              </th>
             </tr>
           </thead>
 
@@ -707,7 +746,9 @@ function MatrizAnual({ matriz }: { matriz: MatrizVendedorAnual[] }) {
             ) : (
               matriz.map((vendedor) => {
                 const rowTotal =
-                  metric === "utilidad" ? vendedor.total_utilidad_usd : vendedor.total_facturacion_usd;
+                  metric === "utilidad"
+                    ? vendedor.total_utilidad_usd
+                    : vendedor.total_facturacion_usd;
 
                 return (
                   <tr key={vendedor.vendedor_id} className="border-b border-black/5 last:border-0">
@@ -785,7 +826,10 @@ function MatrizAnual({ matriz }: { matriz: MatrizVendedorAnual[] }) {
               metric === "utilidad" ? vendedor.total_utilidad_usd : vendedor.total_facturacion_usd;
 
             return (
-              <div key={vendedor.vendedor_id} className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3">
+              <div
+                key={vendedor.vendedor_id}
+                className="rounded-[12px] border border-black/10 bg-[#f8fafc] p-3"
+              >
                 <div className="truncate text-[12px] font-semibold text-[#172033]">
                   {vendedor.vendedor || "Sin vendedor"}
                 </div>
@@ -808,7 +852,6 @@ export function ComisionesPanel() {
   const loading = useComisionesStore((state) => state.loading);
   const error = useComisionesStore((state) => state.error);
   const currentProfile = useComisionesStore((state) => state.currentProfile);
-  const canManageComisiones = useComisionesStore((state) => state.canManageComisiones);
   const filters = useComisionesStore((state) => state.filters);
   const catalogos = useComisionesStore((state) => state.catalogos);
   const selectedVendedorId = useComisionesStore((state) => state.selectedVendedorId);
@@ -857,7 +900,7 @@ export function ComisionesPanel() {
     { value: "todos", label: "Todos" },
     ...catalogos.vendedores.map((item) => ({
       value: item.id,
-      label: `${item.nombre} ${item.apellido}`.trim()
+      label: `${item.nombre} ${item.apellido}`.trim() || item.email || "Usuario"
     }))
   ];
 
@@ -868,6 +911,12 @@ export function ComisionesPanel() {
       label: item.nombre
     }))
   ];
+
+  const selectedVendedorFilterLabel =
+    vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos";
+
+  const selectedSucursalFilterLabel =
+    sucursalOptions.find((option) => option.value === filters.sucursalId)?.label || "Todas";
 
   const selectedVentas = selectedMensual
     ? ventas.filter((venta) => venta.vendedor_id === selectedMensual.vendedor_id)
@@ -888,17 +937,18 @@ export function ComisionesPanel() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">Comisiones</h1>
+              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">
+                Comisiones
+              </h1>
 
               <span className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-nostur-orange ring-1 ring-orange-100">
-                {canManageComisiones ? "Gerencia" : "Mi panel"}
+                Comercial
               </span>
             </div>
 
             <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-              {canManageComisiones
-                ? "Comisiones, metas y matriz de vendedores."
-                : `Comisiones de ${currentProfile?.nombre || "tu usuario"}.`}
+              Comisiones, metas y matriz de vendedores. Por defecto cada vendedor ve su panel,
+              pero puede filtrar por todos.
             </p>
           </div>
 
@@ -918,6 +968,7 @@ export function ComisionesPanel() {
         {error ? (
           <div className="mb-3 flex items-start justify-between gap-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2.5 text-[12px] font-medium text-red-700">
             <span>{error}</span>
+
             <button type="button" onClick={clearError} className="text-red-500 hover:text-red-700">
               <X size={14} />
             </button>
@@ -942,8 +993,8 @@ export function ComisionesPanel() {
               </div>
 
               <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
-                Mes: {filters.mes}/{filters.anio} · Vendedor: {filters.vendedorId} · Sucursal:{" "}
-                {filters.sucursalId}
+                Mes: {filters.mes}/{filters.anio} · Vendedor: {selectedVendedorFilterLabel} ·
+                Sucursal: {selectedSucursalFilterLabel}
               </div>
             </button>
 
@@ -982,27 +1033,23 @@ export function ComisionesPanel() {
                   />
                 </div>
 
-                {canManageComisiones ? (
-                  <>
-                    <div>
-                      <FieldLabel>Vendedor</FieldLabel>
-                      <NosturSelect
-                        value={filters.vendedorId}
-                        onChange={(value) => setFilter("vendedorId", value)}
-                        options={vendedorOptions}
-                      />
-                    </div>
+                <div>
+                  <FieldLabel>Vendedor</FieldLabel>
+                  <NosturSelect
+                    value={filters.vendedorId}
+                    onChange={(value) => setFilter("vendedorId", value)}
+                    options={vendedorOptions}
+                  />
+                </div>
 
-                    <div>
-                      <FieldLabel>Sucursal</FieldLabel>
-                      <NosturSelect
-                        value={filters.sucursalId}
-                        onChange={(value) => setFilter("sucursalId", value)}
-                        options={sucursalOptions}
-                      />
-                    </div>
-                  </>
-                ) : null}
+                <div>
+                  <FieldLabel>Sucursal</FieldLabel>
+                  <NosturSelect
+                    value={filters.sucursalId}
+                    onChange={(value) => setFilter("sucursalId", value)}
+                    options={sucursalOptions}
+                  />
+                </div>
               </div>
 
               <div className="mt-2.5 grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_auto]">
@@ -1035,8 +1082,16 @@ export function ComisionesPanel() {
         <section className="relative z-0 mb-3 grid gap-2.5 md:grid-cols-2 xl:grid-cols-6">
           <MetricCard label="Vendedores" value={metrics.vendedores} icon={UsersRound} />
           <MetricCard label="Utilidad" value={formatUsd(metrics.utilidadTotalUsd)} icon={TrendingUp} />
-          <MetricCard label="Facturación" value={formatUsd(metrics.facturacionTotalUsd)} icon={BarChart3} />
-          <MetricCard label="Comisión" value={formatUsd(metrics.comisionTotalUsd)} icon={CircleDollarSign} />
+          <MetricCard
+            label="Facturación"
+            value={formatUsd(metrics.facturacionTotalUsd)}
+            icon={BarChart3}
+          />
+          <MetricCard
+            label="Comisión"
+            value={formatUsd(metrics.comisionTotalUsd)}
+            icon={CircleDollarSign}
+          />
           <MetricCard label="Logrados" value={metrics.logrados} icon={Trophy} />
           <MetricCard label="Sin meta" value={metrics.sinMeta} icon={Target} />
         </section>
@@ -1052,39 +1107,37 @@ export function ComisionesPanel() {
             }}
           />
 
-          {canManageComisiones ? (
-            <>
-              <TabButton
-                active={activeTab === "todos"}
-                icon={UsersRound}
-                label="Todos los vendedores"
-                onClick={() => {
-                  setActiveTab("todos");
-                  selectVendedor(null);
-                }}
-              />
+          <TabButton
+            active={activeTab === "todos"}
+            icon={UsersRound}
+            label="Todos los vendedores"
+            onClick={() => {
+              setActiveTab("todos");
+              selectVendedor(null);
+            }}
+          />
 
-              <TabButton
-                active={activeTab === "matriz"}
-                icon={CalendarDays}
-                label="Matriz"
-                onClick={() => {
-                  setActiveTab("matriz");
-                  selectVendedor(null);
-                }}
-              />
-            </>
-          ) : null}
+          <TabButton
+            active={activeTab === "matriz"}
+            icon={CalendarDays}
+            label="Matriz"
+            onClick={() => {
+              setActiveTab("matriz");
+              selectVendedor(null);
+            }}
+          />
         </section>
 
-        {activeTab === "matriz" && canManageComisiones ? (
+        {activeTab === "matriz" ? (
           <MatrizAnual matriz={matrizAnual} />
-        ) : activeTab === "todos" && canManageComisiones ? (
+        ) : activeTab === "todos" ? (
           <div className="relative z-0 grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
             <section className="min-w-0 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
               <div className="mb-2.5 flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-[14px] font-semibold text-[#172033]">Progreso por vendedor</h2>
+                  <h2 className="text-[14px] font-semibold text-[#172033]">
+                    Progreso por vendedor
+                  </h2>
                   <p className="text-[11.5px] font-normal text-[#64748b]">
                     {loading ? "Cargando..." : `${visibleMensual.length} vendedores encontrados`}
                   </p>
@@ -1136,7 +1189,8 @@ export function ComisionesPanel() {
                   <div className="rounded-[12px] border border-sky-200 bg-sky-50 px-3 py-2 text-right text-[11px]">
                     <div className="font-semibold text-sky-700">Meta semanal</div>
                     <div className="font-semibold text-sky-900">
-                      {formatUsd(myWeekly.utilidad_semana_usd)} / {formatUsd(myWeekly.meta_unica_usd)}
+                      {formatUsd(myWeekly.utilidad_semana_usd)} /{" "}
+                      {formatUsd(myWeekly.meta_unica_usd)}
                     </div>
                   </div>
                 ) : null}

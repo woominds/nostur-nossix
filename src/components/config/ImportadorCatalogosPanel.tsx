@@ -27,6 +27,7 @@ type SelectOption = {
 };
 
 const CATALOG_OPTIONS: SelectOption[] = [
+  { value: "clientes", label: "Clientes" },
   { value: "destinos", label: "Destinos" },
   { value: "metodos_contacto", label: "Métodos de contacto" },
   { value: "servicios", label: "Servicios" },
@@ -36,10 +37,11 @@ const CATALOG_OPTIONS: SelectOption[] = [
   { value: "cajas", label: "Cajas" },
   { value: "hoteles_maestros", label: "Hoteles maestros" },
   { value: "carritos", label: "Carritos" },
+  { value: "carritos_files_historicos", label: "Carritos / Files históricos" },
   { value: "live_contactos", label: "Live Connect · Contactos" },
   { value: "live_conversaciones", label: "Live Connect · Conversaciones" },
   { value: "live_mensajes", label: "Live Connect · Mensajes" }
-];
+];  
 
 const DELIMITER_OPTIONS: SelectOption[] = [
   { value: ",", label: "Coma (,)" },
@@ -56,6 +58,22 @@ function normalizeText(value: unknown): string {
 }
 
 function getImportPlaceholder(catalogType: ImportCatalogType): string {
+  if (catalogType === "clientes") {
+    return `Ejemplo para clientes:
+nombre_completo,nombre,apellido,email,telefono,telefono_normalizado,dni,cuit,fecha_nacimiento,ciudad,provincia,pais,direccion,observaciones,activo
+Juan Pérez,Juan,Pérez,juan@email.com,+5493510000000,5493510000000,30111222,,1985-04-10,Córdoba,Córdoba,Argentina,"Av. Siempre Viva 123","Cliente histórico",true
+María Gómez,María,Gómez,maria@email.com,+5493511111111,5493511111111,28999888,,1990-08-22,Córdoba,Córdoba,Argentina,,"Importado desde sistema anterior",true
+
+Campos mínimos recomendados:
+nombre_completo o nombre + apellido
+telefono o email
+
+Notas:
+- Si viene telefono_normalizado, se usa para evitar duplicados.
+- Si no viene telefono_normalizado, se normaliza desde telefono.
+- También se puede detectar duplicado por email.`;
+  }
+
   if (catalogType === "live_contactos") {
     return `Ejemplo para contactos Live:
 live_contact_id,nombre,apellidos,nombre_completo,email,celular,celular_normalizado,empresa,etiquetas,pais,ciudad,live_fecha_creado,live_fecha_editado
@@ -83,7 +101,7 @@ Campos mínimos:
 live_conversation_id, orden, direction, message_type`;
   }
 
-    if (catalogType === "hoteles_maestros") {
+  if (catalogType === "hoteles_maestros") {
     return `Ejemplo para hoteles maestros:
 nombre,ubicacion,categoria,descripcion,imagenes,regimen,tipo_habitacion,tipo_tarifa,cargos_adicionales,descripcion_cargos,activo
 Buzios Arambare,"Colinas De Geribá, 18 - Geribá",3,"Hotel con piscina y desayuno buffet","[{""url"":""https://...""}]",Desayuno,Standard,Reembolsable,false,,true
@@ -164,6 +182,10 @@ Billetera virtual,BILLETERA,ARS,,Mercado Pago u otra billetera,50,true,true`;
 }
 
 function getCatalogHelp(catalogType: ImportCatalogType): string | null {
+  if (catalogType === "clientes") {
+    return "Importa clientes históricos desde la base anterior. Se recomienda comparar por teléfono normalizado y email para evitar duplicados.";
+  }
+
   if (catalogType === "live_contactos") {
     return "Importa el maestro de contactos exportado desde Live Connect. Se compara por live_contact_id para evitar duplicados.";
   }
@@ -180,7 +202,7 @@ function getCatalogHelp(catalogType: ImportCatalogType): string | null {
     return "Los carritos se importan como operación normal: visibles en Carritos y preparados para control, facturación/cobro y reportes.";
   }
 
-    if (catalogType === "hoteles_maestros") {
+  if (catalogType === "hoteles_maestros") {
     return "Importa hoteles a la base maestra para que después el presupuestador pueda buscarlos por nombre. Se compara por nombre + ubicación para evitar duplicados.";
   }
 
@@ -519,7 +541,9 @@ export function ImportadorCatalogosPanel() {
         <section className="min-w-0 rounded-2xl border border-black/10 bg-white/75 p-4 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <FileSpreadsheet size={16} className="text-nostur-orange" />
-            <h3 className="text-xs font-black uppercase tracking-[0.14em] text-[#475569]">Origen de datos</h3>
+            <h3 className="text-xs font-black uppercase tracking-[0.14em] text-[#475569]">
+              Origen de datos
+            </h3>
           </div>
 
           <div className="grid gap-3">
@@ -577,7 +601,11 @@ export function ImportadorCatalogosPanel() {
 
             <div>
               <FieldLabel>Datos pegados</FieldLabel>
-              <TextArea value={rawText} onChange={setRawText} placeholder={getImportPlaceholder(catalogType)} />
+              <TextArea
+                value={rawText}
+                onChange={setRawText}
+                placeholder={getImportPlaceholder(catalogType)}
+              />
             </div>
 
             <button

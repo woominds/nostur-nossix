@@ -74,8 +74,8 @@ function getMetaConfig() {
     Deno.env.get("WHATSAPP_ACCESS_TOKEN") ||
     Deno.env.get("WHATSAPP_TOKEN");
 
-  const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
-  const apiVersion = Deno.env.get("WHATSAPP_API_VERSION") || "v25.0";
+  const phoneNumberId = cleanText(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"));
+  const apiVersion = normalizeGraphApiVersion(Deno.env.get("WHATSAPP_API_VERSION"));
 
   if (!token) {
     throw new Error("Falta configurar WHATSAPP_ACCESS_TOKEN.");
@@ -98,6 +98,17 @@ function getMetaConfig() {
 
 function cleanText(value: unknown): string {
   return String(value || "").trim();
+}
+
+function normalizeGraphApiVersion(value: unknown): string {
+  const raw = String(value || "v25.0")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+
+  if (!raw) return "v25.0";
+
+  return raw.startsWith("v") ? raw : `v${raw}`;
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -386,7 +397,19 @@ async function uploadBlobToMeta(params: {
   formData.append("messaging_product", "whatsapp");
   formData.append("file", new File([params.blob], filename, { type: contentType }));
 
-  const url = `https://graph.facebook.com/${params.apiVersion}/${params.phoneNumberId}/media`;
+  const apiVersion = normalizeGraphApiVersion(params.apiVersion);
+  const phoneNumberId = cleanText(params.phoneNumberId);
+
+  if (!phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID para subir media.");
+  }
+
+  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/media`;
+
+  console.log("[whatsapp-send-message] upload media url", {
+    apiVersion,
+    phoneNumberId
+  });
 
   const response = await fetch(url, {
     method: "POST",
@@ -946,7 +969,19 @@ async function sendToMeta(params: {
   apiVersion: string;
   metaMessage: Record<string, unknown>;
 }) {
-  const url = `https://graph.facebook.com/${params.apiVersion}/${params.phoneNumberId}/messages`;
+  const apiVersion = normalizeGraphApiVersion(params.apiVersion);
+  const phoneNumberId = cleanText(params.phoneNumberId);
+
+  if (!phoneNumberId) {
+    throw new Error("Falta WHATSAPP_PHONE_NUMBER_ID para enviar mensaje.");
+  }
+
+  const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+
+  console.log("[whatsapp-send-message] send url", {
+    apiVersion,
+    phoneNumberId
+  });
 
   const response = await fetch(url, {
     method: "POST",

@@ -1,3 +1,5 @@
+// src/store/ctasCtesStore.ts
+
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 
@@ -10,8 +12,10 @@ export type ProfileLite = {
   email: string;
   sucursal_id: string | null;
   rol: string;
-  color: string;
+  color?: string | null;
   activo: boolean;
+  is_super_admin?: boolean | null;
+  is_support_user?: boolean | null;
 };
 
 export type VendedorLite = {
@@ -47,7 +51,7 @@ export type CtaCteItem = {
   email: string | null;
 
   numero_operacion: string;
-   fecha_venta: string;
+  fecha_venta: string;
   fecha_ingreso_gastos: string | null;
   fecha_in: string | null;
   fecha_out: string | null;
@@ -183,11 +187,15 @@ function getToday(): string {
   return `${year}-${month}-${day}`;
 }
 
-function getDefaultFilters(): CtasCtesFilters {
+function isSellerProfile(profile?: ProfileLite | null): boolean {
+  return String(profile?.rol || "").toLowerCase() === "vendedor";
+}
+
+function getDefaultFilters(profile?: ProfileLite | null): CtasCtesFilters {
   return {
     origen: "todos",
     moneda: "todos",
-    vendedorId: "todos",
+    vendedorId: isSellerProfile(profile) && profile?.id ? profile.id : "todos",
     sucursalId: "todos",
     search: ""
   };
@@ -247,21 +255,31 @@ async function getCurrentUserId(): Promise<string | null> {
 }
 
 function canProfileManage(profile: ProfileLite | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
-        profile.rol === "gerencia" ||
-        profile.rol === "administracion")
+      (profile?.is_super_admin ||
+        profile?.is_support_user ||
+        role === "admin_general" ||
+        role === "gerencia" ||
+        role === "administracion" ||
+        role === "soporte")
   );
 }
 
 function canProfileUse(profile: ProfileLite | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
-        profile.rol === "gerencia" ||
-        profile.rol === "administracion" ||
-        profile.rol === "vendedor")
+      (profile?.is_super_admin ||
+        profile?.is_support_user ||
+        role === "admin_general" ||
+        role === "gerencia" ||
+        role === "administracion" ||
+        role === "soporte" ||
+        role === "vendedor")
   );
 }
 
@@ -396,14 +414,10 @@ export const useCtasCtesStore = create<CtasCtesState>((set, get) => ({
       return;
     }
 
-    let itemsQuery = supabase
+    const itemsQuery = supabase
       .from("vw_ctas_ctes_unificada")
       .select("*")
       .order("fecha_venta", { ascending: false });
-
-    if (!canManageCtasCtes) {
-      itemsQuery = itemsQuery.eq("vendedor_id", currentUserId);
-    }
 
     const vendedoresQuery = supabase
       .from("profiles")
@@ -424,8 +438,8 @@ export const useCtasCtesStore = create<CtasCtesState>((set, get) => ({
 
     const [itemsRes, vendedoresRes, sucursalesRes, cajasRes] = await Promise.all([
       itemsQuery,
-      canManageCtasCtes ? vendedoresQuery : Promise.resolve({ data: [], error: null }),
-      canManageCtasCtes ? sucursalesQuery : Promise.resolve({ data: [], error: null }),
+      vendedoresQuery,
+      sucursalesQuery,
       cajasQuery
     ]);
 
@@ -444,17 +458,30 @@ export const useCtasCtesStore = create<CtasCtesState>((set, get) => ({
 
     const items = ((itemsRes.data || []) as CtaCteItem[]).sort(sortItems);
 
-    set({
-      loading: false,
-      error: null,
-      currentProfile,
-      canManageCtasCtes,
-      items,
-      catalogos: {
-        vendedores: (vendedoresRes.data || []) as VendedorLite[],
-        sucursales: (sucursalesRes.data || []) as SucursalLite[],
-        cajas: (cajasRes.data || []) as CajaLite[]
-      }
+    set((state) => {
+      const shouldApplySellerDefault =
+        isSellerProfile(currentProfile) &&
+        currentProfile?.id &&
+        state.filters.vendedorId === "todos";
+
+      return {
+        loading: false,
+        error: null,
+        currentProfile,
+        canManageCtasCtes,
+        items,
+        catalogos: {
+          vendedores: (vendedoresRes.data || []) as VendedorLite[],
+          sucursales: (sucursalesRes.data || []) as SucursalLite[],
+          cajas: (cajasRes.data || []) as CajaLite[]
+        },
+        filters: shouldApplySellerDefault
+          ? {
+              ...state.filters,
+              vendedorId: currentProfile.id
+            }
+          : state.filters
+      };
     });
   },
 
@@ -561,7 +588,9 @@ export const useCtasCtesStore = create<CtasCtesState>((set, get) => ({
   },
 
   resetFilters: () => {
-    set({ filters: getDefaultFilters() });
+    set((state) => ({
+      filters: getDefaultFilters(state.currentProfile)
+    }));
   },
 
   selectItem: (item) => {

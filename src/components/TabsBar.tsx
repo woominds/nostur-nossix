@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
-import { Columns2, Home, Plus, X } from "lucide-react";
+import { Columns2, Home, LogOut, Plus, UserRound, X } from "lucide-react";
 import { getAppById } from "../registry/appRegistry";
 import { useBrowserStore, type BrowserTab } from "../store/browserStore";
+import { useAuthStore } from "../store/authStore";
 import { LiveNosNotificationBell } from "./LiveNosNotificationBell";
+import { supabase } from "../lib/supabase";
 
 const ALMUNDO_TAB_ICON = "brand/almundo-isotipo.png";
 
@@ -112,6 +114,15 @@ function normalizeAppKey(appId: string): string {
   return appId;
 }
 
+function getInitials(name?: string | null): string {
+  const clean = String(name || "Usuario").trim();
+  const parts = clean.split(" ").filter(Boolean);
+
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+
+  return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
+}
+
 function getTabLabel(tab: BrowserTab): string {
   if (tab.url === "nostur://home") return "Inicio";
 
@@ -144,18 +155,14 @@ function getTabGroup(tab: BrowserTab): TabGroupKey {
   const appId = normalizeAppKey(tab.appId || "");
   const isInternal = tab.url.startsWith("internal://");
 
-  if (!isInternal) {
-    return "web";
-  }
+  if (!isInternal) return "web";
 
   if (["livenos", "oportunidades", "cande", "nia", "control-ia"].includes(appId)) {
     return "chat";
   }
 
   if (
-    ["clientes", "carritos", "files", "ctas-ctes", "presupuestos-v2", "comisiones"].includes(
-      appId
-    )
+    ["clientes", "carritos", "files", "ctas-ctes", "presupuestos-v2", "comisiones"].includes(appId)
   ) {
     return "ventas";
   }
@@ -321,11 +328,18 @@ export function TabsBar() {
   const splitLeftTabId = useBrowserStore((state) => state.splitLeftTabId);
   const splitRightTabId = useBrowserStore((state) => state.splitRightTabId);
   const splitActivePane = useBrowserStore((state) => state.splitActivePane);
-const toggleSplitView = useBrowserStore((state) => state.toggleSplitView);
-const setSplitPaneTab = useBrowserStore((state) => state.setSplitPaneTab);
-const setSplitActivePane = useBrowserStore((state) => state.setSplitActivePane);
+  const toggleSplitView = useBrowserStore((state) => state.toggleSplitView);
+  const setSplitPaneTab = useBrowserStore((state) => state.setSplitPaneTab);
+  const setSplitActivePane = useBrowserStore((state) => state.setSplitActivePane);
+
+  const signOut = useAuthStore((state) => state.signOut);
+  const user = useAuthStore((state) => state.user);
+
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
+const [profileDisplayName, setProfileDisplayName] = useState<string | null>(null);
 
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<TabGroupKey, boolean>>(() =>
     getClosedGroups()
   );
@@ -363,32 +377,53 @@ const setSplitActivePane = useBrowserStore((state) => state.setSplitActivePane);
       .sort((a, b) => a.config.order - b.config.order);
   }, [browserTabs]);
 
+
   useEffect(() => {
-    const groupsToOpen: TabGroupKey[] = [];
+  let mounted = true;
 
-    if (splitViewEnabled) {
-      const leftTab = tabs.find((tab) => tab.id === splitLeftTabId);
-      const rightTab = tabs.find((tab) => tab.id === splitRightTabId);
+  async function loadMiniProfile() {
+    if (!user?.id) return;
 
-      if (leftTab && leftTab.url !== "nostur://home") {
-        groupsToOpen.push(getTabGroup(leftTab));
-      }
+    const { data } = await supabase
+      .from("profiles")
+      .select("display_name,nombre,apellido,avatar_url")
+      .eq("id", user.id)
+      .maybeSingle();
 
-      if (rightTab && rightTab.url !== "nostur://home") {
-        groupsToOpen.push(getTabGroup(rightTab));
-      }
-    } else {
-      const activeTab = tabs.find((tab) => tab.id === activeTabId);
+    if (!mounted) return;
 
-      if (activeTab && activeTab.url !== "nostur://home") {
-        groupsToOpen.push(getTabGroup(activeTab));
-      }
-    }
+    const profile = data as {
+      display_name?: string | null;
+      nombre?: string | null;
+      apellido?: string | null;
+      avatar_url?: string | null;
+    } | null;
 
-    const uniqueGroups = Array.from(new Set(groupsToOpen));
+    const name =
+      profile?.display_name ||
+      [profile?.nombre, profile?.apellido].filter(Boolean).join(" ") ||
+      user.email ||
+      "Usuario";
 
-    setOpenGroups(uniqueGroups.length > 0 ? getGroupsOpen(uniqueGroups) : getClosedGroups());
-  }, [activeTabId, splitViewEnabled, splitLeftTabId, splitRightTabId, tabs]);
+    setProfileDisplayName(name);
+    setProfileAvatarUrl(profile?.avatar_url || null);
+  }
+
+  void loadMiniProfile();
+
+  function handleProfileUpdated() {
+    void loadMiniProfile();
+  }
+
+  window.addEventListener("nostur:profile-updated", handleProfileUpdated);
+
+  return () => {
+    mounted = false;
+    window.removeEventListener("nostur:profile-updated", handleProfileUpdated);
+  };
+}, [user?.id, user?.email]);
+
+
 
   function openHome() {
     if (homeTab) {
@@ -467,44 +502,125 @@ const setSplitActivePane = useBrowserStore((state) => state.setSplitActivePane);
     });
   }
 
-function handleSplitViewClick() {
-  closeSidebarIfAvailable();
+  function handleSplitViewClick() {
+    closeSidebarIfAvailable();
 
-  const currentActiveTab =
-    tabs.find((tab) => tab.id === activeTabId) ||
-    homeTab ||
-    virtualHomeTab;
-
-  if (!splitViewEnabled && currentActiveTab) {
-    const firstSupportTab =
-      tabs.find(
-        (tab) =>
-          tab.id !== currentActiveTab.id &&
-          tab.url !== "nostur://home"
-      ) ||
+    const currentActiveTab =
+      tabs.find((tab) => tab.id === activeTabId) ||
       homeTab ||
-      currentActiveTab;
+      virtualHomeTab;
+
+    if (!splitViewEnabled && currentActiveTab) {
+      const firstSupportTab =
+        tabs.find(
+          (tab) =>
+            tab.id !== currentActiveTab.id &&
+            tab.url !== "nostur://home"
+        ) ||
+        homeTab ||
+        currentActiveTab;
+
+      toggleSplitView();
+
+      window.setTimeout(() => {
+        if (firstSupportTab?.id && firstSupportTab.id !== "__home_virtual__") {
+          setSplitPaneTab("left", firstSupportTab.id);
+        }
+
+        if (currentActiveTab?.id && currentActiveTab.id !== "__home_virtual__") {
+          setSplitPaneTab("right", currentActiveTab.id);
+          activateTab(currentActiveTab.id);
+        }
+
+        setSplitActivePane("right");
+      }, 0);
+
+      return;
+    }
 
     toggleSplitView();
-
-    window.setTimeout(() => {
-      if (firstSupportTab?.id && firstSupportTab.id !== "__home_virtual__") {
-        setSplitPaneTab("left", firstSupportTab.id);
-      }
-
-      if (currentActiveTab?.id && currentActiveTab.id !== "__home_virtual__") {
-        setSplitPaneTab("right", currentActiveTab.id);
-        activateTab(currentActiveTab.id);
-      }
-
-      setSplitActivePane("right");
-    }, 0);
-
-    return;
   }
 
-  toggleSplitView();
-}
+  function openMyProfile() {
+    setUserMenuOpen(false);
+
+    createTab({
+      appId: "mi-perfil",
+      url: "internal://mi-perfil",
+      title: "Mi perfil",
+      activate: true
+    });
+  }
+
+  function renderUserMenu() {
+    const email = user?.email || "";
+const label = profileDisplayName || (email ? email.split("@")[0] : "Usuario");
+
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setUserMenuOpen((current) => !current)}
+          className="group/tab relative flex h-8 items-center gap-2 rounded-lg bg-white/35 px-2 text-[#334155] transition hover:bg-white/70 hover:text-[#172033]"
+          aria-label="Usuario"
+          title={email || "Usuario"}
+        >
+          <span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-lg bg-[#172033] text-[9.5px] font-semibold text-white">
+  {profileAvatarUrl ? (
+    <img
+      src={profileAvatarUrl}
+      alt={label}
+      className="h-full w-full object-cover"
+      draggable={false}
+    />
+  ) : (
+    getInitials(label || email)
+  )}
+</span>
+
+          <span className="hidden max-w-[82px] truncate text-[11px] font-medium xl:block">
+            {label}
+          </span>
+
+          <SoftTooltip text={email || "Usuario"} />
+        </button>
+
+        {userMenuOpen ? (
+          <>
+            <button
+              type="button"
+              className="fixed inset-0 z-[980] cursor-default bg-transparent"
+              onClick={() => setUserMenuOpen(false)}
+              tabIndex={-1}
+            />
+
+            <div className="absolute right-0 top-9 z-[990] w-[210px] overflow-hidden rounded-[18px] border border-black/10 bg-white p-1.5 shadow-2xl">
+              <button
+                type="button"
+                onClick={openMyProfile}
+                className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-[12px] font-medium text-[#334155] transition hover:bg-[#f1f5f9] hover:text-[#172033]"
+              >
+                <UserRound size={15} />
+                Mi perfil
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  void signOut();
+                }}
+                className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-[12px] font-medium text-red-600 transition hover:bg-red-50"
+              >
+                <LogOut size={15} />
+                Cerrar sesión
+              </button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    );
+  }
 
   function isGroupActive(items: BrowserTab[]) {
     return items.some((tab) => tab.id === activeTabId);
@@ -653,8 +769,8 @@ function handleSplitViewClick() {
     );
   }
 
-return (
-  <div className="nostur-drag relative flex h-[39px] shrink-0 items-end gap-1 overflow-visible border-b border-[#d8e1ea] bg-[#dbe9fa] pl-[78px] pr-2">
+  return (
+    <div className="nostur-drag relative flex h-[39px] shrink-0 items-end gap-1 overflow-visible border-b border-[#d8e1ea] bg-[#dbe9fa] pl-[78px] pr-2">
       <div className="flex min-w-0 flex-1 items-end gap-0.5 overflow-visible">
         <div className="mr-1 flex items-end">{renderTabButton(homeTab || virtualHomeTab)}</div>
 
@@ -675,36 +791,38 @@ return (
         })}
       </div>
 
-       <div className="nostur-no-drag flex h-[32px] shrink-0 items-center gap-1 pl-1">
-  <LiveNosNotificationBell />
+      <div className="nostur-no-drag flex h-[32px] shrink-0 items-center gap-1 pl-1">
+        <LiveNosNotificationBell />
 
-  <button
-    type="button"
-    onClick={handleSplitViewClick}
-    className={[
-      "group/tab relative flex h-8 w-8 items-center justify-center rounded-lg transition",
-      splitViewEnabled
-        ? "bg-white text-[#ff7a1a] shadow-sm"
-        : "text-[#334155] hover:bg-white/65 hover:text-[#172033]"
-    ].join(" ")}
-    aria-label={splitViewEnabled ? "Cerrar vista dividida" : "Dividir pantalla"}
-  >
-    <Columns2 size={16} strokeWidth={1.9} />
+        {renderUserMenu()}
 
-    <SoftTooltip text={splitViewEnabled ? "Cerrar vista dividida" : "Dividir pantalla"} />
-  </button>
+        <button
+          type="button"
+          onClick={handleSplitViewClick}
+          className={[
+            "group/tab relative flex h-8 w-8 items-center justify-center rounded-lg transition",
+            splitViewEnabled
+              ? "bg-white text-[#ff7a1a] shadow-sm"
+              : "text-[#334155] hover:bg-white/65 hover:text-[#172033]"
+          ].join(" ")}
+          aria-label={splitViewEnabled ? "Cerrar vista dividida" : "Dividir pantalla"}
+        >
+          <Columns2 size={16} strokeWidth={1.9} />
 
-  <button
-    type="button"
-    onClick={openNewWebTab}
-    className="group/tab relative flex h-8 w-8 items-center justify-center rounded-lg text-[#334155] transition hover:bg-white/65 hover:text-[#172033]"
-    aria-label="Nueva pestaña"
-  >
-    <Plus size={19} strokeWidth={1.9} />
+          <SoftTooltip text={splitViewEnabled ? "Cerrar vista dividida" : "Dividir pantalla"} />
+        </button>
 
-    <SoftTooltip text="Nueva pestaña" />
-  </button>
-</div>
+        <button
+          type="button"
+          onClick={openNewWebTab}
+          className="group/tab relative flex h-8 w-8 items-center justify-center rounded-lg text-[#334155] transition hover:bg-white/65 hover:text-[#172033]"
+          aria-label="Nueva pestaña"
+        >
+          <Plus size={19} strokeWidth={1.9} />
+
+          <SoftTooltip text="Nueva pestaña" />
+        </button>
+      </div>
     </div>
   );
 }

@@ -82,6 +82,8 @@ export type ProfileLite = {
   sucursal_id?: string | null;
   rol?: string | null;
   activo?: boolean | null;
+  is_super_admin?: boolean | null;
+  is_support_user?: boolean | null;
 };
 
 export type SucursalLite = {
@@ -528,6 +530,7 @@ type PresupuestosV2State = {
   combinacionItems: PresupuestoCombinacionItem[];
   adjuntos: PresupuestoAdjunto[];
 
+    currentProfile: ProfileLite | null;
   vendedores: ProfileLite[];
   sucursales: SucursalLite[];
 
@@ -696,12 +699,16 @@ function getNowIso(): string {
   return new Date().toISOString();
 }
 
-function getDefaultFilters(): PresupuestosV2Filters {
+function isSellerProfile(profile?: ProfileLite | null): boolean {
+  return String(profile?.rol || "").toLowerCase() === "vendedor";
+}
+
+function getDefaultFilters(profile?: ProfileLite | null): PresupuestosV2Filters {
   return {
     search: "",
     estado: "TODOS",
     marca: "TODAS",
-    vendedorId: "todos",
+    vendedorId: isSellerProfile(profile) && profile?.id ? profile.id : "todos",
     sucursalId: "todas",
     desde: "",
     hasta: ""
@@ -1245,6 +1252,7 @@ export const usePresupuestosV2Store = create<PresupuestosV2State>((set, get) => 
   combinacionItems: [],
   adjuntos: [],
 
+    currentProfile: null,
   vendedores: [],
   sucursales: [],
 
@@ -1420,10 +1428,12 @@ export const usePresupuestosV2Store = create<PresupuestosV2State>((set, get) => 
   ========================================================= */
 
   loadCatalogs: async () => {
+    const currentUserId = await getCurrentUserId();
+
     const [vendedoresRes, sucursalesRes] = await Promise.all([
       supabase
         .from("profiles")
-        .select("id,nombre,apellido,email,sucursal_id,rol,activo")
+        .select("id,nombre,apellido,email,sucursal_id,rol,activo,is_super_admin,is_support_user")
         .eq("activo", true)
         .order("nombre", { ascending: true }),
 
@@ -1437,9 +1447,27 @@ export const usePresupuestosV2Store = create<PresupuestosV2State>((set, get) => 
       return;
     }
 
-    set({
-      vendedores: (vendedoresRes.data || []) as ProfileLite[],
-      sucursales: (sucursalesRes.data || []) as SucursalLite[]
+    const vendedores = (vendedoresRes.data || []) as ProfileLite[];
+    const currentProfile =
+      vendedores.find((profile) => profile.id === currentUserId) || null;
+
+    set((state) => {
+      const shouldApplySellerDefault =
+        isSellerProfile(currentProfile) &&
+        currentProfile?.id &&
+        state.filters.vendedorId === "todos";
+
+      return {
+        currentProfile,
+        vendedores,
+        sucursales: (sucursalesRes.data || []) as SucursalLite[],
+        filters: shouldApplySellerDefault
+          ? {
+              ...state.filters,
+              vendedorId: currentProfile.id
+            }
+          : state.filters
+      };
     });
   },
 
@@ -3028,8 +3056,10 @@ const rows = ((data || []) as unknown) as Array<Record<string, unknown>>;
     }));
   },
 
-  resetFilters: () => {
-    set({ filters: getDefaultFilters() });
+   resetFilters: () => {
+    set((state) => ({
+      filters: getDefaultFilters(state.currentProfile)
+    }));
   },
 
   clearError: () => {
@@ -3098,8 +3128,8 @@ const rows = ((data || []) as unknown) as Array<Record<string, unknown>>;
     return presupuestos.find((item) => item.id === selectedPresupuestoId) || null;
   },
 
-  getMetrics: () => {
-    const { presupuestos } = get();
+   getMetrics: () => {
+    const presupuestos = get().getFilteredPresupuestos();
 
     return {
       total: presupuestos.length,

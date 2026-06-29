@@ -10,6 +10,8 @@ export type ProfileLite = {
   rol: string;
   color: string;
   activo: boolean;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
 };
 
 export type SucursalLite = {
@@ -123,6 +125,7 @@ type ComisionesState = {
 
   currentProfile: ProfileLite | null;
   canManageComisiones: boolean;
+  sellerDefaultApplied: boolean;
 
   mensual: ComisionMensual[];
   semanal: ComisionSemanal[];
@@ -154,7 +157,10 @@ type ComisionesState = {
 
 function getToday(): string {
   const now = new Date();
-  const argentinaNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Argentina/Cordoba" }));
+  const argentinaNow = new Date(
+    now.toLocaleString("en-US", { timeZone: "America/Argentina/Cordoba" })
+  );
+
   const year = argentinaNow.getFullYear();
   const month = String(argentinaNow.getMonth() + 1).padStart(2, "0");
   const day = String(argentinaNow.getDate()).padStart(2, "0");
@@ -212,22 +218,34 @@ async function getCurrentUserId(): Promise<string | null> {
   return data.user?.id || null;
 }
 
+function isSellerProfile(profile?: ProfileLite | null): boolean {
+  return String(profile?.rol || "").toLowerCase() === "vendedor";
+}
+
 function canProfileManage(profile: ProfileLite | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
-        profile.rol === "gerencia" ||
-        profile.rol === "administracion")
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        role === "admin_general" ||
+        role === "gerencia" ||
+        role === "administracion")
   );
 }
 
 function canProfileUse(profile: ProfileLite | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
-        profile.rol === "gerencia" ||
-        profile.rol === "administracion" ||
-        profile.rol === "vendedor")
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        role === "admin_general" ||
+        role === "gerencia" ||
+        role === "administracion" ||
+        role === "vendedor")
   );
 }
 
@@ -289,6 +307,7 @@ export const useComisionesStore = create<ComisionesState>((set, get) => ({
 
   currentProfile: null,
   canManageComisiones: false,
+  sellerDefaultApplied: false,
 
   mensual: [],
   semanal: [],
@@ -350,11 +369,35 @@ export const useComisionesStore = create<ComisionesState>((set, get) => ({
       return;
     }
 
-    const filters = get().filters;
-    const mesNumber = Number(filters.mes);
-    const anioNumber = Number(filters.anio);
-    const desde = getDateStartForQuery(filters.anio, filters.mes);
-    const hasta = getDateEndForQuery(filters.anio, filters.mes);
+    const currentFilters = get().filters;
+    const sellerDefaultApplied = get().sellerDefaultApplied;
+
+    let effectiveFilters = currentFilters;
+    let effectiveSelectedVendedorId = get().selectedVendedorId;
+
+    if (!sellerDefaultApplied) {
+      const defaultVendedorId =
+        isSellerProfile(currentProfile) && currentProfile?.id ? currentProfile.id : "todos";
+
+      effectiveFilters = {
+        ...currentFilters,
+        vendedorId: defaultVendedorId
+      };
+
+      effectiveSelectedVendedorId =
+        isSellerProfile(currentProfile) && currentProfile?.id ? currentProfile.id : null;
+
+      set({
+        filters: effectiveFilters,
+        selectedVendedorId: effectiveSelectedVendedorId,
+        sellerDefaultApplied: true
+      });
+    }
+
+    const mesNumber = Number(effectiveFilters.mes);
+    const anioNumber = Number(effectiveFilters.anio);
+    const desde = getDateStartForQuery(effectiveFilters.anio, effectiveFilters.mes);
+    const hasta = getDateEndForQuery(effectiveFilters.anio, effectiveFilters.mes);
 
     let mensualQuery = supabase
       .from("vw_comisiones_vendedores_mensual")
@@ -384,25 +427,18 @@ export const useComisionesStore = create<ComisionesState>((set, get) => ({
       .lte("fecha", hasta)
       .order("fecha", { ascending: false });
 
-    if (!canManageComisiones) {
-      mensualQuery = mensualQuery.eq("vendedor_id", currentUserId);
-      matrizAnualQuery = matrizAnualQuery.eq("vendedor_id", currentUserId);
-      semanalQuery = semanalQuery.eq("vendedor_id", currentUserId);
-      ventasQuery = ventasQuery.eq("vendedor_id", currentUserId);
-    } else {
-      if (filters.vendedorId !== "todos") {
-        mensualQuery = mensualQuery.eq("vendedor_id", filters.vendedorId);
-        matrizAnualQuery = matrizAnualQuery.eq("vendedor_id", filters.vendedorId);
-        semanalQuery = semanalQuery.eq("vendedor_id", filters.vendedorId);
-        ventasQuery = ventasQuery.eq("vendedor_id", filters.vendedorId);
-      }
+    if (effectiveFilters.vendedorId !== "todos") {
+      mensualQuery = mensualQuery.eq("vendedor_id", effectiveFilters.vendedorId);
+      matrizAnualQuery = matrizAnualQuery.eq("vendedor_id", effectiveFilters.vendedorId);
+      semanalQuery = semanalQuery.eq("vendedor_id", effectiveFilters.vendedorId);
+      ventasQuery = ventasQuery.eq("vendedor_id", effectiveFilters.vendedorId);
+    }
 
-      if (filters.sucursalId !== "todos") {
-        mensualQuery = mensualQuery.eq("sucursal_id", filters.sucursalId);
-        matrizAnualQuery = matrizAnualQuery.eq("sucursal_id", filters.sucursalId);
-        semanalQuery = semanalQuery.eq("sucursal_id", filters.sucursalId);
-        ventasQuery = ventasQuery.eq("sucursal_id", filters.sucursalId);
-      }
+    if (effectiveFilters.sucursalId !== "todos") {
+      mensualQuery = mensualQuery.eq("sucursal_id", effectiveFilters.sucursalId);
+      matrizAnualQuery = matrizAnualQuery.eq("sucursal_id", effectiveFilters.sucursalId);
+      semanalQuery = semanalQuery.eq("sucursal_id", effectiveFilters.sucursalId);
+      ventasQuery = ventasQuery.eq("sucursal_id", effectiveFilters.sucursalId);
     }
 
     const [
@@ -467,20 +503,30 @@ export const useComisionesStore = create<ComisionesState>((set, get) => ({
   },
 
   setFilter: (key, value) => {
-    set((state) => ({
-      filters: {
+    set((state) => {
+      const nextFilters = {
         ...state.filters,
         [key]: value
-      },
-      selectedVendedorId:
-        key === "vendedorId" && value !== "todos" ? String(value) : state.selectedVendedorId
-    }));
+      };
+
+      let nextSelectedVendedorId = state.selectedVendedorId;
+
+      if (key === "vendedorId") {
+        nextSelectedVendedorId = value !== "todos" ? String(value) : null;
+      }
+
+      return {
+        filters: nextFilters,
+        selectedVendedorId: nextSelectedVendedorId
+      };
+    });
   },
 
   resetFilters: () => {
     set({
       filters: getDefaultFilters(),
-      selectedVendedorId: null
+      selectedVendedorId: null,
+      sellerDefaultApplied: false
     });
   },
 
@@ -567,9 +613,18 @@ export const useComisionesStore = create<ComisionesState>((set, get) => ({
 
     return {
       vendedores: mensual.length,
-      utilidadTotalUsd: mensual.reduce((total, item) => total + getNumber(item.utilidad_total_usd), 0),
-      facturacionTotalUsd: mensual.reduce((total, item) => total + getNumber(item.facturacion_total_usd), 0),
-      comisionTotalUsd: mensual.reduce((total, item) => total + getNumber(item.comision_estimada_usd), 0),
+      utilidadTotalUsd: mensual.reduce(
+        (total, item) => total + getNumber(item.utilidad_total_usd),
+        0
+      ),
+      facturacionTotalUsd: mensual.reduce(
+        (total, item) => total + getNumber(item.facturacion_total_usd),
+        0
+      ),
+      comisionTotalUsd: mensual.reduce(
+        (total, item) => total + getNumber(item.comision_estimada_usd),
+        0
+      ),
       logrados: mensual.filter((item) => item.nivel_alcanzado === "LOGRADO").length,
       piso: mensual.filter((item) => item.nivel_alcanzado === "PISO").length,
       medio: mensual.filter((item) => item.nivel_alcanzado === "MEDIO").length,

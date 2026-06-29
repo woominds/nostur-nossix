@@ -2375,8 +2375,6 @@ export function CarritosPanel() {
   const loading = useCarritosStore((state) => state.loading);
   const saving = useCarritosStore((state) => state.saving);
   const error = useCarritosStore((state) => state.error);
-  const currentProfile = useCarritosStore((state) => state.currentProfile);
-  const canManageCarritos = useCarritosStore((state) => state.canManageCarritos);
   const filters = useCarritosStore((state) => state.filters);
   const catalogos = useCarritosStore((state) => state.catalogos);
   const selectedCarritoId = useCarritosStore((state) => state.selectedCarritoId);
@@ -2398,10 +2396,10 @@ export function CarritosPanel() {
   const carritos = getFilteredCarritos();
   const metrics = getMetrics();
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [detailCarrito, setDetailCarrito] = useState<Carrito | null>(null);
-  const [toast, setToast] = useState<ToastState>(null);
+const [filtersOpen, setFiltersOpen] = useState(false);
+const [wizardOpen, setWizardOpen] = useState(false);
+const [detailCarrito, setDetailCarrito] = useState<Carrito | null>(null);
+const [toast, setToast] = useState<ToastState>(null);
 
   const selectedCarrito = useMemo(
     () => carritos.find((carrito) => carrito.id === selectedCarritoId) || carritos[0] || null,
@@ -2411,6 +2409,10 @@ export function CarritosPanel() {
   useEffect(() => {
     loadCarritos();
   }, [loadCarritos]);
+
+
+
+
 
   function showToast(message: string, type: "success" | "error" = "success") {
     setToast({ type, message });
@@ -2469,6 +2471,10 @@ export function CarritosPanel() {
     { value: "todos", label: "Todos" }
   ];
 
+
+  const selectedVendedorFilterLabel =
+  vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos";
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
       <header className="shrink-0 border-b border-black/10 bg-white/78 px-5 py-3 backdrop-blur-xl">
@@ -2482,11 +2488,9 @@ export function CarritosPanel() {
               </span>
             </div>
 
-            <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-              {canManageCarritos
-                ? "Carga de ventas Almundo."
-                : `Carritos asignados a ${currentProfile?.nombre || "tu usuario"}.`}
-            </p>
+           <p className="mt-1 text-[12px] font-normal text-[#64748b]">
+  Carga de ventas Almundo. Por defecto cada vendedor ve sus carritos, pero puede filtrar por todos.
+</p>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
@@ -2544,13 +2548,13 @@ export function CarritosPanel() {
                 </span>
               </div>
 
-              <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
-                {filters.periodMode === "mes"
-                  ? `${formatMonthLabel(filters.month)} · ${filters.desde} → ${filters.hasta}`
-                  : `Rango reportes · ${filters.desde} → ${filters.hasta}`}{" "}
-                · Estado: {filters.estado === "todos" ? "Todos" : filters.estado} · Riesgo:{" "}
-                {filters.riesgo}
-              </div>
+             <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
+  {filters.periodMode === "mes"
+    ? `${formatMonthLabel(filters.month)} · ${filters.desde} → ${filters.hasta}`
+    : `Rango reportes · ${filters.desde} → ${filters.hasta}`}{" "}
+  · Vendedor: {selectedVendedorFilterLabel} · Estado:{" "}
+  {filters.estado === "todos" ? "Todos" : filters.estado} · Riesgo: {filters.riesgo}
+</div>
             </button>
 
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -2628,17 +2632,21 @@ export function CarritosPanel() {
                   />
                 </div>
 
-                {canManageCarritos ? (
-                  <div>
-                    <FieldLabel>Vendedor</FieldLabel>
+               <div>
+  <FieldLabel>Vendedor</FieldLabel>
 
-                    <NosturSelect
-                      value={filters.vendedorId}
-                      onChange={(value) => setFilter("vendedorId", value)}
-                      options={vendedorOptions}
-                    />
-                  </div>
-                ) : null}
+  <NosturSelect
+    value={filters.vendedorId}
+    onChange={(value) => {
+      setFilter("vendedorId", value);
+
+      window.setTimeout(() => {
+        loadCarritos();
+      }, 0);
+    }}
+    options={vendedorOptions}
+  />
+</div>
 
                 <div>
                   <FieldLabel>Sucursal</FieldLabel>

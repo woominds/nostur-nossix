@@ -1,34 +1,25 @@
-// @ts-nocheck
+// supabase/functions/nia-chat/index.ts
 
 /* =========================================================
-   NOSSIX / NOSTUR — cande-reply
-   CANDE · Asistente de pasajeros por WhatsApp
+   NOSSIX / NOSTUR — nia-chat
+   NIA · Asistente comercial interno
 
-   Flujo:
-   WhatsApp inbound
-   → whatsapp-webhook
-   → cande-reply
-   → analiza datos / score
-   → OpenAI
-   → fallback seguro si OpenAI devuelve rechazo
-   → mensajes sender_kind = cande
-   → whatsapp-send-message
-   → cande_runs
-
-   Fuente de verdad:
-   - cande_config
-   - cande_campos
-   - cande_faqs
-   - cande_palabras_clave
-   - lead_oportunidades
-   - conversaciones
-   - mensajes
+   Versión:
+   - Acciones operativas por reglas.
+   - Interpretación IA con OpenAI.
+   - Usa nia_config: prompt_base, tono, reglas, modelo.
+   - Puede modificar datos de oportunidad actual:
+     "cambiale el destino a Miami"
+     "poné origen Córdoba"
+     "cambiá pasajeros a 4"
+     "presupuesto 3000 usd"
+   - NIA NO pide IDs técnicos al usuario.
 ========================================================= */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const CODE_VERSION = "cande-reply-safe-score-v1";
+const CODE_VERSION = "nia-chat-actions-v3-openai-tools";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,12 +27,50 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 
-function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+type AnyRecord = Record<string, any>;
+
+type NiaIntent =
+  | "CAMBIAR_CONTEXTO_OPORTUNIDAD"
+  | "MOVER_PIPELINE"
+  | "RECALIFICAR_OPORTUNIDAD"
+  | "RESUMIR_OPORTUNIDAD"
+  | "ACTUALIZAR_DATO_OPORTUNIDAD"
+  | "ACTIVAR_CANDE"
+  | "DESACTIVAR_CANDE"
+  | "REPORTE_DIARIO_VENDEDORES"
+  | "CONSULTA_GENERAL";
+
+type PipelineCanonical =
+  | "GANADA"
+  | "PERDIDA"
+  | "PRESUPUESTADA"
+  | "EN_GESTION"
+  | "SIN_ATENDER";
+
+type ResolveResult = {
+  status: "resolved" | "ambiguous" | "not_found";
+  opportunity: AnyRecord | null;
+  matches: AnyRecord[];
+  targetText: string;
+  resolvedBy: string;
+};
+
+type AiInterpretation = {
+  intent?: NiaIntent;
+  targetText?: string;
+  field?: string;
+  value?: any;
+  needs_confirmation?: boolean;
+  answer?: string;
+  confidence?: number;
+};
+
+function jsonResponse(body: AnyRecord, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       ...corsHeaders,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json; charset=utf-8"
     }
   });
 }
@@ -50,31 +79,53 @@ function cleanText(value: unknown): string {
   return String(value || "").trim();
 }
 
-function getErrorMessage(error: unknown): string {
-  if (!error) return "Error desconocido.";
-
-  if (typeof error === "object" && "message" in error) {
-    return String((error as { message?: unknown }).message || "Error desconocido.");
-  }
-
-  return String(error);
-}
-
-function normalizeForIntent(value: string): string {
-  return cleanText(value)
+function normalizeHumanText(value: unknown): string {
+  return String(value || "")
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}\s@.+-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function includesAny(text: unknown, values: string[]): boolean {
+  const normalized = normalizeHumanText(text);
+  return values.some((value) => normalized.includes(normalizeHumanText(value)));
+}
+
+function safeJsonText(value: unknown): string {
+  try {
+    return normalizeHumanText(JSON.stringify(value || {}));
+  } catch {
+    return "";
+  }
+}
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+function getNowIso() {
+  return new Date().toISOString();
 }
 
 function getSupabaseAdmin() {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const supabaseUrl =
+    Deno.env.get("NOSTUR_SUPABASE_URL") ||
+    Deno.env.get("SUPABASE_URL");
+
   const serviceRoleKey =
     Deno.env.get("NOSTUR_SERVICE_ROLE_KEY") ||
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-  if (!supabaseUrl) throw new Error("Falta SUPABASE_URL.");
-  if (!serviceRoleKey) throw new Error("Falta NOSTUR_SERVICE_ROLE_KEY o SUPABASE_SERVICE_ROLE_KEY.");
+  if (!supabaseUrl) {
+    throw new Error("Falta NOSTUR_SUPABASE_URL o SUPABASE_URL.");
+  }
+
+  if (!serviceRoleKey) {
+    throw new Error("Falta NOSTUR_SERVICE_ROLE_KEY o SUPABASE_SERVICE_ROLE_KEY.");
+  }
 
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: {
@@ -84,1074 +135,1654 @@ function getSupabaseAdmin() {
   });
 }
 
-function getEnvSupabaseUrl() {
-  const value = Deno.env.get("SUPABASE_URL");
-
-  if (!value) {
-    throw new Error("Falta SUPABASE_URL.");
-  }
-
-  return value;
+function getMessage(payload: AnyRecord): string {
+  return (
+    cleanText(payload.message) ||
+    cleanText(payload.text) ||
+    cleanText(payload.prompt) ||
+    cleanText(payload.user_message) ||
+    cleanText(payload.transcription) ||
+    cleanText(payload.audio_transcription) ||
+    cleanText(payload.body?.message) ||
+    cleanText(payload.body?.text) ||
+    cleanText(payload.context?.message) ||
+    cleanText(payload.context?.text)
+  );
 }
 
-function getEnvServiceRoleKey() {
-  const value =
-    Deno.env.get("NOSTUR_SERVICE_ROLE_KEY") ||
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-
-  if (!value) {
-    throw new Error("Falta NOSTUR_SERVICE_ROLE_KEY o SUPABASE_SERVICE_ROLE_KEY.");
-  }
-
-  return value;
+function getUserId(payload: AnyRecord): string | null {
+  return (
+    cleanText(payload.user_id) ||
+    cleanText(payload.userId) ||
+    cleanText(payload.profile_id) ||
+    cleanText(payload.profileId) ||
+    cleanText(payload.context?.user_id) ||
+    cleanText(payload.context?.profile_id) ||
+    null
+  );
 }
 
-/* =========================================================
-   PAYLOAD HELPERS
-========================================================= */
-
-function getConversationId(payload: any): string | null {
+function getConversationId(payload: AnyRecord): string | null {
   return (
     cleanText(payload.conversation_id) ||
+    cleanText(payload.conversationId) ||
     cleanText(payload.conversacion_id) ||
+    cleanText(payload.conversacionId) ||
     cleanText(payload.context?.conversation_id) ||
     cleanText(payload.context?.conversacion_id) ||
     null
   );
 }
 
-function getInboundMessageId(payload: any): string | null {
-  return (
-    cleanText(payload.inbound_message_id) ||
-    cleanText(payload.mensaje_id) ||
-    cleanText(payload.message_id) ||
-    cleanText(payload.context?.inbound_message_id) ||
-    cleanText(payload.context?.mensaje_id) ||
-    null
-  );
-}
-
-function getOportunidadId(payload: any): string | null {
+function getOportunidadId(payload: AnyRecord): string | null {
   return (
     cleanText(payload.oportunidad_id) ||
+    cleanText(payload.oportunidadId) ||
+    cleanText(payload.opportunity_id) ||
+    cleanText(payload.opportunityId) ||
     cleanText(payload.context?.oportunidad_id) ||
+    cleanText(payload.context?.opportunity_id) ||
     null
   );
 }
 
-/* =========================================================
-   FORMATTERS
-========================================================= */
-
-function formatJson(value: unknown): string {
-  if (!value) return "—";
-
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+function getSource(payload: AnyRecord): string {
+  return cleanText(payload.source) || cleanText(payload.context?.source) || "nia-chat";
 }
 
-function formatList(value: unknown): string {
-  if (!value) return "—";
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) return "—";
-    return value.map((item) => `- ${cleanText(item) || formatJson(item)}`).join("\n");
-  }
-
-  if (typeof value === "object") {
-    return formatJson(value);
-  }
-
-  return cleanText(value) || "—";
-}
-
-function formatRowsForPrompt(rows: any[], fallback = "—"): string {
-  if (!rows || rows.length === 0) return fallback;
-
-  return rows
-    .map((row, index) => {
-      const nombre =
-        cleanText(row.nombre) ||
-        cleanText(row.titulo) ||
-        cleanText(row.keyword) ||
-        cleanText(row.palabra) ||
-        cleanText(row.clave) ||
-        cleanText(row.campo) ||
-        `Item ${index + 1}`;
-
-      const descripcion =
-        cleanText(row.descripcion) ||
-        cleanText(row.respuesta) ||
-        cleanText(row.valor) ||
-        cleanText(row.prompt) ||
-        cleanText(row.texto) ||
-        cleanText(row.etiqueta) ||
-        "";
-
-      const extra = Object.entries(row || {})
-        .filter(
-          ([key]) =>
-            ![
-              "id",
-              "created_at",
-              "updated_at",
-              "nombre",
-              "titulo",
-              "keyword",
-              "palabra",
-              "clave",
-              "campo",
-              "descripcion",
-              "respuesta",
-              "valor",
-              "prompt",
-              "texto",
-              "etiqueta"
-            ].includes(key)
-        )
-        .map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : cleanText(value)}`)
-        .filter((item) => cleanText(item))
-        .join(" · ");
-
-      return `- ${nombre}${descripcion ? `: ${descripcion}` : ""}${extra ? ` (${extra})` : ""}`;
-    })
-    .join("\n");
-}
-
-function formatMessageForPrompt(message: any): string {
-  const direction =
-    message.direction === "in" || message.direction === "inbound"
-      ? "PASAJERO"
-      : message.sender_kind === "cande"
-        ? "CANDE"
-        : "ASESOR";
-
-  const type = cleanText(message.type) || "text";
-  const text = cleanText(message.text) || `[${type}]`;
-  const at = cleanText(message.wa_timestamp || message.created_at);
-
-  return `[${at}] ${direction}: ${text}`;
-}
-
-function normalizeWhatsappText(text: string): string {
-  return cleanText(text)
-    .replace(/\*\*/g, "")
-    .replace(/^#+\s?/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-/* =========================================================
-   MESSAGE HELPERS
-========================================================= */
-
-function isInbound(message: any) {
-  return message?.direction === "in" || message?.direction === "inbound";
-}
-
-function isOutbound(message: any) {
-  return message?.direction === "out" || message?.direction === "outbound";
-}
-
-function isGreetingOnly(text: string): boolean {
-  const normalized = normalizeForIntent(text);
-
-  return [
-    "hola",
-    "holi",
-    "holis",
-    "holaa",
-    "holaaa",
-    "buen dia",
-    "buenas",
-    "buenas tardes",
-    "buenas noches",
-    "hello",
-    "hi"
-  ].includes(normalized);
-}
-
-/* =========================================================
-   CONFIG HELPERS
-========================================================= */
-
-function getConfigValue(config: any, key: string, fallback: string) {
-  return cleanText(config?.[key]) || fallback;
-}
-
-function getMarcaVisible(config: any) {
-  return getConfigValue(config, "marca_visible", "ALMUNDO Franquicia Córdoba");
-}
-
-function getNombreIa(config: any) {
-  return getConfigValue(config, "nombre_ia", "Cande");
-}
-
-function getMensajeInicial(config: any) {
-  return getConfigValue(
-    config,
-    "mensaje_inicial",
-    `Hola, soy ${getNombreIa(config)} de ${getMarcaVisible(config)} 😊 ¿En qué puedo ayudarte con tu viaje?`
-  );
-}
-
-function getMensajeFaltaInfo(config: any) {
-  return getConfigValue(
-    config,
-    "mensaje_falta_info",
-    "Para ayudarte mejor, ¿me contás destino, fecha aproximada y cantidad de pasajeros?"
-  );
-}
-
-function getMensajeNoEntiende(config: any) {
-  return getConfigValue(
-    config,
-    "mensaje_no_entiende",
-    "Perdón, no llegué a entender bien. ¿Me lo podés repetir con destino, fecha aproximada o tipo de viaje?"
-  );
-}
-
-function getMensajeFueraHorario(config: any) {
-  return getConfigValue(
-    config,
-    "mensaje_fuera_horario",
-    "Gracias por escribirnos 😊 En este momento el equipo no está disponible, pero puedo tomar tus datos para que un asesor te responda apenas pueda."
-  );
-}
-
-function getMensajeDerivacion(config: any) {
-  return getConfigValue(
-    config,
-    "mensaje_despedida",
-    "Genial, te paso con un asesor del equipo que ya va a tener tu información. ¡Gracias!"
+function getModule(payload: AnyRecord): string {
+  return (
+    cleanText(payload.module) ||
+    cleanText(payload.modulo) ||
+    cleanText(payload.context?.module) ||
+    cleanText(payload.context?.modulo) ||
+    "comunicaciones"
   );
 }
 
 /* =========================================================
-   CANDE_RUNS
+   INTENCIONES / SINÓNIMOS
 ========================================================= */
 
-async function createRun(params: {
-  supabase: any;
-  conversationId: string | null;
-  oportunidadId: string | null;
-  inboundMessageId: string | null;
-  payload: any;
-}) {
-  const { data, error } = await params.supabase
-    .from("cande_runs")
-    .insert({
-      conversation_id: params.conversationId,
-      oportunidad_id: params.oportunidadId,
-      inbound_message_id: params.inboundMessageId,
-      source: cleanText(params.payload?.source) || "cande-reply",
-      status: "started",
-      request_payload: params.payload || {},
-      response_payload: {
-        code_version: CODE_VERSION
-      }
-    })
-    .select("id")
-    .single();
+const PIPELINE_SYNONYMS: Record<PipelineCanonical, string[]> = {
+  GANADA: [
+    "ganada",
+    "ganado",
+    "vendida",
+    "vendido",
+    "venta",
+    "venta cerrada",
+    "cerrada",
+    "cerrado",
+    "cerro",
+    "cerró",
+    "compro",
+    "compró",
+    "compra",
+    "comprado",
+    "comprada",
+    "reservo",
+    "reservó",
+    "reservada",
+    "reservado",
+    "seño",
+    "señó",
+    "senio",
+    "senado",
+    "señado",
+    "confirmada",
+    "confirmado"
+  ],
+  PERDIDA: [
+    "perdida",
+    "perdido",
+    "rechazada",
+    "rechazado",
+    "no compra",
+    "no compro",
+    "no compró",
+    "descartada",
+    "descartado",
+    "cancelada",
+    "cancelado",
+    "perdio",
+    "perdió",
+    "baja",
+    "sin interes",
+    "sin interés"
+  ],
+  PRESUPUESTADA: [
+    "presupuestada",
+    "presupuestado",
+    "presupuesto",
+    "presupuesto enviado",
+    "cotizacion enviada",
+    "cotización enviada",
+    "cotizada",
+    "cotizado",
+    "enviada",
+    "enviado",
+    "mandada",
+    "mandado",
+    "propuesta enviada"
+  ],
+  EN_GESTION: [
+    "en gestion",
+    "en gestión",
+    "gestion",
+    "gestión",
+    "gestionar",
+    "tomada",
+    "tomado",
+    "trabajando",
+    "seguimiento",
+    "seguir",
+    "seguile",
+    "recontactar",
+    "recontacto",
+    "volver a contactar",
+    "en proceso"
+  ],
+  SIN_ATENDER: [
+    "sin atender",
+    "nuevo",
+    "nueva",
+    "pendiente",
+    "sin tomar",
+    "sin gestionar"
+  ]
+};
 
-  if (error) {
-    console.error("[cande-reply] No se pudo crear cande_runs:", error.message);
-    return null;
-  }
+const ACTION_SYNONYMS = {
+  cambiarContexto: [
+    "cambiar a",
+    "cambia a",
+    "cambiá a",
+    "cambiame a",
+    "cambiame",
+    "cambiate a",
+    "abrir a",
+    "abri a",
+    "abrí a",
+    "abrime a",
+    "abrime",
+    "seleccionar a",
+    "selecciona a",
+    "seleccioná a",
+    "seleccioname a",
+    "ir a",
+    "anda a",
+    "andá a",
+    "andate a",
+    "trabajar con",
+    "trabajemos con",
+    "seguimos con",
+    "sigamos con",
+    "ahora con",
+    "contexto de",
+    "poneme en",
+    "ponete en",
+    "usar a",
+    "usa a",
+    "usá a",
+    "tomar a",
+    "tomemos a"
+  ],
+  moverPipeline: [
+    "pasar",
+    "pasa",
+    "pasá",
+    "pasala",
+    "pasalo",
+    "pasame",
+    "mover",
+    "move",
+    "movela",
+    "movelo",
+    "cambiar estado",
+    "cambiale el estado",
+    "mandar a",
+    "dejar en",
+    "dejala en",
+    "dejalo en",
+    "marcar",
+    "marcala",
+    "marcalo",
+    "poner en",
+    "ponela en",
+    "ponelo en"
+  ],
+  recalificar: [
+    "recalificar",
+    "recalifica",
+    "recalificá",
+    "recalificala",
+    "recalificalo",
+    "calificar",
+    "califica",
+    "score",
+    "scrore",
+    "puntaje",
+    "temperatura",
+    "medir interes",
+    "medir interés"
+  ],
+  resumen: [
+    "resumen",
+    "resumir",
+    "resumime",
+    "resumi",
+    "resumí",
+    "estado de",
+    "contame",
+    "que paso",
+    "qué pasó",
+    "que tenemos",
+    "qué tenemos"
+  ],
+  activarCande: [
+    "activar cande",
+    "activa cande",
+    "activá cande",
+    "prender cande",
+    "encender cande",
+    "que atienda cande",
+    "pasar a cande"
+  ],
+  desactivarCande: [
+    "desactivar cande",
+    "desactiva cande",
+    "desactivá cande",
+    "apagar cande",
+    "frenar cande",
+    "sacar cande",
+    "que no atienda cande"
+  ],
+  reporte: [
+    "reporte diario",
+    "resumen diario",
+    "mandar reporte",
+    "manda reporte",
+    "mandá reporte",
+    "enviar reporte",
+    "envia reporte",
+    "enviá reporte",
+    "reporte a vendedores",
+    "reporte vendedores",
+    "informe vendedores",
+    "mandale a los vendedores",
+    "mandar a vendedores"
+  ]
+};
 
-  return data?.id || null;
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function finishRun(params: {
-  supabase: any;
-  runId: string | null;
-  status: string;
-  reason?: string | null;
-  outboundMessageId?: string | null;
-  responsePayload?: any;
-  error?: string | null;
-}) {
-  if (!params.runId) return;
+function detectPipelineCanonical(text: string): PipelineCanonical | null {
+  const normalized = normalizeHumanText(text);
 
-  const { error } = await params.supabase
-    .from("cande_runs")
-    .update({
-      status: params.status,
-      reason: params.reason || null,
-      outbound_message_id: params.outboundMessageId || null,
-      response_payload: {
-        code_version: CODE_VERSION,
-        ...(params.responsePayload || {})
-      },
-      error: params.error || null,
-      finished_at: new Date().toISOString()
-    })
-    .eq("id", params.runId);
+  for (const [canonical, words] of Object.entries(PIPELINE_SYNONYMS)) {
+    const allWords = [canonical, ...words];
 
-  if (error) {
-    console.error("[cande-reply] No se pudo cerrar cande_runs:", error.message);
+    if (allWords.some((word) => normalized.includes(normalizeHumanText(word)))) {
+      return canonical as PipelineCanonical;
+    }
   }
+
+  return null;
+}
+
+function detectDatoUpdateIntent(message: string): boolean {
+  const normalized = normalizeHumanText(message);
+
+  return includesAny(normalized, [
+    "cambiar destino",
+    "cambia destino",
+    "cambiá destino",
+    "cambiale destino",
+    "cambiale el destino",
+    "modificar destino",
+    "modifica destino",
+    "modificá destino",
+    "actualizar destino",
+    "actualiza destino",
+    "actualizá destino",
+    "poner destino",
+    "poné destino",
+    "pone destino",
+    "destino a",
+    "destino es",
+    "destino sea",
+    "destino seria",
+    "destino sería",
+
+    "cambiar origen",
+    "cambiale origen",
+    "cambiale el origen",
+    "origen a",
+    "origen es",
+    "origen sea",
+    "salida desde",
+    "sale desde",
+
+    "cambiar fecha",
+    "cambiale fecha",
+    "cambiale la fecha",
+    "fecha a",
+    "fecha es",
+    "fecha sea",
+    "fechas a",
+    "fechas son",
+
+    "cambiar pasajeros",
+    "cambiale pasajeros",
+    "cambiale los pasajeros",
+    "pasajeros a",
+    "pasajeros son",
+    "pax a",
+    "pax son",
+    "personas son",
+
+    "cambiar presupuesto",
+    "cambiale presupuesto",
+    "cambiale el presupuesto",
+    "presupuesto a",
+    "presupuesto es",
+    "presupuesto sea",
+
+    "tipo de viaje a",
+    "tipo de viaje es",
+    "cambiar tipo de viaje",
+    "cambiale tipo de viaje"
+  ]);
+}
+
+function detectIntent(message: string): NiaIntent {
+  const normalized = normalizeHumanText(message);
+  const pipelineTarget = detectPipelineCanonical(message);
+
+  if (includesAny(normalized, ACTION_SYNONYMS.reporte)) {
+    return "REPORTE_DIARIO_VENDEDORES";
+  }
+
+  if (includesAny(normalized, ACTION_SYNONYMS.activarCande)) {
+    return "ACTIVAR_CANDE";
+  }
+
+  if (includesAny(normalized, ACTION_SYNONYMS.desactivarCande)) {
+    return "DESACTIVAR_CANDE";
+  }
+
+  if (detectDatoUpdateIntent(normalized)) {
+    return "ACTUALIZAR_DATO_OPORTUNIDAD";
+  }
+
+  if (
+    includesAny(normalized, ACTION_SYNONYMS.cambiarContexto) &&
+    !pipelineTarget
+  ) {
+    return "CAMBIAR_CONTEXTO_OPORTUNIDAD";
+  }
+
+  if (includesAny(normalized, ACTION_SYNONYMS.recalificar)) {
+    return "RECALIFICAR_OPORTUNIDAD";
+  }
+
+  if (
+    pipelineTarget &&
+    (includesAny(normalized, ACTION_SYNONYMS.moverPipeline) ||
+      includesAny(normalized, [
+        "vendida",
+        "vendido",
+        "ganada",
+        "ganado",
+        "perdida",
+        "perdido",
+        "presupuestada",
+        "presupuestado",
+        "en gestion",
+        "en gestión",
+        "sin atender"
+      ]))
+  ) {
+    return "MOVER_PIPELINE";
+  }
+
+  if (includesAny(normalized, ACTION_SYNONYMS.resumen)) {
+    return "RESUMIR_OPORTUNIDAD";
+  }
+
+  return "CONSULTA_GENERAL";
+}
+
+function removeKnownActionWords(message: string): string {
+  let normalized = normalizeHumanText(message);
+
+  const wordsToRemove = unique([
+    ...Object.values(ACTION_SYNONYMS).flat(),
+    ...Object.values(PIPELINE_SYNONYMS).flat(),
+    ...Object.keys(PIPELINE_SYNONYMS),
+    "a",
+    "al",
+    "la",
+    "lo",
+    "el",
+    "de",
+    "del",
+    "para",
+    "por",
+    "favor",
+    "porfa",
+    "cliente",
+    "pasajero",
+    "oportunidad",
+    "lead",
+    "contacto",
+    "nia",
+    "cande"
+  ]);
+
+  for (const word of wordsToRemove.sort((a, b) => b.length - a.length)) {
+    const cleanWord = normalizeHumanText(word);
+    if (!cleanWord) continue;
+
+    normalized = normalized
+      .replace(new RegExp(`(^|\\s)${escapeRegExp(cleanWord)}(\\s|$)`, "g"), " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  return normalized;
 }
 
 /* =========================================================
-   LOADERS
+   DB LOADERS
 ========================================================= */
 
-async function loadCandeConfig(params: { supabase: any }) {
-  const { data, error } = await params.supabase
-    .from("cande_config")
+async function loadNiaConfig(supabase: any) {
+  const { data, error } = await supabase
+    .from("nia_config")
     .select("*")
-    .order("updated_at", { ascending: false, nullsFirst: false })
     .limit(1)
     .maybeSingle();
 
   if (error) throw error;
-
   return data || null;
 }
 
-async function loadCandeCampos(params: { supabase: any }) {
-  const { data, error } = await params.supabase
-    .from("cande_campos")
-    .select("*")
-    .order("orden", { ascending: true, nullsFirst: false });
-
-  if (error) {
-    console.error("[cande-reply] No se pudieron leer cande_campos:", error.message);
-    return [];
-  }
-
-  return data || [];
-}
-
-async function loadCandeFaqs(params: { supabase: any }) {
-  const { data, error } = await params.supabase
-    .from("cande_faqs")
-    .select("*")
-    .order("updated_at", { ascending: false, nullsFirst: false })
+async function loadNiaFaqs(supabase: any) {
+  const { data, error } = await supabase
+    .from("nia_faqs")
+    .select("id,pregunta,respuesta,orden")
+    .order("orden", { ascending: true })
     .limit(80);
 
-  if (error) {
-    console.error("[cande-reply] No se pudieron leer cande_faqs:", error.message);
-    return [];
-  }
-
+  if (error) return [];
   return data || [];
 }
 
-async function loadCandePalabrasClave(params: { supabase: any }) {
-  const { data, error } = await params.supabase
-    .from("cande_palabras_clave")
-    .select("*")
-    .order("updated_at", { ascending: false, nullsFirst: false })
-    .limit(100);
+async function loadNiaKeywords(supabase: any) {
+  const { data, error } = await supabase
+    .from("nia_palabras_clave")
+    .select("id,palabra,significado")
+    .limit(120);
 
-  if (error) {
-    console.error("[cande-reply] No se pudieron leer cande_palabras_clave:", error.message);
-    return [];
-  }
-
+  if (error) return [];
   return data || [];
 }
 
-async function loadConversation(params: {
-  supabase: any;
-  conversationId: string;
-}) {
-  const { data, error } = await params.supabase
-    .from("conversaciones")
+async function loadPipelineEstados(supabase: any) {
+  const { data, error } = await supabase
+    .from("pipeline_estados")
+    .select("id,nombre,color,orden,es_final,resultado,es_sin_atender")
+    .order("orden", { ascending: true });
+
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadCandeCampos(supabase: any) {
+  const { data, error } = await supabase
+    .from("cande_campos")
+    .select("*");
+
+  if (error) return [];
+  return data || [];
+}
+
+async function loadOpportunityById(supabase: any, id: string | null) {
+  if (!id) return null;
+
+  const { data, error } = await supabase
+    .from("lead_oportunidades")
     .select("*")
-    .eq("id", params.conversationId)
+    .eq("id", id)
     .maybeSingle();
 
   if (error) throw error;
-
   return data || null;
 }
 
-async function loadOpportunity(params: {
-  supabase: any;
-  conversationId: string;
-  oportunidadId?: string | null;
-}) {
-  let query = params.supabase.from("lead_oportunidades").select("*");
+async function loadOpportunityByConversationId(supabase: any, conversationId: string | null) {
+  if (!conversationId) return null;
 
-  if (params.oportunidadId) {
-    query = query.eq("id", params.oportunidadId);
-  } else {
-    query = query.eq("conversacion_id", params.conversationId);
-  }
-
-  const { data, error } = await query.maybeSingle();
-
-  if (error) throw error;
-
-  return data || null;
-}
-
-async function loadMessages(params: {
-  supabase: any;
-  conversationId: string;
-}) {
-  const { data, error } = await params.supabase
-    .from("mensajes")
-    .select("id,direction,sender_kind,type,text,status,error,wa_message_id,wa_timestamp,created_at,deleted_at")
-    .eq("conversacion_id", params.conversationId)
-    .is("deleted_at", null)
-    .order("wa_timestamp", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .limit(35);
-
-  if (error) throw error;
-
-  return (data || []).slice().reverse();
-}
-
-async function loadInboundMessage(params: {
-  supabase: any;
-  inboundMessageId: string | null;
-}) {
-  if (!params.inboundMessageId) return null;
-
-  const { data, error } = await params.supabase
-    .from("mensajes")
+  const { data, error } = await supabase
+    .from("lead_oportunidades")
     .select("*")
-    .eq("id", params.inboundMessageId)
+    .eq("conversacion_id", conversationId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   if (error) throw error;
-
   return data || null;
+}
+
+async function loadRecentOpportunities(supabase: any) {
+  const { data, error } = await supabase
+    .from("lead_oportunidades")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(300);
+
+  if (error) throw error;
+  return data || [];
+}
+
+async function loadProfiles(supabase: any) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id,nombre,apellido,display_name,email,rol,activo,visible_en_sistema,is_support_user,sucursal_id")
+    .eq("activo", true)
+    .order("nombre", { ascending: true });
+
+  if (error) throw error;
+  return data || [];
 }
 
 /* =========================================================
-   GATE
+   OPORTUNIDAD HELPERS
 ========================================================= */
 
-function shouldCandeReply(params: {
-  config: any;
-  conversation: any;
-  opportunity: any;
-  messages: any[];
-  inboundMessage: any | null;
-}) {
-  const conversation = params.conversation;
-  const opportunity = params.opportunity;
-  const messages = params.messages || [];
-  const inboundMessage = params.inboundMessage;
-
-  if (!conversation?.id) {
-    return {
-      ok: false,
-      reason: "conversation_not_found"
-    };
-  }
-
-  if (conversation.deleted_at || conversation.archived_at || conversation.closed_at || conversation.status === "closed") {
-    return {
-      ok: false,
-      reason: "conversation_closed_or_archived"
-    };
-  }
-
-  if (!opportunity?.id) {
-    return {
-      ok: false,
-      reason: "opportunity_not_found"
-    };
-  }
-
-  if (opportunity.cande_activa !== true) {
-    return {
-      ok: false,
-      reason: "cande_not_active_for_opportunity"
-    };
-  }
-
-  if (inboundMessage && !isInbound(inboundMessage)) {
-    return {
-      ok: false,
-      reason: "message_is_not_inbound"
-    };
-  }
-
-  const lastInbound = [...messages].reverse().find((message) => isInbound(message));
-  const lastOutbound = [...messages].reverse().find((message) => isOutbound(message));
-
-  if (!lastInbound?.id) {
-    return {
-      ok: false,
-      reason: "no_inbound_message"
-    };
-  }
-
-  const inboundDate = new Date(lastInbound.wa_timestamp || lastInbound.created_at || 0).getTime();
-  const outboundDate = lastOutbound
-    ? new Date(lastOutbound.wa_timestamp || lastOutbound.created_at || 0).getTime()
-    : 0;
-
-  if (lastOutbound?.sender_kind === "cande" && outboundDate >= inboundDate) {
-    return {
-      ok: false,
-      reason: "cande_already_replied_after_last_inbound"
-    };
-  }
-
-  if (lastOutbound && outboundDate >= inboundDate) {
-    return {
-      ok: false,
-      reason: "human_or_agent_already_replied_after_last_inbound"
-    };
-  }
+function mergedOpportunityData(opportunity: AnyRecord | null) {
+  if (!opportunity) return {};
 
   return {
-    ok: true,
-    reason: "cande_active"
+    ...(opportunity.datos || {}),
+    ...(opportunity.manual_data || {})
   };
 }
 
-/* =========================================================
-   DERIVACIÓN
-========================================================= */
+function getValueByLooseKey(data: AnyRecord, key: string) {
+  const normalizedKey = normalizeHumanText(key);
 
-function shouldDeriveByMessage(params: {
-  config: any;
-  messages: any[];
-  inboundMessage: any | null;
-  score?: number;
-}) {
-  const config = params.config || {};
-  const inboundText = normalizeForIntent(params.inboundMessage?.text || "");
-
-  const wantsHuman =
-    inboundText.includes("asesor") ||
-    inboundText.includes("persona") ||
-    inboundText.includes("humano") ||
-    inboundText.includes("vendedor") ||
-    inboundText.includes("agente") ||
-    inboundText.includes("llamen") ||
-    inboundText.includes("llamar") ||
-    inboundText.includes("quiero hablar") ||
-    inboundText.includes("hablar con alguien");
-
-  if (config.derivar_si_pide_humano === true && wantsHuman) {
-    return {
-      shouldDerive: true,
-      reason: "passenger_requested_human"
-    };
+  for (const [dataKey, value] of Object.entries(data || {})) {
+    if (normalizeHumanText(dataKey) === normalizedKey) return value;
   }
 
-  const maxMessages = Number(config.max_mensajes_antes_derivar || 0);
+  for (const [dataKey, value] of Object.entries(data || {})) {
+    const cleanDataKey = normalizeHumanText(dataKey);
+    if (cleanDataKey.includes(normalizedKey) || normalizedKey.includes(cleanDataKey)) {
+      return value;
+    }
+  }
 
-  if (maxMessages > 0) {
-    const candeOutboundCount = (params.messages || []).filter(
-      (message) => isOutbound(message) && message.sender_kind === "cande"
-    ).length;
+  return null;
+}
 
-    if (candeOutboundCount >= maxMessages) {
+function getOpportunityName(opportunity: AnyRecord | null) {
+  if (!opportunity) return "la oportunidad";
+
+  const data = mergedOpportunityData(opportunity);
+
+  return (
+    cleanText(opportunity.nombre_contacto) ||
+    cleanText(data.nombre) ||
+    cleanText(data.contacto_nombre) ||
+    cleanText(data.pasajero) ||
+    cleanText(data.nombre_pasajero) ||
+    cleanText(data.cliente) ||
+    cleanText(data.display_name) ||
+    "la oportunidad"
+  );
+}
+
+function getOpportunityPhone(opportunity: AnyRecord | null) {
+  if (!opportunity) return "";
+
+  const data = mergedOpportunityData(opportunity);
+
+  return (
+    cleanText(opportunity.telefono) ||
+    cleanText(data.telefono) ||
+    cleanText(data.wa_phone) ||
+    cleanText(data.phone) ||
+    cleanText(data.celular) ||
+    cleanText(data.whatsapp) ||
+    ""
+  );
+}
+
+function getOpportunityEmail(opportunity: AnyRecord | null) {
+  if (!opportunity) return "";
+
+  const data = mergedOpportunityData(opportunity);
+
+  return (
+    cleanText(opportunity.email) ||
+    cleanText(data.email) ||
+    cleanText(data.mail) ||
+    ""
+  );
+}
+
+function getOpportunityDestino(opportunity: AnyRecord | null) {
+  if (!opportunity) return "";
+
+  const data = mergedOpportunityData(opportunity);
+
+  return (
+    cleanText(getValueByLooseKey(data, "destino")) ||
+    cleanText(getValueByLooseKey(data, "lugar")) ||
+    cleanText(getValueByLooseKey(data, "ciudad_destino")) ||
+    ""
+  );
+}
+
+function getOpportunityOrigen(opportunity: AnyRecord | null) {
+  if (!opportunity) return "";
+
+  const data = mergedOpportunityData(opportunity);
+
+  return (
+    cleanText(getValueByLooseKey(data, "origen")) ||
+    cleanText(getValueByLooseKey(data, "origen_confirmado")) ||
+    cleanText(getValueByLooseKey(data, "origen_sugerido")) ||
+    ""
+  );
+}
+
+function buildContextUpdate(opportunity: AnyRecord) {
+  const data = mergedOpportunityData(opportunity);
+  const name = getOpportunityName(opportunity);
+  const phone = getOpportunityPhone(opportunity);
+
+  return {
+    source: "nia",
+    module: "oportunidades",
+    action: "context_update_from_nia",
+
+    conversation_id: opportunity.conversacion_id || cleanText(data.conversation_id) || null,
+    conversacion_id: opportunity.conversacion_id || cleanText(data.conversation_id) || null,
+
+    oportunidad_id: opportunity.id,
+    oportunidad_score: Number(opportunity.score || 0),
+    oportunidad_estado_id: opportunity.estado_id || null,
+    oportunidad_datos: opportunity.datos || null,
+
+    wa_phone: phone || null,
+    contacto_nombre: name,
+    contacto: name,
+    contacto_profile_name: name,
+
+    cande_activa: Boolean(opportunity.cande_activa),
+    cande_handoff_requested_at: opportunity.cande_handoff_requested_at || null,
+
+    destino: getOpportunityDestino(opportunity) || null,
+    origen: getOpportunityOrigen(opportunity) || null,
+
+    created_at: getNowIso()
+  };
+}
+
+function opportunitySearchHaystack(opportunity: AnyRecord) {
+  const merged = mergedOpportunityData(opportunity);
+
+  return normalizeHumanText(
+    [
+      opportunity.id,
+      opportunity.nombre_contacto,
+      opportunity.telefono,
+      opportunity.email,
+      opportunity.notas,
+      opportunity.origen,
+      opportunity.metodo_contacto,
+      opportunity.canal_preferido,
+      getOpportunityName(opportunity),
+      getOpportunityPhone(opportunity),
+      getOpportunityEmail(opportunity),
+      getOpportunityDestino(opportunity),
+      safeJsonText(opportunity.datos),
+      safeJsonText(opportunity.manual_data),
+      safeJsonText(merged)
+    ].join(" ")
+  );
+}
+
+function scoreOpportunityMatch(opportunity: AnyRecord, targetText: string, originalMessage: string) {
+  const target = normalizeHumanText(targetText);
+  const original = normalizeHumanText(originalMessage);
+  const haystack = opportunitySearchHaystack(opportunity);
+
+  if (!target && !original) return 0;
+
+  let score = 0;
+
+  const nombre = normalizeHumanText(getOpportunityName(opportunity));
+  const telefono = normalizeHumanText(getOpportunityPhone(opportunity));
+  const email = normalizeHumanText(getOpportunityEmail(opportunity));
+
+  if (target && nombre && nombre === target) score += 140;
+  if (target && nombre && nombre.includes(target)) score += 105;
+  if (target && nombre && target.includes(nombre)) score += 90;
+
+  if (target && telefono && target.includes(telefono)) score += 120;
+  if (target && telefono && telefono.includes(target)) score += 95;
+
+  if (target && email && email.includes(target)) score += 95;
+
+  const tokens = unique(
+    target
+      .split(" ")
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 3)
+  );
+
+  for (const token of tokens) {
+    if (haystack.includes(token)) score += 18;
+    if (nombre.includes(token)) score += 26;
+  }
+
+  const originalTokens = unique(
+    original
+      .split(" ")
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 4)
+  );
+
+  for (const token of originalTokens) {
+    if (haystack.includes(token)) score += 5;
+  }
+
+  const updatedAt = opportunity.updated_at || opportunity.created_at;
+  if (updatedAt) {
+    const ageHours = Math.max(0, Date.now() - new Date(updatedAt).getTime()) / 36e5;
+    if (ageHours <= 24) score += 12;
+    else if (ageHours <= 72) score += 8;
+    else if (ageHours <= 168) score += 4;
+  }
+
+  return score;
+}
+
+async function resolveOpportunity(params: {
+  supabase: any;
+  payload: AnyRecord;
+  message: string;
+  intent: NiaIntent;
+}): Promise<ResolveResult> {
+  const { supabase, payload, message, intent } = params;
+
+  const shouldIgnoreCurrentContext = intent === "CAMBIAR_CONTEXTO_OPORTUNIDAD";
+
+  const oportunidadId = shouldIgnoreCurrentContext ? null : getOportunidadId(payload);
+  const conversationId = shouldIgnoreCurrentContext ? null : getConversationId(payload);
+
+  if (oportunidadId) {
+    const opportunity = await loadOpportunityById(supabase, oportunidadId);
+
+    if (opportunity) {
       return {
-        shouldDerive: true,
-        reason: "max_cande_messages_reached"
+        status: "resolved",
+        opportunity,
+        matches: [opportunity],
+        targetText: oportunidadId,
+        resolvedBy: "oportunidad_id_context"
       };
     }
   }
 
-  const score = Number(params.score || 0);
-  const threshold = Number(config.umbral_transferencia || 0);
+  if (conversationId) {
+    const opportunity = await loadOpportunityByConversationId(supabase, conversationId);
 
-  if (config.derivar_si_score_supera_umbral === true && threshold > 0 && score >= threshold) {
+    if (opportunity) {
+      return {
+        status: "resolved",
+        opportunity,
+        matches: [opportunity],
+        targetText: conversationId,
+        resolvedBy: "conversation_id_context"
+      };
+    }
+  }
+
+  const targetText =
+    cleanText(payload.target) ||
+    cleanText(payload.search) ||
+    cleanText(payload.nombre) ||
+    cleanText(payload.contacto) ||
+    cleanText(payload.context?.target) ||
+    removeKnownActionWords(message);
+
+  const recent = await loadRecentOpportunities(supabase);
+
+  const scored = recent
+    .map((opportunity: AnyRecord) => ({
+      ...opportunity,
+      __match_score: scoreOpportunityMatch(opportunity, targetText, message)
+    }))
+    .filter((opportunity: AnyRecord) => opportunity.__match_score > 0)
+    .sort((a: AnyRecord, b: AnyRecord) => {
+      if (b.__match_score !== a.__match_score) return b.__match_score - a.__match_score;
+      return (
+        new Date(b.updated_at || b.created_at || 0).getTime() -
+        new Date(a.updated_at || a.created_at || 0).getTime()
+      );
+    });
+
+  if (scored.length === 0) {
     return {
-      shouldDerive: true,
-      reason: "score_threshold_reached"
+      status: "not_found",
+      opportunity: null,
+      matches: [],
+      targetText,
+      resolvedBy: "not_found"
+    };
+  }
+
+  const first = scored[0];
+  const second = scored[1];
+
+  if (second && second.__match_score >= Math.max(35, first.__match_score - 12)) {
+    return {
+      status: "ambiguous",
+      opportunity: null,
+      matches: scored.slice(0, 5),
+      targetText,
+      resolvedBy: "ambiguous_text"
     };
   }
 
   return {
-    shouldDerive: false,
-    reason: null
+    status: "resolved",
+    opportunity: first,
+    matches: [first],
+    targetText,
+    resolvedBy: "text_search"
   };
 }
 
 /* =========================================================
-   ANÁLISIS DE DATOS Y SCORE
+   PIPELINE
 ========================================================= */
 
-function parseJsonObjectFromText(text: string): any {
-  const clean = cleanText(text);
+function matchPipelineEstado(estados: AnyRecord[], canonical: PipelineCanonical | null) {
+  if (!canonical) return null;
 
-  if (!clean) return {};
+  const synonyms = [canonical, ...(PIPELINE_SYNONYMS[canonical] || [])].map(normalizeHumanText);
 
-  try {
-    return JSON.parse(clean);
-  } catch {
-    // continúa abajo
-  }
+  const preferredNames: Record<PipelineCanonical, string[]> = {
+    GANADA: ["ganada"],
+    PERDIDA: ["perdida"],
+    PRESUPUESTADA: ["presupuestada"],
+    EN_GESTION: ["en gestion", "en gestión"],
+    SIN_ATENDER: ["sin atender"]
+  };
 
-  const match = clean.match(/\{[\s\S]*\}/);
+  const preferred = (preferredNames[canonical] || []).map(normalizeHumanText);
 
-  if (!match) return {};
+  return (
+    estados.find((estado) => preferred.includes(normalizeHumanText(estado.nombre))) ||
+    estados.find((estado) => {
+      const nombre = normalizeHumanText(estado.nombre);
+      const resultado = normalizeHumanText(estado.resultado);
 
-  try {
-    return JSON.parse(match[0]);
-  } catch {
-    return {};
-  }
+      return synonyms.some((word) => {
+        return nombre === word || resultado === word;
+      });
+    }) ||
+    estados.find((estado) => {
+      const nombre = normalizeHumanText(estado.nombre);
+      const resultado = normalizeHumanText(estado.resultado);
+
+      return synonyms.some((word) => {
+        return nombre.includes(word) || word.includes(nombre) || resultado.includes(word);
+      });
+    }) ||
+    null
+  );
 }
 
-function normalizeDetectedLeadData(value: any) {
-  const detected = value && typeof value === "object" ? value : {};
-  const result: Record<string, unknown> = {};
-
-  const nombre = cleanText(detected.nombre);
-  const destino = cleanText(detected.destino);
-
-  const origen =
-    cleanText(detected.origen) ||
-    cleanText(detected.ciudad_origen) ||
-    cleanText(detected.salida_desde);
-
-  const fechasTentativas =
-    cleanText(detected.fechas_tentativas) ||
-    cleanText(detected.fecha) ||
-    cleanText(detected.fechas) ||
-    cleanText(detected.mes);
-
-  const cantidadPasajeros =
-    cleanText(detected.cantidad_pasajeros) ||
-    cleanText(detected.pax) ||
-    cleanText(detected.pasajeros) ||
-    cleanText(detected.personas);
-
-  const presupuestoAproximado =
-    cleanText(detected.presupuesto_aproximado) ||
-    cleanText(detected.presupuesto);
-
-  const tipoViaje =
-    cleanText(detected.tipo_viaje) ||
-    cleanText(detected.tipo_de_viaje);
-
-  if (nombre) result.nombre = nombre;
-  if (destino) result.destino = destino;
-  if (origen) result.origen = origen;
-  if (fechasTentativas) result.fechas_tentativas = fechasTentativas;
-  if (cantidadPasajeros) result.cantidad_pasajeros = cantidadPasajeros;
-  if (presupuestoAproximado) result.presupuesto_aproximado = presupuestoAproximado;
-  if (tipoViaje) result.tipo_viaje = tipoViaje;
-
-  return result;
-}
-
-function calculateOpportunityScore(params: {
-  campos: any[];
-  datos: Record<string, unknown>;
+async function movePipeline(params: {
+  supabase: any;
+  opportunity: AnyRecord;
+  estados: AnyRecord[];
+  message: string;
+  userId: string | null;
 }) {
-  const campos = params.campos || [];
-  const datos = params.datos || {};
+  const canonical = detectPipelineCanonical(params.message);
+  const estado = matchPipelineEstado(params.estados, canonical);
 
-  let score = 0;
+  if (!canonical || !estado) {
+    return {
+      ok: false,
+      text:
+        "Entendí que querés mover la oportunidad, pero no pude identificar el estado destino. Podés decir: ganada, perdida, presupuestada, en gestión o sin atender.",
+      canonical,
+      estado: null
+    };
+  }
 
-  for (const campo of campos) {
-    const clave = cleanText(campo.clave);
-    const peso = Number(campo.peso || 0);
+  const previousEstadoId = params.opportunity.estado_id || null;
 
-    if (!clave || !peso) continue;
+  const { error } = await params.supabase
+    .from("lead_oportunidades")
+    .update({
+      estado_id: estado.id,
+      updated_at: getNowIso(),
+      manual_updated_at: getNowIso(),
+      manual_updated_by: params.userId
+    })
+    .eq("id", params.opportunity.id);
 
-    const value = datos[clave];
+  if (error) throw error;
 
-    if (value !== null && value !== undefined && cleanText(value)) {
-      score += peso;
+  const nombre = getOpportunityName(params.opportunity);
+
+  return {
+    ok: true,
+    text: `Listo. Moví ${nombre} a "${estado.nombre}".`,
+    canonical,
+    estado,
+    previousEstadoId,
+    context_update: buildContextUpdate({
+      ...params.opportunity,
+      estado_id: estado.id,
+      updated_at: getNowIso()
+    })
+  };
+}
+
+/* =========================================================
+   SCORE / RECALIFICACIÓN
+========================================================= */
+
+function getCampoNombre(campo: AnyRecord) {
+  return (
+    cleanText(campo.campo) ||
+    cleanText(campo.key) ||
+    cleanText(campo.nombre) ||
+    cleanText(campo.slug) ||
+    cleanText(campo.codigo)
+  );
+}
+
+function getCampoPeso(campo: AnyRecord) {
+  const value =
+    campo.peso ??
+    campo.score ??
+    campo.puntos ??
+    campo.valor ??
+    campo.weight ??
+    10;
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 10;
+}
+
+function hasUsefulValue(value: unknown) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value as AnyRecord).length > 0;
+  return true;
+}
+
+function calculateScore(opportunity: AnyRecord, campos: AnyRecord[]) {
+  const data = mergedOpportunityData(opportunity);
+
+  const activeCampos = (campos || []).filter((campo) => {
+    if ("activo" in campo) return campo.activo !== false;
+    if ("enabled" in campo) return campo.enabled !== false;
+    return true;
+  });
+
+  if (activeCampos.length > 0) {
+    let totalWeight = 0;
+    let achieved = 0;
+    const missing: string[] = [];
+    const present: string[] = [];
+
+    for (const campo of activeCampos) {
+      const campoNombre = getCampoNombre(campo);
+      const peso = getCampoPeso(campo);
+
+      if (!campoNombre) continue;
+
+      totalWeight += peso;
+
+      const value = getValueByLooseKey(data, campoNombre);
+
+      if (hasUsefulValue(value)) {
+        achieved += peso;
+        present.push(campoNombre);
+      } else {
+        missing.push(campoNombre);
+      }
+    }
+
+    const score = totalWeight > 0
+      ? Math.round((achieved / totalWeight) * 100)
+      : Number(opportunity.score || 0);
+
+    return {
+      score: Math.max(0, Math.min(100, score)),
+      missing,
+      present,
+      mode: "cande_campos"
+    };
+  }
+
+  const fallbackChecks = [
+    ["destino", ["destino", "viaje", "lugar"]],
+    ["fecha", ["fecha", "salida", "desde", "regreso"]],
+    ["pasajeros", ["pax", "pasajeros", "adultos", "menores"]],
+    ["presupuesto", ["presupuesto", "budget", "monto"]],
+    ["origen", ["origen", "salida", "ciudad"]],
+    ["telefono", ["telefono", "teléfono", "whatsapp"]]
+  ];
+
+  const missing: string[] = [];
+  let achieved = 0;
+
+  for (const [label, keys] of fallbackChecks) {
+    const found =
+      keys.some((key) => hasUsefulValue(getValueByLooseKey(data, key))) ||
+      hasUsefulValue((opportunity as AnyRecord)[label]);
+
+    if (found) achieved += 1;
+    else missing.push(label);
+  }
+
+  return {
+    score: Math.round((achieved / fallbackChecks.length) * 100),
+    missing,
+    present: [],
+    mode: "fallback"
+  };
+}
+
+async function recalificarOpportunity(params: {
+  supabase: any;
+  opportunity: AnyRecord;
+  campos: AnyRecord[];
+  userId: string | null;
+}) {
+  const previousScore = Number(params.opportunity.score || 0);
+  const result = calculateScore(params.opportunity, params.campos);
+
+  const { error } = await params.supabase
+    .from("lead_oportunidades")
+    .update({
+      score: result.score,
+      last_score_at: getNowIso(),
+      updated_at: getNowIso(),
+      manual_updated_at: getNowIso(),
+      manual_updated_by: params.userId
+    })
+    .eq("id", params.opportunity.id);
+
+  if (error) throw error;
+
+  const nombre = getOpportunityName(params.opportunity);
+
+  const faltantesText =
+    result.missing.length > 0
+      ? ` Faltan datos: ${result.missing.slice(0, 8).join(", ")}.`
+      : " No detecto datos críticos faltantes.";
+
+  return {
+    ok: true,
+    previousScore,
+    newScore: result.score,
+    missing: result.missing,
+    text: `Listo. Recalifiqué ${nombre}: score ${previousScore} → ${result.score}.${faltantesText}`,
+    context_update: buildContextUpdate({
+      ...params.opportunity,
+      score: result.score,
+      updated_at: getNowIso()
+    })
+  };
+}
+
+/* =========================================================
+   ACTUALIZAR DATOS DE OPORTUNIDAD
+========================================================= */
+
+function normalizeAiIntent(value: unknown): NiaIntent | null {
+  const intent = cleanText(value).toUpperCase();
+
+  const allowed: NiaIntent[] = [
+    "CAMBIAR_CONTEXTO_OPORTUNIDAD",
+    "MOVER_PIPELINE",
+    "RECALIFICAR_OPORTUNIDAD",
+    "RESUMIR_OPORTUNIDAD",
+    "ACTUALIZAR_DATO_OPORTUNIDAD",
+    "ACTIVAR_CANDE",
+    "DESACTIVAR_CANDE",
+    "REPORTE_DIARIO_VENDEDORES",
+    "CONSULTA_GENERAL"
+  ];
+
+  return allowed.includes(intent as NiaIntent) ? (intent as NiaIntent) : null;
+}
+
+function normalizeOpportunityField(field: unknown): string | null {
+  const normalized = normalizeHumanText(field);
+
+  const map: Record<string, string[]> = {
+    destino: ["destino", "lugar", "ciudad destino", "pais destino", "país destino", "viaje"],
+    origen: ["origen", "salida", "ciudad origen", "desde", "salida desde"],
+    fechas_tentativas: [
+      "fecha",
+      "fechas",
+      "fecha aproximada",
+      "fechas tentativas",
+      "salida",
+      "regreso",
+      "cuando",
+      "cuándo"
+    ],
+    cantidad_pasajeros: [
+      "pasajeros",
+      "pax",
+      "cantidad pasajeros",
+      "cantidad de pasajeros",
+      "personas",
+      "cantidad personas"
+    ],
+    presupuesto_aproximado: [
+      "presupuesto",
+      "budget",
+      "monto",
+      "monto estimado",
+      "presupuesto aproximado"
+    ],
+    tipo_viaje: ["tipo", "tipo viaje", "tipo de viaje", "categoria", "categoría", "motivo"],
+    origen_confirmado: ["origen confirmado", "confirmar origen"],
+    origen_sugerido: ["origen sugerido", "sugerido origen"]
+  };
+
+  for (const [key, aliases] of Object.entries(map)) {
+    if (normalizeHumanText(key) === normalized) return key;
+
+    if (aliases.some((alias) => normalizeHumanText(alias) === normalized)) {
+      return key;
+    }
+
+    if (aliases.some((alias) => normalized.includes(normalizeHumanText(alias)))) {
+      return key;
     }
   }
 
-  return Math.max(0, Math.min(100, Math.round(score)));
+  return null;
 }
 
-async function analyzeLeadDataFromInbound(params: {
-  config: any;
-  campos: any[];
-  conversation: any;
-  opportunity: any;
-  inboundMessage: any | null;
-}) {
-  const inboundText = cleanText(params.inboundMessage?.text);
+function extractDatoUpdateFallback(message: string): { field: string; value: string } | null {
+  const raw = cleanText(message);
 
-  const currentDatos =
-    params.opportunity?.datos && typeof params.opportunity.datos === "object"
+  const fieldPatterns = [
+    {
+      field: "destino",
+      patterns: [
+        /destino\s+(?:a|por|es|sea|seria|sería)\s+(.+)$/i,
+        /(?:cambiar|cambia|cambiá|cambiale|modificar|actualizar|poner|poné|pone).*destino.*(?:a|por|es|sea|seria|sería)\s+(.+)$/i
+      ]
+    },
+    {
+      field: "origen",
+      patterns: [
+        /origen\s+(?:a|por|es|sea|seria|sería)\s+(.+)$/i,
+        /(?:cambiar|cambia|cambiá|cambiale|modificar|actualizar|poner|poné|pone).*origen.*(?:a|por|es|sea|seria|sería)\s+(.+)$/i
+      ]
+    },
+    {
+      field: "fechas_tentativas",
+      patterns: [
+        /fecha(?:s)?\s+(?:a|por|es|son|sea|seria|sería)\s+(.+)$/i,
+        /(?:cambiar|cambia|cambiá|cambiale|modificar|actualizar|poner|poné|pone).*fecha(?:s)?.*(?:a|por|es|son|sea|seria|sería)\s+(.+)$/i
+      ]
+    },
+    {
+      field: "cantidad_pasajeros",
+      patterns: [
+        /(?:pasajeros|pax|personas)\s+(?:a|son|es|sean)\s+(.+)$/i,
+        /(?:cambiar|cambia|cambiá|cambiale|modificar|actualizar|poner|poné|pone).*(?:pasajeros|pax|personas).*(?:a|son|es|sean)\s+(.+)$/i
+      ]
+    },
+    {
+      field: "presupuesto_aproximado",
+      patterns: [
+        /presupuesto\s+(?:a|es|sea|seria|sería)\s+(.+)$/i,
+        /(?:cambiar|cambia|cambiá|cambiale|modificar|actualizar|poner|poné|pone).*presupuesto.*(?:a|es|sea|seria|sería)\s+(.+)$/i
+      ]
+    },
+    {
+      field: "tipo_viaje",
+      patterns: [
+        /tipo(?: de viaje)?\s+(?:a|es|sea|seria|sería)\s+(.+)$/i,
+        /(?:cambiar|cambia|cambiá|cambiale|modificar|actualizar|poner|poné|pone).*tipo(?: de viaje)?.*(?:a|es|sea|seria|sería)\s+(.+)$/i
+      ]
+    }
+  ];
+
+  if (!detectDatoUpdateIntent(raw)) return null;
+
+  for (const item of fieldPatterns) {
+    for (const pattern of item.patterns) {
+      const match = raw.match(pattern);
+      const value = cleanText(match?.[1])
+        .replace(/[.。]+$/g, "")
+        .replace(/\s+por favor$/i, "")
+        .trim();
+
+      if (value) {
+        return {
+          field: item.field,
+          value
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function coerceOpportunityValue(field: string, value: any) {
+  if (field === "origen_confirmado") {
+    const normalized = normalizeHumanText(value);
+    if (["si", "sí", "true", "confirmado", "confirmada"].includes(normalized)) return true;
+    if (["no", "false", "sin confirmar"].includes(normalized)) return false;
+  }
+
+  return typeof value === "string" ? value.trim() : value;
+}
+
+async function updateOpportunityDato(params: {
+  supabase: any;
+  opportunity: AnyRecord;
+  field: string | null;
+  value: any;
+  userId: string | null;
+}) {
+  const normalizedField = normalizeOpportunityField(params.field);
+
+  if (!normalizedField) {
+    return {
+      ok: false,
+      text:
+        "Entendí que querés modificar un dato de la oportunidad, pero no pude identificar qué campo cambiar. Podés decir: destino, origen, fechas, pasajeros o presupuesto."
+    };
+  }
+
+  const cleanValue = coerceOpportunityValue(normalizedField, params.value);
+
+  if (cleanValue === null || cleanValue === undefined || cleanText(cleanValue) === "") {
+    return {
+      ok: false,
+      text: `Entendí que querés modificar "${normalizedField}", pero no detecté el nuevo valor.`
+    };
+  }
+
+  const previousDatos =
+    params.opportunity.datos && typeof params.opportunity.datos === "object"
       ? params.opportunity.datos
       : {};
 
-  const baseDatos: Record<string, unknown> = {
-    ...currentDatos,
-
-    nombre:
-      cleanText(currentDatos.nombre) ||
-      cleanText(currentDatos.contacto_nombre) ||
-      cleanText(currentDatos.pasajero) ||
-      cleanText(params.conversation?.titulo) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "Sin nombre",
-
-    contacto_nombre:
-      cleanText(currentDatos.contacto_nombre) ||
-      cleanText(currentDatos.nombre) ||
-      cleanText(currentDatos.pasajero) ||
-      cleanText(params.conversation?.titulo) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "Sin nombre",
-
-    pasajero:
-      cleanText(currentDatos.pasajero) ||
-      cleanText(currentDatos.nombre) ||
-      cleanText(currentDatos.contacto_nombre) ||
-      cleanText(params.conversation?.titulo) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "Sin nombre",
-
-    telefono:
-      cleanText(currentDatos.telefono) ||
-      cleanText(currentDatos.wa_phone) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "",
-
-    wa_phone:
-      cleanText(currentDatos.wa_phone) ||
-      cleanText(currentDatos.telefono) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "",
-
-    ultimo_mensaje: inboundText || cleanText(currentDatos.ultimo_mensaje) || null,
-    origen_livenos: true,
-    conversation_id: params.conversation?.id || params.opportunity?.conversacion_id || null
+  const nextDatos = {
+    ...previousDatos,
+    [normalizedField]: cleanValue
   };
 
-  if (!inboundText || isGreetingOnly(inboundText)) {
-    const score = calculateOpportunityScore({
-      campos: params.campos,
-      datos: baseDatos
-    });
+  const { error } = await params.supabase
+    .from("lead_oportunidades")
+    .update({
+      datos: nextDatos,
+      updated_at: getNowIso(),
+      manual_updated_at: getNowIso(),
+      manual_updated_by: params.userId
+    })
+    .eq("id", params.opportunity.id);
 
-    return {
-      detected_data: {},
-      datos: baseDatos,
-      score,
-      ai_used: false,
-      ai_error: null
-    };
-  }
+  if (error) throw error;
 
-  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  const nombre = getOpportunityName(params.opportunity);
+  const label = normalizedField.replaceAll("_", " ");
 
-  let detectedData: Record<string, unknown> = {};
-  let aiError: string | null = null;
-
-  if (apiKey) {
-    try {
-      const camposPrompt = (params.campos || [])
-        .map((campo: any) => {
-          return `- ${campo.clave}: ${campo.etiqueta}. Pregunta sugerida: ${campo.pregunta_sugerida || "—"}`;
-        })
-        .join("\n");
-
-      const response = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model:
-            cleanText(params.config?.modelo) ||
-            Deno.env.get("CANDE_OPENAI_MODEL") ||
-            "gpt-4o-mini",
-          input: [
-            {
-              role: "system",
-              content: `
-Extraé datos comerciales de turismo desde un mensaje de WhatsApp.
-
-Respondé SOLO JSON válido. No expliques nada.
-
-Claves permitidas:
-{
-  "nombre": string | null,
-  "destino": string | null,
-  "origen": string | null,
-  "fechas_tentativas": string | null,
-  "cantidad_pasajeros": string | null,
-  "presupuesto_aproximado": string | null,
-  "tipo_viaje": string | null
-}
-
-Campos configurados:
-${camposPrompt}
-
-Reglas:
-- Si el mensaje es un destino, guardalo en "destino".
-- Si dice "Buzios", "Búzios", "Natal", "Rio", "Europa", "Caribe", etc., eso es destino.
-- Si dice "desde Córdoba", "salimos de Córdoba", "partimos de Buenos Aires", guardalo en "origen".
-- Si dice un mes, fecha o rango, guardalo en "fechas_tentativas".
-- Si dice "somos 2", "viajamos 4", "2 adultos", "somos dos", guardalo en "cantidad_pasajeros".
-- Si dice plata, USD, pesos o presupuesto, guardalo en "presupuesto_aproximado".
-- No inventes datos.
-- Si no hay dato claro, devolvé null.
-`.trim()
-            },
-            {
-              role: "user",
-              content: `
-Datos actuales:
-${formatJson(baseDatos)}
-
-Mensaje nuevo del pasajero:
-${inboundText}
-`.trim()
-            }
-          ]
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || data.error) {
-        aiError = data?.error?.message || `OpenAI rechazó extracción. HTTP ${response.status}`;
-      } else {
-        const outputText =
-          data.output_text ||
-          data.output?.[0]?.content?.[0]?.text ||
-          data.output?.[0]?.content?.[0]?.content ||
-          "";
-
-        detectedData = normalizeDetectedLeadData(parseJsonObjectFromText(outputText));
-      }
-    } catch (error) {
-      aiError = getErrorMessage(error);
-    }
-  }
-
-  if (
-    !cleanText(baseDatos.destino) &&
-    !cleanText(detectedData.destino) &&
-    inboundText.length >= 3 &&
-    inboundText.length <= 80 &&
-    !inboundText.includes("?") &&
-    !isGreetingOnly(inboundText)
-  ) {
-    const normalized = normalizeForIntent(inboundText);
-
-    const looksLikeOnlyOrigin =
-      normalized.includes("desde ") ||
-      normalized.includes("salimos de ") ||
-      normalized.includes("partimos de ");
-
-    if (!looksLikeOnlyOrigin) {
-      detectedData.destino = inboundText;
-    }
-  }
-
-  const mergedDatos = {
-    ...baseDatos,
-    ...Object.fromEntries(
-      Object.entries(detectedData).filter(([, value]) => cleanText(value))
-    ),
-    ultimo_mensaje: inboundText || baseDatos.ultimo_mensaje
+  const updatedOpportunity = {
+    ...params.opportunity,
+    datos: nextDatos,
+    updated_at: getNowIso()
   };
-
-  const score = calculateOpportunityScore({
-    campos: params.campos,
-    datos: mergedDatos
-  });
 
   return {
-    detected_data: detectedData,
-    datos: mergedDatos,
-    score,
-    ai_used: Boolean(apiKey),
-    ai_error: aiError
+    ok: true,
+    text: `Listo. Actualicé ${label} de ${nombre} a "${cleanValue}".`,
+    field: normalizedField,
+    value: cleanValue,
+    previous_value: previousDatos[normalizedField] ?? null,
+    context_update: buildContextUpdate(updatedOpportunity)
   };
 }
 
 /* =========================================================
-   PROMPTS
+   CANDE
 ========================================================= */
 
-function buildSystemPrompt(params: {
-  config: any;
-  campos: any[];
-  faqs: any[];
-  palabrasClave: any[];
-  deriveInfo: any;
+async function setCandeStatus(params: {
+  supabase: any;
+  opportunity: AnyRecord;
+  enabled: boolean;
+  userId: string | null;
 }) {
-  const config = params.config || {};
+  const { error } = await params.supabase
+    .from("lead_oportunidades")
+    .update({
+      cande_activa: params.enabled,
+      updated_at: getNowIso(),
+      manual_updated_at: getNowIso(),
+      manual_updated_by: params.userId
+    })
+    .eq("id", params.opportunity.id);
 
-  const nombreIa = getNombreIa(config);
-  const marcaVisible = getMarcaVisible(config);
+  if (error) throw error;
 
-  const promptBase =
-    cleanText(config.prompt_base) ||
-    `Sos ${nombreIa}, asistente virtual de ${marcaVisible}. Atendés consultas iniciales por WhatsApp.`;
+  const nombre = getOpportunityName(params.opportunity);
 
-  const tono =
-    cleanText(config.tono) ||
-    "cálido, claro, profesional, breve y natural para WhatsApp";
-
-  const reglasDuras =
-    cleanText(config.reglas_duras) ||
-    "No des precios concretos. No prometas disponibilidad. No inventes vuelos, hoteles, tarifas ni condiciones. No confirmes reservas. No solicites datos sensibles de pago.";
-
-  const datosARelevar = config.datos_a_relevar || [];
-  const cosasProhibidas = config.cosas_prohibidas || [];
-
-  const mensajeInicial = getMensajeInicial(config);
-  const mensajeFaltaInfo = getMensajeFaltaInfo(config);
-  const mensajeNoEntiende = getMensajeNoEntiende(config);
-  const mensajeFueraHorario = getMensajeFueraHorario(config);
-  const mensajeDerivacion = getMensajeDerivacion(config);
-
-  return `
-${promptBase}
-
-IDENTIDAD CONFIGURADA:
-- Nombre de la IA: ${nombreIa}
-- Marca visible: ${marcaVisible}
-- Canal: WhatsApp
-- Rol: asistente de pasajeros / primer filtro comercial.
-- No menciones NIA, Supabase, pipeline, score, oportunidad, cande_config ni herramientas internas.
-- Respondé SIEMPRE en español de Argentina.
-- Nunca respondas en inglés.
-
-TONO CONFIGURADO:
-${tono}
-
-MENSAJES CONFIGURADOS:
-- Mensaje inicial sugerido: ${mensajeInicial}
-- Si falta información: ${mensajeFaltaInfo}
-- Si no entendés: ${mensajeNoEntiende}
-- Fuera de horario: ${mensajeFueraHorario}
-- Derivación a asesor: ${mensajeDerivacion}
-
-DATOS A RELEVAR DESDE CONFIGURACIÓN:
-${formatList(datosARelevar)}
-
-CAMPOS CONFIGURADOS EN EL PANEL:
-${formatRowsForPrompt(params.campos)}
-
-FAQS / CONOCIMIENTO CONFIGURADO:
-${formatRowsForPrompt(params.faqs)}
-
-PALABRAS CLAVE / CRITERIOS CONFIGURADOS:
-${formatRowsForPrompt(params.palabrasClave)}
-
-REGLAS DURAS CONFIGURADAS:
-${reglasDuras}
-
-COSAS PROHIBIDAS CONFIGURADAS:
-${formatList(cosasProhibidas)}
-
-REGLAS OPERATIVAS:
-- Respondé breve, natural y útil para WhatsApp.
-- No escribas mensajes largos.
-- Pedí datos faltantes de a poco.
-- No hagas interrogatorios largos.
-- Si el pasajero solo saluda, presentate con el mensaje inicial configurado o una variante natural.
-- Si ya tenés destino pero falta fecha, preguntá fecha o mes aproximado.
-- Si ya tenés fecha pero falta cantidad de pasajeros, preguntá cantidad de pasajeros.
-- Si ya tenés destino, fecha y cantidad de pasajeros, preguntá origen o ciudad de salida.
-- Si hay menores, pedí edades.
-- Si pide precio, explicá que necesitás datos básicos para que un asesor pueda cotizar correctamente.
-- No inventes precios, hoteles, vuelos, tarifas, cupos, promociones ni disponibilidad.
-- No confirmes reservas.
-- No pidas tarjetas, claves, DNI completo ni datos sensibles de pago.
-- Si corresponde derivar, usá el mensaje de derivación configurado y no sigas indagando.
-
-DERIVACIÓN:
-${
-  params.deriveInfo?.shouldDerive
-    ? `- En este mensaje corresponde derivar al equipo. Motivo interno: ${params.deriveInfo.reason}. Respondé usando una versión natural del mensaje de derivación configurado.`
-    : "- No derives salvo que el pasajero lo pida, haya urgencia clara o el contexto lo indique."
-}
-
-FORMATO:
-- Devolvé solamente el texto final que se enviará al pasajero.
-- No uses markdown.
-- No expliques tu razonamiento.
-- No digas “I'm sorry, I can't assist with that”.
-- Si no podés responder algo, pedí los datos faltantes en español.
-`.trim();
-}
-
-function buildUserPrompt(params: {
-  config: any;
-  conversation: any;
-  opportunity: any;
-  messages: any[];
-  inboundMessage: any | null;
-}) {
-  const conversation = params.conversation;
-  const opportunity = params.opportunity;
-  const datos = opportunity?.datos || {};
-  const lastMessages = params.messages.map(formatMessageForPrompt).join("\n") || "Sin mensajes previos.";
-
-  const passengerName =
-    cleanText(datos.nombre) ||
-    cleanText(datos.contacto_nombre) ||
-    cleanText(datos.pasajero) ||
-    cleanText(conversation?.titulo) ||
-    "Sin nombre";
-
-  const passengerPhone =
-    cleanText(datos.wa_phone) ||
-    cleanText(datos.telefono) ||
-    cleanText(conversation?.wa_phone) ||
-    "—";
-
-  return `
-PASAJERO:
-Nombre/título: ${passengerName}
-WhatsApp: ${passengerPhone}
-
-DATOS DETECTADOS DE LA OPORTUNIDAD:
-${formatJson(datos)}
-
-MENSAJE QUE DISPARÓ CANDE:
-${params.inboundMessage ? formatMessageForPrompt(params.inboundMessage) : "No vino inbound_message_id. Usar último mensaje inbound de la conversación."}
-
-ÚLTIMOS MENSAJES:
-${lastMessages}
-
-INSTRUCCIÓN:
-Respondé solo el próximo mensaje que ${getNombreIa(params.config)} debe enviar al pasajero por WhatsApp.
-La respuesta debe estar en español de Argentina.
-`.trim();
+  return {
+    ok: true,
+    text: params.enabled
+      ? `Listo. Activé CANDE para ${nombre}.`
+      : `Listo. Desactivé CANDE para ${nombre}.`,
+    context_update: buildContextUpdate({
+      ...params.opportunity,
+      cande_activa: params.enabled,
+      updated_at: getNowIso()
+    })
+  };
 }
 
 /* =========================================================
-   OPENAI + RESPUESTA SEGURA
+   RESÚMENES
 ========================================================= */
 
-async function callOpenAI(params: {
-  config: any;
-  systemPrompt: string;
-  userPrompt: string;
+function getScoreTemperature(score: number) {
+  if (score >= 75) return "caliente";
+  if (score >= 45) return "tibia";
+  return "fría / incompleta";
+}
+
+function cleanDisplayValue(value: unknown, fallback = "—") {
+  const text = cleanText(value);
+  return text || fallback;
+}
+
+function summarizeOpportunity(opportunity: AnyRecord) {
+  const data = mergedOpportunityData(opportunity);
+
+  const nombre = getOpportunityName(opportunity);
+  const telefono = getOpportunityPhone(opportunity);
+  const email = getOpportunityEmail(opportunity);
+
+  const destino =
+    cleanText(getValueByLooseKey(data, "destino")) ||
+    cleanText(getValueByLooseKey(data, "lugar")) ||
+    cleanText(getValueByLooseKey(data, "ciudad_destino"));
+
+  const origenConfirmado =
+    cleanText(getValueByLooseKey(data, "origen")) ||
+    cleanText(getValueByLooseKey(data, "origen_confirmado"));
+
+  const origenSugerido =
+    cleanText(getValueByLooseKey(data, "origen_sugerido")) ||
+    cleanText(getValueByLooseKey(data, "origen_sugerido_provincia"));
+
+  const aeropuertoSugerido =
+    cleanText(getValueByLooseKey(data, "origen_sugerido_aeropuerto")) ||
+    cleanText(getValueByLooseKey(data, "origen_sugerido_aeropuerto_nombre"));
+
+  const fechas =
+    cleanText(getValueByLooseKey(data, "fechas_tentativas")) ||
+    cleanText(getValueByLooseKey(data, "fecha_tentativa")) ||
+    cleanText(getValueByLooseKey(data, "fechas")) ||
+    cleanText(getValueByLooseKey(data, "fecha")) ||
+    cleanText(getValueByLooseKey(data, "salida"));
+
+  const pasajeros =
+    cleanText(getValueByLooseKey(data, "cantidad_pasajeros")) ||
+    cleanText(getValueByLooseKey(data, "pasajeros")) ||
+    cleanText(getValueByLooseKey(data, "pax"));
+
+  const presupuesto =
+    cleanText(getValueByLooseKey(data, "presupuesto_aproximado")) ||
+    cleanText(getValueByLooseKey(data, "presupuesto")) ||
+    cleanText(getValueByLooseKey(data, "budget"));
+
+  const tipoViaje =
+    cleanText(getValueByLooseKey(data, "tipo_viaje")) ||
+    cleanText(getValueByLooseKey(data, "tipo de viaje")) ||
+    cleanText(getValueByLooseKey(data, "motivo"));
+
+  const ultimoMensaje =
+    cleanText(getValueByLooseKey(data, "ultimo_mensaje")) ||
+    cleanText(opportunity.ultimo_mensaje) ||
+    cleanText(opportunity.last_message_preview);
+
+  const score = Number(opportunity.score || 0);
+  const temperatura = getScoreTemperature(score);
+  const cande = opportunity.cande_activa ? "activa" : "pausada";
+
+  const faltantes: string[] = [];
+
+  if (!destino) faltantes.push("Destino");
+  if (!origenConfirmado) faltantes.push("Confirmar origen / ciudad de salida");
+  if (!fechas) faltantes.push("Fechas tentativas");
+  if (!pasajeros) faltantes.push("Cantidad de pasajeros");
+  if (!presupuesto) faltantes.push("Presupuesto aproximado");
+  if (!tipoViaje) faltantes.push("Tipo de viaje");
+
+  const origenText = origenConfirmado
+    ? origenConfirmado
+    : origenSugerido
+      ? `${origenSugerido}${aeropuertoSugerido ? ` (${aeropuertoSugerido})` : ""} · sugerido, falta confirmar`
+      : "sin confirmar";
+
+  const lecturaComercial =
+    score >= 75
+      ? "La oportunidad tiene buena calidad comercial. Conviene avanzar rápido con propuesta o seguimiento directo."
+      : score >= 45
+        ? "La oportunidad tiene interés, pero todavía necesita completar algunos datos antes de cotizar con precisión."
+        : "La oportunidad está incompleta. Antes de presupuestar conviene confirmar los datos básicos para evitar una cotización débil.";
+
+  const proximaAccion =
+    faltantes.length > 0
+      ? `Confirmar: ${faltantes.slice(0, 4).join(", ")}.`
+      : "Avanzar con presupuesto o propuesta comercial según disponibilidad.";
+
+  return [
+    "**Contexto de la oportunidad**",
+    "",
+    `**Pasajero:** ${cleanDisplayValue(nombre)}`,
+    telefono ? `**WhatsApp:** ${telefono}` : null,
+    email ? `**Email:** ${email}` : null,
+    `**Destino:** ${cleanDisplayValue(destino, "sin definir")}`,
+    `**Origen:** ${origenText}`,
+    `**Fechas:** ${cleanDisplayValue(fechas, "sin definir")}`,
+    `**Pasajeros:** ${cleanDisplayValue(pasajeros, "sin definir")}`,
+    `**Presupuesto:** ${cleanDisplayValue(presupuesto, "sin definir")}`,
+    tipoViaje ? `**Tipo de viaje:** ${tipoViaje}` : null,
+    `**Score:** ${score} · ${temperatura}`,
+    `**CANDE:** ${cande}`,
+    ultimoMensaje ? `**Último mensaje:** “${ultimoMensaje}”` : null,
+    "",
+    "**Faltantes**",
+    faltantes.length > 0
+      ? faltantes.map((item) => `- ${item}`).join("\n")
+      : "- No detecto datos comerciales críticos faltantes.",
+    "",
+    "**Lectura comercial**",
+    lecturaComercial,
+    "",
+    "**Próxima acción sugerida**",
+    proximaAccion
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/* =========================================================
+   CAMBIO DE CONTEXTO
+========================================================= */
+
+function changeContextText(opportunity: AnyRecord) {
+  const name = getOpportunityName(opportunity);
+  const phone = getOpportunityPhone(opportunity);
+  const destino = getOpportunityDestino(opportunity);
+  const score = Number(opportunity.score || 0);
+
+  return [
+    `Listo. Cambié el contexto a ${name}.`,
+    phone ? `WhatsApp: ${phone}` : null,
+    destino ? `Destino: ${destino}` : null,
+    `Score: ${score}`,
+    opportunity.cande_activa ? "CANDE: activa" : "CANDE: pausada"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/* =========================================================
+   OPENAI
+========================================================= */
+
+async function interpretWithOpenAI(params: {
+  config: AnyRecord | null;
+  faqs: AnyRecord[];
+  keywords: AnyRecord[];
+  message: string;
+  payload: AnyRecord;
+  opportunity: AnyRecord | null;
+  estados: AnyRecord[];
 }) {
-  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  const apiKey =
+    Deno.env.get("NOSTUR_OPENAI_API_KEY") ||
+    Deno.env.get("OPENAI_API_KEY");
 
-  if (!apiKey) {
-    return {
-      ok: false,
-      text: "",
-      error: "Falta OPENAI_API_KEY."
-    };
-  }
+if (!apiKey) {
+  return {
+    intent: "CONSULTA_GENERAL",
+    answer: "No encontré OPENAI_API_KEY ni NOSTUR_OPENAI_API_KEY dentro de la Edge Function.",
+    confidence: 0
+  } as AiInterpretation;
+}
+  const config = params.config || {};
+  const model = cleanText(config.modelo) || "gpt-4o-mini";
 
-  const model =
-    cleanText(params.config?.modelo) ||
-    Deno.env.get("CANDE_OPENAI_MODEL") ||
-    "gpt-4o-mini";
+  const currentOpportunity = params.opportunity
+    ? {
+        id: params.opportunity.id,
+        nombre: getOpportunityName(params.opportunity),
+        telefono: getOpportunityPhone(params.opportunity),
+        email: getOpportunityEmail(params.opportunity),
+        destino: getOpportunityDestino(params.opportunity),
+        origen: getOpportunityOrigen(params.opportunity),
+        score: params.opportunity.score,
+        estado_id: params.opportunity.estado_id,
+        cande_activa: params.opportunity.cande_activa,
+        datos: mergedOpportunityData(params.opportunity)
+      }
+    : null;
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const systemPrompt = [
+    cleanText(config.prompt_base) ||
+      "Sos NIA, asistente comercial interno de NOSTUR. Interpretás pedidos humanos y devolvés una acción estructurada.",
+    "",
+    "Tono:",
+    cleanText(config.tono) || "claro, profesional, directo, comercial y operativo",
+    "",
+    "Reglas duras:",
+    cleanText(config.reglas_duras) ||
+      "No inventes datos. No envíes mensajes al pasajero. No modifiques datos sensibles sin claridad.",
+    "",
+    "Tu tarea principal es interpretar el pedido del usuario y devolver JSON válido.",
+    "",
+    "Tu tarea principal es interpretar el pedido del usuario y devolver JSON válido.",
+"Si el usuario hace una pregunta general, comercial, operativa o turística, devolvé intent CONSULTA_GENERAL y completá answer con una respuesta útil.",
+"Para consultas generales NO devuelvas answer vacío.",
+"Usá el contexto de la oportunidad actual si existe: destino, origen, fechas, pasajeros, presupuesto, score y datos detectados.",
+"Si falta un dato clave, pedilo de forma natural, sin pedir IDs técnicos.",
+"Si pregunta qué fecha recomendar para un destino, respondé como asesor comercial: temporada, clima, precios, demanda y conveniencia para vender.",
+    "Intenciones posibles:",
+    "- CAMBIAR_CONTEXTO_OPORTUNIDAD",
+    "- MOVER_PIPELINE",
+    "- RECALIFICAR_OPORTUNIDAD",
+    "- RESUMIR_OPORTUNIDAD",
+    "- ACTUALIZAR_DATO_OPORTUNIDAD",
+    "- ACTIVAR_CANDE",
+    "- DESACTIVAR_CANDE",
+    "- REPORTE_DIARIO_VENDEDORES",
+    "- CONSULTA_GENERAL",
+    "",
+    "Campos modificables de oportunidad:",
+    "- destino",
+    "- origen",
+    "- fechas_tentativas",
+    "- cantidad_pasajeros",
+    "- presupuesto_aproximado",
+    "- tipo_viaje",
+    "- origen_confirmado",
+    "- origen_sugerido",
+    "",
+    "Si el usuario dice 'cambiale el destino a Miami', devolvé intent ACTUALIZAR_DATO_OPORTUNIDAD, field destino, value Miami.",
+    "Si el usuario dice 'poné 4 pasajeros', devolvé field cantidad_pasajeros, value 4.",
+    "Si el usuario dice 'cambiá fecha a enero', devolvé field fechas_tentativas, value enero.",
+    "Si el usuario está parado en una oportunidad, usá esa oportunidad aunque no nombre al pasajero.",
+    "Si el pedido es ambiguo o riesgoso, devolvé needs_confirmation true.",
+    "",
+    "FAQs internas disponibles:",
+    JSON.stringify(params.faqs || []),
+    "",
+    "Keywords internas disponibles:",
+    JSON.stringify(params.keywords || []),
+    "",
+    "Respondé solamente JSON con esta forma:",
+    JSON.stringify({
+      intent: "ACTUALIZAR_DATO_OPORTUNIDAD",
+      targetText: "",
+      field: "destino",
+      value: "Miami",
+      needs_confirmation: false,
+      answer: "",
+      confidence: 0.9
+    })
+  ].join("\n");
+
+  const userContent = {
+    message: params.message,
+    source: params.payload.source || params.payload.context?.source || null,
+    module: params.payload.module || params.payload.context?.module || null,
+    current_context: params.payload.context || {},
+    current_opportunity: currentOpportunity,
+    pipeline_estados: params.estados.map((estado) => ({
+      id: estado.id,
+      nombre: estado.nombre,
+      resultado: estado.resultado,
+      es_final: estado.es_final
+    }))
+  };
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -1159,345 +1790,330 @@ async function callOpenAI(params: {
     },
     body: JSON.stringify({
       model,
-      input: [
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+      messages: [
         {
           role: "system",
-          content: params.systemPrompt
+          content: systemPrompt
         },
         {
           role: "user",
-          content: params.userPrompt
+          content: JSON.stringify(userContent)
         }
       ]
     })
   });
 
-  const data = await response.json();
+if (!response.ok) {
+  const text = await response.text();
 
-  if (!response.ok || data.error) {
-    return {
-      ok: false,
-      text: "",
-      error:
-        data?.error?.message ||
-        `OpenAI rechazó la solicitud. HTTP ${response.status}`
-    };
-  }
-
-  const text =
-    data.output_text ||
-    data.output?.[0]?.content?.[0]?.text ||
-    data.output?.[0]?.content?.[0]?.content ||
-    "";
-
-  const clean = normalizeWhatsappText(text);
-
-  if (!clean) {
-    return {
-      ok: false,
-      text: "",
-      error: "OpenAI no devolvió texto."
-    };
-  }
+  console.error("[NIA OpenAI] Error:", response.status, text);
 
   return {
-    ok: true,
-    text: clean,
-    error: null
-  };
+    intent: "CONSULTA_GENERAL",
+    answer: `OpenAI respondió con error ${response.status}: ${text.slice(0, 500)}`,
+    confidence: 0
+  } as AiInterpretation;
 }
 
-function isBadCandeResponse(text: string): boolean {
-  const normalized = normalizeForIntent(text);
+  const data = await response.json();
+  const content = data?.choices?.[0]?.message?.content;
 
-  if (!normalized) return true;
+  if (!content) return null;
 
-  const badPhrases = [
-    "i'm sorry, i can't assist with that",
-    "im sorry, i cant assist with that",
-    "i cannot assist with that",
-    "i can't assist with that",
-    "sorry, i can't",
-    "can't assist",
-    "cannot assist",
-    "lo siento, no puedo ayudar",
-    "no puedo ayudarte con eso",
-    "no puedo asistir"
-  ];
+  try {
+    const parsed = JSON.parse(content) as AiInterpretation;
+    const intent = normalizeAiIntent(parsed.intent);
 
-  return badPhrases.some((phrase) => normalized.includes(normalizeForIntent(phrase)));
+    return {
+      ...parsed,
+      intent: intent || undefined
+    };
+} catch (err) {
+  console.error("[NIA OpenAI] JSON inválido:", content, err);
+
+  return {
+    intent: "CONSULTA_GENERAL",
+    answer: `OpenAI respondió, pero NIA no pudo interpretar el JSON. Respuesta recibida: ${String(content).slice(0, 500)}`,
+    confidence: 0
+  } as AiInterpretation;
 }
-
-function fallbackCandeResponse(params: {
-  config: any;
-  conversation: any;
-  opportunity: any;
-  deriveInfo?: any;
-}) {
-  const config = params.config || {};
-  const datos = params.opportunity?.datos || {};
-
-  if (params.deriveInfo?.shouldDerive) {
-    return getMensajeDerivacion(config);
-  }
-
-  const nombre =
-    cleanText(datos.nombre) ||
-    cleanText(datos.contacto_nombre) ||
-    cleanText(datos.pasajero) ||
-    cleanText(params.conversation?.titulo);
-
-  const firstName =
-    nombre && nombre.toLowerCase() !== "sin nombre"
-      ? nombre.split(" ")[0]
-      : "";
-
-  const destino = cleanText(datos.destino);
-  const fechas = cleanText(datos.fechas_tentativas);
-  const pax = cleanText(datos.cantidad_pasajeros);
-  const origen = cleanText(datos.origen);
-
-  if (destino && !fechas) {
-    return `¡Genial${firstName ? `, ${firstName}` : ""}! ${destino} es una muy buena opción. ¿Tenés alguna fecha o mes aproximado para viajar?`;
-  }
-
-  if (destino && fechas && !pax) {
-    return `Perfecto${firstName ? `, ${firstName}` : ""}. ¿Cuántas personas viajarían?`;
-  }
-
-  if (destino && fechas && pax && !origen) {
-    return `Buenísimo${firstName ? `, ${firstName}` : ""}. ¿Desde qué ciudad estarían saliendo?`;
-  }
-
-  if (destino && fechas && pax && origen) {
-    return getMensajeDerivacion(config);
-  }
-
-  const base = getMensajeInicial(config);
-
-  if (firstName && !base.toLowerCase().includes(firstName.toLowerCase())) {
-    return `Hola ${firstName}, soy ${getNombreIa(config)} de ${getMarcaVisible(config)} 😊 ¿En qué puedo ayudarte con tu viaje?`;
-  }
-
-  return base;
-}
-
-function safeCandeText(params: {
-  aiText: string;
-  aiOk: boolean;
-  config: any;
-  conversation: any;
-  opportunity: any;
-  deriveInfo?: any;
-}) {
-  const clean = normalizeWhatsappText(params.aiText);
-
-  if (!params.aiOk || isBadCandeResponse(clean)) {
-    return fallbackCandeResponse({
-      config: params.config,
-      conversation: params.conversation,
-      opportunity: params.opportunity,
-      deriveInfo: params.deriveInfo
-    });
-  }
-
-  return clean;
 }
 
 /* =========================================================
-   DB UPDATES / SEND
+   REPORTES NIA
 ========================================================= */
 
-async function insertOutboundMessage(params: {
-  supabase: any;
-  conversation: any;
-  opportunity: any;
-  config: any;
-  text: string;
-}) {
-  const now = new Date().toISOString();
-  const nombreIa = getNombreIa(params.config);
+function isSellerProfile(profile: AnyRecord) {
+  if (!profile.activo) return false;
+  if (profile.is_support_user) return false;
+  if (profile.visible_en_sistema === false) return false;
 
-  const { data, error } = await params.supabase
-    .from("mensajes")
+  const rol = normalizeHumanText(profile.rol);
+  return (
+    rol.includes("vendedor") ||
+    rol.includes("ventas") ||
+    rol.includes("gerente") ||
+    rol.includes("admin") ||
+    rol.includes("administrador")
+  );
+}
+
+function getProfileDisplayName(profile: AnyRecord) {
+  return (
+    cleanText(profile.display_name) ||
+    cleanText(`${profile.nombre || ""} ${profile.apellido || ""}`) ||
+    cleanText(profile.email) ||
+    "Usuario"
+  );
+}
+
+async function getOrCreateNiaConversationForProfile(supabase: any, profileId: string) {
+  const { data: existing, error: existingError } = await supabase
+    .from("nia_conversaciones")
+    .select("*")
+    .eq("profile_id", profileId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+  if (existing) return existing;
+
+  const { data, error } = await supabase
+    .from("nia_conversaciones")
     .insert({
-      conversacion_id: params.conversation.id,
-      direction: "out",
-      sender_kind: "cande",
-      type: "text",
-      text: params.text,
-      status: "pending",
-      wa_timestamp: now
+      profile_id: profileId,
+      unread_count: 1,
+      last_message_at: getNowIso(),
+      last_message_preview: "Reporte diario de NIA",
+      created_at: getNowIso(),
+      updated_at: getNowIso()
     })
     .select("*")
     .single();
 
   if (error) throw error;
-
-  await params.supabase
-    .from("conversaciones")
-    .update({
-      last_message_preview: `${nombreIa}:\n${params.text}`,
-      last_message_at: now,
-      last_outbound_message_at: now,
-      updated_at: now
-    })
-    .eq("id", params.conversation.id);
-
   return data;
 }
 
-async function markOutboundFailed(params: {
+async function createNiaMessage(params: {
   supabase: any;
-  messageId: string;
-  error: string;
-}) {
-  await params.supabase
-    .from("mensajes")
-    .update({
-      status: "failed",
-      error: params.error
-    })
-    .eq("id", params.messageId);
-}
-
-async function updateOpportunityAfterReply(params: {
-  supabase: any;
-  opportunity: any;
-  conversation: any;
-  leadAnalysis: any;
-  deriveInfo?: any;
-}) {
-  if (!params.opportunity?.id) {
-    throw new Error("No se pudo actualizar oportunidad: falta opportunity.id.");
-  }
-
-  const datosActuales =
-    params.opportunity?.datos && typeof params.opportunity.datos === "object"
-      ? params.opportunity.datos
-      : {};
-
-  const datosAnalizados =
-    params.leadAnalysis?.datos && typeof params.leadAnalysis.datos === "object"
-      ? params.leadAnalysis.datos
-      : {};
-
-  const enrichedDatos = {
-    ...datosActuales,
-    ...datosAnalizados,
-    nombre:
-      cleanText(datosAnalizados.nombre) ||
-      cleanText(datosActuales.nombre) ||
-      cleanText(datosActuales.contacto_nombre) ||
-      cleanText(params.conversation?.titulo) ||
-      "Sin nombre",
-    contacto_nombre:
-      cleanText(datosAnalizados.contacto_nombre) ||
-      cleanText(datosActuales.contacto_nombre) ||
-      cleanText(datosActuales.nombre) ||
-      cleanText(params.conversation?.titulo) ||
-      "Sin nombre",
-    pasajero:
-      cleanText(datosAnalizados.pasajero) ||
-      cleanText(datosActuales.pasajero) ||
-      cleanText(datosActuales.nombre) ||
-      cleanText(params.conversation?.titulo) ||
-      "Sin nombre",
-    telefono:
-      cleanText(datosAnalizados.telefono) ||
-      cleanText(datosActuales.telefono) ||
-      cleanText(datosActuales.wa_phone) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "",
-    wa_phone:
-      cleanText(datosAnalizados.wa_phone) ||
-      cleanText(datosActuales.wa_phone) ||
-      cleanText(datosActuales.telefono) ||
-      cleanText(params.conversation?.wa_phone) ||
-      "",
-    origen_livenos: true,
-    conversation_id: params.conversation?.id || params.opportunity?.conversacion_id || null
-  };
-
-  const nextScore = Number(params.leadAnalysis?.score || 0);
-
-  const updatePayload: Record<string, unknown> = {
-    datos: enrichedDatos,
-    score: nextScore,
-    last_score_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-
-  if (params.deriveInfo?.shouldDerive && !params.opportunity.cande_handoff_requested_at) {
-    updatePayload.cande_handoff_requested_at = new Date().toISOString();
-  }
-
-  const { data, error } = await params.supabase
-    .from("lead_oportunidades")
-    .update(updatePayload)
-    .eq("id", params.opportunity.id)
-    .select("id, datos, score, updated_at, last_score_at, cande_handoff_requested_at")
-    .single();
-
-  if (error) {
-    throw new Error(`No se pudo actualizar lead_oportunidades: ${error.message}`);
-  }
-
-  return data;
-}
-
-async function callWhatsappSendMessage(params: {
-  conversation: any;
-  outboundMessage: any;
+  profileId: string;
   text: string;
+  metadata?: AnyRecord;
 }) {
-  const supabaseUrl = getEnvSupabaseUrl();
-  const serviceRoleKey = getEnvServiceRoleKey();
+  const conversation = await getOrCreateNiaConversationForProfile(params.supabase, params.profileId);
 
-  const response = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send-message`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceRoleKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      source: "cande-reply",
-
-      conversation_id: params.conversation.id,
-      conversacion_id: params.conversation.id,
-
-      message_id: params.outboundMessage.id,
-      mensaje_id: params.outboundMessage.id,
-
-      to: params.conversation.wa_phone,
-      phone: params.conversation.wa_phone,
-      wa_phone: params.conversation.wa_phone,
-
-      type: "text",
+  const { error: messageError } = await params.supabase
+    .from("nia_mensajes")
+    .insert({
+      conversacion_id: conversation.id,
+      direction: "assistant",
       text: params.text,
-      body: params.text,
+      metadata: params.metadata || {},
+      created_at: getNowIso()
+    });
 
-      sender_kind: "cande"
+  if (messageError) throw messageError;
+
+  const { error: updateError } = await params.supabase
+    .from("nia_conversaciones")
+    .update({
+      unread_count: Number(conversation.unread_count || 0) + 1,
+      last_message_at: getNowIso(),
+      last_message_preview: params.text.slice(0, 240),
+      updated_at: getNowIso()
     })
+    .eq("id", conversation.id);
+
+  if (updateError) throw updateError;
+
+  return conversation;
+}
+
+async function generateDailyReports(params: {
+  supabase: any;
+  estados: AnyRecord[];
+}) {
+  const profiles = (await loadProfiles(params.supabase)).filter(isSellerProfile);
+
+  const { data: opportunities, error } = await params.supabase
+    .from("lead_oportunidades")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(500);
+
+  if (error) throw error;
+
+  const finalEstadoIds = new Set(
+    params.estados
+      .filter((estado) => estado.es_final)
+      .map((estado) => estado.id)
+  );
+
+  const sent: AnyRecord[] = [];
+
+  for (const profile of profiles) {
+    const mine = (opportunities || []).filter((opportunity: AnyRecord) => {
+      if (opportunity.assigned_to !== profile.id) return false;
+      if (opportunity.estado_id && finalEstadoIds.has(opportunity.estado_id)) return false;
+      return true;
+    });
+
+    const hot = mine.filter((opportunity: AnyRecord) => Number(opportunity.score || 0) >= 70);
+    const medium = mine.filter((opportunity: AnyRecord) => {
+      const score = Number(opportunity.score || 0);
+      return score >= 40 && score < 70;
+    });
+    const cold = mine.filter((opportunity: AnyRecord) => Number(opportunity.score || 0) < 40);
+
+    const topLines = mine.slice(0, 8).map((opportunity: AnyRecord, index: number) => {
+      const name = getOpportunityName(opportunity);
+      const score = Number(opportunity.score || 0);
+      const destino = getOpportunityDestino(opportunity) || "sin destino";
+
+      return `${index + 1}. ${name} · ${destino} · score ${score}`;
+    });
+
+    const text = [
+      `NIA · Reporte diario para ${getProfileDisplayName(profile)}`,
+      "",
+      `Oportunidades abiertas asignadas: ${mine.length}`,
+      `Calientes: ${hot.length}`,
+      `Medias: ${medium.length}`,
+      `Frías/incompletas: ${cold.length}`,
+      "",
+      mine.length > 0 ? "Prioridad sugerida:" : "No tenés oportunidades abiertas asignadas para revisar.",
+      ...topLines,
+      "",
+      "Sugerencia NIA: priorizá las oportunidades calientes y completá datos faltantes en las incompletas."
+    ].join("\n");
+
+    const conversation = await createNiaMessage({
+      supabase: params.supabase,
+      profileId: profile.id,
+      text,
+      metadata: {
+        type: "daily_report",
+        code_version: CODE_VERSION,
+        opportunity_count: mine.length,
+        hot_count: hot.length,
+        medium_count: medium.length,
+        cold_count: cold.length
+      }
+    });
+
+    sent.push({
+      profile_id: profile.id,
+      profile_name: getProfileDisplayName(profile),
+      conversation_id: conversation.id,
+      opportunity_count: mine.length
+    });
+  }
+
+  return {
+    ok: true,
+    sent,
+    text: `Listo. Generé y envié ${sent.length} reportes diarios de NIA a vendedores/usuarios activos.`
+  };
+}
+
+/* =========================================================
+   LOG NIA
+========================================================= */
+
+async function insertNiaInteraction(params: {
+  supabase: any;
+  userId: string | null;
+  source: string;
+  module: string;
+  action: NiaIntent;
+  conversationId: string | null;
+  oportunidadId: string | null;
+  userMessage: string;
+  assistantResponse: string;
+  context?: AnyRecord;
+  metadata?: AnyRecord;
+  tool?: string;
+  usedOpenai?: boolean;
+  success?: boolean;
+  error?: string | null;
+}) {
+  try {
+    await params.supabase
+      .from("nia_interacciones")
+      .insert({
+        user_id: params.userId,
+        source: params.source,
+        module: params.module,
+        action: params.action,
+        conversation_id: params.conversationId,
+        oportunidad_id: params.oportunidadId,
+        user_message: params.userMessage,
+        assistant_response: params.assistantResponse,
+        context: params.context || {},
+        metadata: {
+          ...(params.metadata || {}),
+          code_version: CODE_VERSION
+        },
+        tool: params.tool || null,
+        used_openai: Boolean(params.usedOpenai),
+        success: params.success !== false,
+        error: params.error || null,
+        created_at: getNowIso()
+      });
+  } catch (err) {
+    console.error("[NIA] No se pudo insertar nia_interacciones:", err);
+  }
+}
+
+/* =========================================================
+   RESPUESTAS HUMANAS
+========================================================= */
+
+function formatAmbiguous(matches: AnyRecord[], targetText: string) {
+  const lines = matches.slice(0, 5).map((opportunity, index) => {
+    const name = getOpportunityName(opportunity);
+    const phone = getOpportunityPhone(opportunity);
+    const score = Number(opportunity.score || 0);
+    const destino = getOpportunityDestino(opportunity) || "sin destino";
+
+    return `${index + 1}. ${name}${phone ? ` · ${phone}` : ""} · ${destino} · score ${score}`;
   });
 
-  let data: any = null;
+  return [
+    `Encontré más de una oportunidad posible para "${targetText || "ese pedido"}".`,
+    "Decime cuál querés usar:",
+    "",
+    ...lines
+  ].join("\n");
+}
 
-  try {
-    data = await response.json();
-  } catch {
-    data = null;
+function notFoundText(targetText: string) {
+  if (targetText) {
+    return `No encontré una oportunidad con "${targetText}". Pasame nombre completo, teléfono o email del pasajero.`;
   }
 
-  if (!response.ok || data?.ok === false || data?.error) {
-    throw new Error(
-      data?.error ||
-      data?.message ||
-      `whatsapp-send-message rechazó el envío. HTTP ${response.status}`
-    );
-  }
+  return "No encontré la oportunidad. Pasame nombre, teléfono o email del pasajero.";
+}
 
-  return data || { ok: true };
+function generalHelpText() {
+  return [
+    "Soy NIA. Puedo ayudarte con acciones comerciales internas.",
+    "",
+    "Ejemplos:",
+    "• Cambiá a Jorge Luis Batica",
+    "• Recalificá a Jorge Luis Batica",
+    "• Pasá a Natalia a presupuestada",
+    "• Marcá a Carlos como vendido",
+    "• Activá CANDE para Mariana",
+    "• Cambiale el destino a Miami",
+    "• Cambiá pasajeros a 4",
+    "• Resumime la oportunidad de Laura",
+    "• Mandá el reporte diario a vendedores"
+  ].join("\n");
 }
 
 /* =========================================================
@@ -1505,318 +2121,489 @@ async function callWhatsappSendMessage(params: {
 ========================================================= */
 
 serve(async (req) => {
-  let payload: any = {};
-  let runId: string | null = null;
+  let payload: AnyRecord = {};
   let supabase: any = null;
 
   if (req.method === "OPTIONS") return jsonResponse({ ok: true });
-  if (req.method !== "POST") return jsonResponse({ ok: false, error: "Method not allowed" }, 200);
+
+  if (req.method !== "POST") {
+    return jsonResponse({
+      ok: false,
+      error: "Method not allowed",
+      code_version: CODE_VERSION
+    });
+  }
 
   try {
     payload = await req.json();
-
     supabase = getSupabaseAdmin();
 
+    const message = getMessage(payload);
+    const userId = getUserId(payload);
+    const source = getSource(payload);
+    const module = getModule(payload);
     const conversationId = getConversationId(payload);
-    const inboundMessageId = getInboundMessageId(payload);
-    const payloadOportunidadId = getOportunidadId(payload);
+    const oportunidadId = getOportunidadId(payload);
 
-    runId = await createRun({
-      supabase,
-      conversationId,
-      oportunidadId: payloadOportunidadId,
-      inboundMessageId,
-      payload
-    });
+    if (!message) {
+      const text = "No recibí mensaje para interpretar. Escribime qué querés que haga NIA.";
 
-    if (!conversationId) {
-      await finishRun({
+      await insertNiaInteraction({
         supabase,
-        runId,
-        status: "skipped",
-        reason: "missing_conversation_id",
-        responsePayload: { ok: false }
+        userId,
+        source,
+        module,
+        action: "CONSULTA_GENERAL",
+        conversationId,
+        oportunidadId,
+        userMessage: "",
+        assistantResponse: text,
+        success: false,
+        error: "missing_message"
       });
 
       return jsonResponse({
         ok: false,
-        skipped: true,
-        reason: "missing_conversation_id",
-        text: "Falta conversation_id.",
+        text,
+        response: text,
+        reason: "missing_message",
         code_version: CODE_VERSION
       });
     }
 
-    const [
-      config,
-      campos,
-      faqs,
-      palabrasClave,
-      conversation,
-      inboundMessage
-    ] = await Promise.all([
-      loadCandeConfig({ supabase }),
-      loadCandeCampos({ supabase }),
-      loadCandeFaqs({ supabase }),
-      loadCandePalabrasClave({ supabase }),
-      loadConversation({ supabase, conversationId }),
-      loadInboundMessage({ supabase, inboundMessageId })
+    let intent = detectIntent(message);
+
+    const [config, estados, campos, faqs, keywords] = await Promise.all([
+      loadNiaConfig(supabase),
+      loadPipelineEstados(supabase),
+      loadCandeCampos(supabase),
+      loadNiaFaqs(supabase),
+      loadNiaKeywords(supabase)
     ]);
 
-    const opportunity = await loadOpportunity({
-      supabase,
-      conversationId,
-      oportunidadId: payloadOportunidadId
-    });
+    if (config && config.enabled === false) {
+      const text = "NIA está apagada desde configuración.";
 
-    const messages = await loadMessages({
-      supabase,
-      conversationId
-    });
-
-    const gate = shouldCandeReply({
-      config,
-      conversation,
-      opportunity,
-      messages,
-      inboundMessage
-    });
-
-    if (!gate.ok) {
-      await finishRun({
+      await insertNiaInteraction({
         supabase,
-        runId,
-        status: "skipped",
-        reason: gate.reason,
-        responsePayload: {
-          ok: false,
-          skipped: true,
-          reason: gate.reason,
-          conversation_id: conversationId,
-          oportunidad_id: opportunity?.id || null
-        }
+        userId,
+        source,
+        module,
+        action: intent,
+        conversationId,
+        oportunidadId,
+        userMessage: message,
+        assistantResponse: text,
+        success: false,
+        error: "nia_disabled"
       });
 
       return jsonResponse({
         ok: false,
-        skipped: true,
-        reason: gate.reason,
-        conversation_id: conversationId,
-        oportunidad_id: opportunity?.id || null,
+        text,
+        response: text,
+        reason: "nia_disabled",
         code_version: CODE_VERSION
       });
     }
 
-    const leadAnalysis = await analyzeLeadDataFromInbound({
-      config,
-      campos,
-      conversation,
-      opportunity,
-      inboundMessage
-    });
+    let contextOpportunity: AnyRecord | null = null;
 
-    const deriveInfo = shouldDeriveByMessage({
-      config,
-      messages,
-      inboundMessage,
-      score: leadAnalysis.score
-    });
+    if (oportunidadId) {
+      contextOpportunity = await loadOpportunityById(supabase, oportunidadId);
+    } else if (conversationId) {
+      contextOpportunity = await loadOpportunityByConversationId(supabase, conversationId);
+    }
 
-    const opportunityForPrompt = {
-      ...opportunity,
-      datos: leadAnalysis.datos,
-      score: leadAnalysis.score
-    };
+    const fallbackDatoUpdate = extractDatoUpdateFallback(message);
 
-    const systemPrompt = buildSystemPrompt({
+    const aiInterpretation = await interpretWithOpenAI({
       config,
-      campos,
       faqs,
-      palabrasClave,
-      deriveInfo
+      keywords,
+      message,
+      payload,
+      opportunity: contextOpportunity,
+      estados
     });
 
-    const userPrompt = buildUserPrompt({
-      config,
-      conversation,
-      opportunity: opportunityForPrompt,
-      messages,
-      inboundMessage
-    });
+    const usedOpenai = Boolean(aiInterpretation);
 
-    const ai = await callOpenAI({
-      config,
-      systemPrompt,
-      userPrompt
-    });
+    if (aiInterpretation?.intent) {
+      intent = aiInterpretation.intent;
+    } else if (fallbackDatoUpdate) {
+      intent = "ACTUALIZAR_DATO_OPORTUNIDAD";
+    }
 
-    const finalText = safeCandeText({
-      aiText: ai.text,
-      aiOk: ai.ok,
-      config,
-      conversation,
-      opportunity: opportunityForPrompt,
-      deriveInfo
-    });
+    if (aiInterpretation?.needs_confirmation) {
+      const text =
+        cleanText(aiInterpretation.answer) ||
+        "Antes de hacerlo necesito confirmación. Decime exactamente si querés que avance con esa acción.";
 
-    const updatedOpportunity = await updateOpportunityAfterReply({
-      supabase,
-      opportunity,
-      conversation,
-      leadAnalysis,
-      deriveInfo
-    });
-
-    const outboundMessage = await insertOutboundMessage({
-      supabase,
-      conversation,
-      opportunity: opportunityForPrompt,
-      config,
-      text: finalText
-    });
-
-    let sendResult: any = null;
-
-    try {
-      sendResult = await callWhatsappSendMessage({
-        conversation,
-        outboundMessage,
-        text: finalText
-      });
-    } catch (sendError) {
-      const sendErrorMessage = getErrorMessage(sendError);
-
-      await markOutboundFailed({
+      await insertNiaInteraction({
         supabase,
-        messageId: outboundMessage.id,
-        error: sendErrorMessage
-      });
-
-      await finishRun({
-        supabase,
-        runId,
-        status: "failed",
-        reason: "whatsapp_send_failed",
-        outboundMessageId: outboundMessage.id,
-        responsePayload: {
-          ok: false,
-          text: finalText,
-          ai_ok: ai.ok,
-          ai_error: ai.error,
-          send_error: sendErrorMessage,
-          derive_info: deriveInfo,
-          lead_analysis: {
-            detected_data: leadAnalysis.detected_data,
-            datos: leadAnalysis.datos,
-            score: leadAnalysis.score,
-            ai_used: leadAnalysis.ai_used,
-            ai_error: leadAnalysis.ai_error
-          },
-          updated_opportunity: updatedOpportunity
+        userId,
+        source,
+        module,
+        action: intent,
+        conversationId,
+        oportunidadId,
+        userMessage: message,
+        assistantResponse: text,
+        context: {
+          ai_interpretation: aiInterpretation
         },
-        error: sendErrorMessage
+        usedOpenai,
+        success: false,
+        error: "needs_confirmation"
       });
 
       return jsonResponse({
         ok: false,
-        status: "failed",
-        reason: "whatsapp_send_failed",
-        error: sendErrorMessage,
-        text: finalText,
-        outbound_message_id: outboundMessage.id,
-        conversation_id: conversationId,
-        oportunidad_id: opportunity.id,
-        code_version: CODE_VERSION,
-        lead_analysis: {
-          detected_data: leadAnalysis.detected_data,
-          datos: leadAnalysis.datos,
-          score: leadAnalysis.score,
-          ai_used: leadAnalysis.ai_used,
-          ai_error: leadAnalysis.ai_error
-        },
-        updated_opportunity: updatedOpportunity
+        needs_confirmation: true,
+        text,
+        response: text,
+        action: intent,
+        used_openai: usedOpenai,
+        ai_interpretation: aiInterpretation,
+        code_version: CODE_VERSION
       });
     }
 
-    await finishRun({
-      supabase,
-      runId,
-      status: "sent",
-      reason: "sent",
-      outboundMessageId: outboundMessage.id,
-      responsePayload: {
-        ok: true,
-        text: finalText,
-        ai_ok: ai.ok,
-        ai_error: ai.error,
-        send_result: sendResult,
-        derive_info: deriveInfo,
-        lead_analysis: {
-          detected_data: leadAnalysis.detected_data,
-          datos: leadAnalysis.datos,
-          score: leadAnalysis.score,
-          ai_used: leadAnalysis.ai_used,
-          ai_error: leadAnalysis.ai_error
+    if (intent === "REPORTE_DIARIO_VENDEDORES") {
+      const result = await generateDailyReports({
+        supabase,
+        estados
+      });
+
+      await insertNiaInteraction({
+        supabase,
+        userId,
+        source,
+        module,
+        action: intent,
+        conversationId,
+        oportunidadId,
+        userMessage: message,
+        assistantResponse: result.text,
+        context: {
+          sent: result.sent
         },
-        updated_opportunity: updatedOpportunity,
-        config_used: {
-          config_id: config?.id || null,
-          nombre_ia: getNombreIa(config),
-          marca_visible: getMarcaVisible(config),
-          modelo: cleanText(config?.modelo) || null
+        metadata: {
+          ai_interpretation: aiInterpretation
+        },
+        tool: "generate_daily_reports",
+        usedOpenai,
+        success: true
+      });
+
+      return jsonResponse({
+        ok: true,
+        text: result.text,
+        response: result.text,
+        action: intent,
+        sent: result.sent,
+        used_openai: usedOpenai,
+        ai_interpretation: aiInterpretation,
+        code_version: CODE_VERSION
+      });
+    }
+
+    if (intent === "CONSULTA_GENERAL") {
+      let text = cleanText(aiInterpretation?.answer);
+
+      if (!text && usedOpenai) {
+        const currentDestino = contextOpportunity ? getOpportunityDestino(contextOpportunity) : "";
+
+        if (currentDestino) {
+          text = `Para ${currentDestino}, puedo ayudarte a pensar una recomendación comercial, pero necesito un poco más de contexto: fecha aproximada deseada, cantidad de pasajeros, presupuesto y flexibilidad del pasajero. Con eso puedo sugerirte la mejor ventana para venderlo.`;
+        } else {
+          text =
+            "Puedo ayudarte con eso, pero necesito saber el destino o tener una oportunidad seleccionada con destino cargado. Decime el destino y te sugiero una fecha conveniente según clima, demanda y oportunidad comercial.";
         }
       }
+
+      if (!text) {
+        text =
+          "No pude usar la IA en este momento. Revisá los logs de nia-chat para confirmar si OpenAI respondió correctamente.";
+      }
+
+      await insertNiaInteraction({
+        supabase,
+        userId,
+        source,
+        module,
+        action: intent,
+        conversationId,
+        oportunidadId,
+        userMessage: message,
+        assistantResponse: text,
+        metadata: {
+          ai_interpretation: aiInterpretation
+        },
+        usedOpenai,
+        success: true
+      });
+
+      return jsonResponse({
+        ok: true,
+        text,
+        response: text,
+        action: intent,
+        used_openai: usedOpenai,
+        ai_interpretation: aiInterpretation,
+        code_version: CODE_VERSION
+      });
+    }
+
+    const resolved = await resolveOpportunity({
+      supabase,
+      payload: aiInterpretation?.targetText
+        ? {
+            ...payload,
+            target: aiInterpretation.targetText
+          }
+        : payload,
+      message,
+      intent
+    });
+
+    if (resolved.status === "ambiguous") {
+      const text = formatAmbiguous(resolved.matches, resolved.targetText);
+
+      await insertNiaInteraction({
+        supabase,
+        userId,
+        source,
+        module,
+        action: intent,
+        conversationId,
+        oportunidadId,
+        userMessage: message,
+        assistantResponse: text,
+        context: {
+          targetText: resolved.targetText,
+          ai_interpretation: aiInterpretation,
+          matches: resolved.matches.map((item) => ({
+            id: item.id,
+            nombre_contacto: item.nombre_contacto,
+            nombre: getOpportunityName(item),
+            telefono: getOpportunityPhone(item),
+            score: item.score
+          }))
+        },
+        usedOpenai,
+        success: false,
+        error: "ambiguous_target"
+      });
+
+      return jsonResponse({
+        ok: false,
+        needs_clarification: true,
+        reason: "ambiguous_target",
+        text,
+        response: text,
+        action: intent,
+        matches: resolved.matches.map((item) => ({
+          id: item.id,
+          nombre_contacto: item.nombre_contacto,
+          nombre: getOpportunityName(item),
+          telefono: getOpportunityPhone(item),
+          email: getOpportunityEmail(item),
+          score: item.score,
+          updated_at: item.updated_at
+        })),
+        used_openai: usedOpenai,
+        ai_interpretation: aiInterpretation,
+        code_version: CODE_VERSION
+      });
+    }
+
+    if (resolved.status === "not_found" || !resolved.opportunity) {
+      const text = notFoundText(resolved.targetText);
+
+      await insertNiaInteraction({
+        supabase,
+        userId,
+        source,
+        module,
+        action: intent,
+        conversationId,
+        oportunidadId,
+        userMessage: message,
+        assistantResponse: text,
+        context: {
+          targetText: resolved.targetText,
+          ai_interpretation: aiInterpretation
+        },
+        usedOpenai,
+        success: false,
+        error: "target_not_found"
+      });
+
+      return jsonResponse({
+        ok: false,
+        reason: "target_not_found",
+        text,
+        response: text,
+        action: intent,
+        used_openai: usedOpenai,
+        ai_interpretation: aiInterpretation,
+        code_version: CODE_VERSION
+      });
+    }
+
+    const opportunity = resolved.opportunity;
+    let result: AnyRecord;
+
+    if (intent === "CAMBIAR_CONTEXTO_OPORTUNIDAD") {
+      const contextUpdate = buildContextUpdate(opportunity);
+
+      result = {
+        ok: true,
+        text: changeContextText(opportunity),
+        context_update: contextUpdate
+      };
+    } else if (intent === "MOVER_PIPELINE") {
+      result = await movePipeline({
+        supabase,
+        opportunity,
+        estados,
+        message,
+        userId
+      });
+    } else if (intent === "RECALIFICAR_OPORTUNIDAD") {
+      result = await recalificarOpportunity({
+        supabase,
+        opportunity,
+        campos,
+        userId
+      });
+    } else if (intent === "ACTIVAR_CANDE") {
+      result = await setCandeStatus({
+        supabase,
+        opportunity,
+        enabled: true,
+        userId
+      });
+    } else if (intent === "DESACTIVAR_CANDE") {
+      result = await setCandeStatus({
+        supabase,
+        opportunity,
+        enabled: false,
+        userId
+      });
+    } else if (intent === "RESUMIR_OPORTUNIDAD") {
+      const text = summarizeOpportunity(opportunity);
+
+      result = {
+        ok: true,
+        text,
+        context_update: buildContextUpdate(opportunity)
+      };
+    } else if (intent === "ACTUALIZAR_DATO_OPORTUNIDAD") {
+      const field =
+        aiInterpretation?.field ||
+        fallbackDatoUpdate?.field ||
+        null;
+
+      const value =
+        aiInterpretation?.value ??
+        fallbackDatoUpdate?.value ??
+        null;
+
+      result = await updateOpportunityDato({
+        supabase,
+        opportunity,
+        field,
+        value,
+        userId
+      });
+    } else {
+      result = {
+        ok: true,
+        text: cleanText(aiInterpretation?.answer) || generalHelpText()
+      };
+    }
+
+    const responseContextUpdate = result.context_update || null;
+
+    await insertNiaInteraction({
+      supabase,
+      userId,
+      source,
+      module,
+      action: intent,
+      conversationId: opportunity.conversacion_id || conversationId,
+      oportunidadId: opportunity.id,
+      userMessage: message,
+      assistantResponse: result.text,
+      context: {
+        resolved_by: resolved.resolvedBy,
+        targetText: resolved.targetText,
+        ai_interpretation: aiInterpretation,
+        opportunity: {
+          id: opportunity.id,
+          nombre_contacto: opportunity.nombre_contacto,
+          nombre: getOpportunityName(opportunity),
+          telefono: getOpportunityPhone(opportunity),
+          score: opportunity.score,
+          estado_id: opportunity.estado_id
+        },
+        context_update: responseContextUpdate
+      },
+      metadata: result,
+      tool: intent.toLowerCase(),
+      usedOpenai,
+      success: result.ok !== false,
+      error: result.ok === false ? "action_failed" : null
     });
 
     return jsonResponse({
-      ok: true,
-      status: "sent",
+      ok: result.ok !== false,
+      text: result.text,
+      response: result.text,
+      action: intent,
       code_version: CODE_VERSION,
-      text: finalText,
-      conversation_id: conversationId,
+      used_openai: usedOpenai,
+      ai_interpretation: aiInterpretation,
+      resolved_by: resolved.resolvedBy,
       oportunidad_id: opportunity.id,
-      outbound_message_id: outboundMessage.id,
-      send_result: sendResult,
-      ai_ok: ai.ok,
-      ai_error: ai.error,
-      derive_info: deriveInfo,
-      lead_analysis: {
-        detected_data: leadAnalysis.detected_data,
-        datos: leadAnalysis.datos,
-        score: leadAnalysis.score,
-        ai_used: leadAnalysis.ai_used,
-        ai_error: leadAnalysis.ai_error
-      },
-      updated_opportunity: updatedOpportunity
+      conversation_id: opportunity.conversacion_id || conversationId,
+      conversacion_id: opportunity.conversacion_id || conversationId,
+      context_update: responseContextUpdate,
+      result
     });
-  } catch (error) {
-    const errorMessage = getErrorMessage(error);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    console.error("[NIA] Error:", err);
 
     try {
-      if (!supabase) {
-        supabase = getSupabaseAdmin();
+      if (supabase) {
+        await insertNiaInteraction({
+          supabase,
+          userId: getUserId(payload),
+          source: getSource(payload),
+          module: getModule(payload),
+          action: detectIntent(getMessage(payload)),
+          conversationId: getConversationId(payload),
+          oportunidadId: getOportunidadId(payload),
+          userMessage: getMessage(payload),
+          assistantResponse: `NIA tuvo un error: ${message}`,
+          success: false,
+          error: message
+        });
       }
-
-      await finishRun({
-        supabase,
-        runId,
-        status: "failed",
-        reason: "exception",
-        responsePayload: {
-          ok: false,
-          error: errorMessage
-        },
-        error: errorMessage
-      });
-    } catch (auditError) {
-      console.error("[cande-reply] No se pudo auditar error:", getErrorMessage(auditError));
+    } catch {
+      // Ignorar error de logging.
     }
 
     return jsonResponse({
       ok: false,
-      status: "failed",
-      reason: "exception",
-      error: errorMessage,
+      text: `NIA tuvo un error: ${message}`,
+      response: `NIA tuvo un error: ${message}`,
+      error: message,
       code_version: CODE_VERSION
     });
   }

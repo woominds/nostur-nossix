@@ -1,6 +1,6 @@
 // src/components/Shell.tsx
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TabsBar } from "./TabsBar";
 import { TopBar } from "./TopBar";
@@ -41,6 +41,7 @@ import { OportunidadesPanel } from "../modules/comunicaciones/OportunidadesPanel
 import { CandePanel } from "../modules/comunicaciones/CandePanel";
 import { NiaPanel } from "../modules/comunicaciones/NiaPanel";
 import { ControlIaPanel } from "../modules/comunicaciones/ControlIaPanel";
+import { MiPerfilPanel } from "../modules/perfil/MiPerfilPanel";
 import { NiaFloatingWidget } from "./NiaFloatingWidget";
 
 type InternalOpenEventDetail = {
@@ -68,6 +69,7 @@ function normalizeInternalAppId(moduleId: string): string {
   if (moduleId === "cande") return "cande";
   if (moduleId === "nia") return "nia";
   if (moduleId === "control-ia") return "control-ia";
+  if (moduleId === "mi-perfil") return "mi-perfil";
 
   return moduleId;
 }
@@ -143,6 +145,7 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
   const isCande = activeUrl === "internal://cande";
   const isNia = activeUrl === "internal://nia";
   const isControlIa = activeUrl === "internal://control-ia";
+  const isMiPerfil = activeUrl === "internal://mi-perfil";
 
   if (isHome) return <Home />;
 
@@ -151,6 +154,7 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
   if (isCande) return <CandePanel />;
   if (isNia) return <NiaPanel />;
   if (isControlIa) return <ControlIaPanel />;
+  if (isMiPerfil) return <MiPerfilPanel />;
 
   if (isContactos) return <ContactosPanel />;
   if (isClientes) return <ClientesPanel />;
@@ -258,6 +262,8 @@ function SplitPane({
 export function Shell() {
   const initializedRef = useRef(false);
   const splitContainerRef = useRef<HTMLDivElement | null>(null);
+  const splitDragPointerIdRef = useRef<number | null>(null);
+
   const [splitLeftWidth, setSplitLeftWidth] = useState(50);
   const [isDraggingSplit, setIsDraggingSplit] = useState(false);
 
@@ -271,6 +277,34 @@ export function Shell() {
   const splitLeftTabId = useBrowserStore((state) => state.splitLeftTabId);
   const splitRightTabId = useBrowserStore((state) => state.splitRightTabId);
   const splitActivePane = useBrowserStore((state) => state.splitActivePane);
+
+  const stopSplitDragging = useCallback(() => {
+    splitDragPointerIdRef.current = null;
+    setIsDraggingSplit(false);
+
+    document.documentElement.classList.remove("nostur-split-resizing");
+    document.body.classList.remove("nostur-split-resizing");
+
+    document.documentElement.style.cursor = "";
+    document.documentElement.style.userSelect = "";
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  }, []);
+
+  const updateSplitWidthFromClientX = useCallback((clientX: number) => {
+    const container = splitContainerRef.current;
+
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+
+    if (rect.width <= 0) return;
+
+    const rawPercent = ((clientX - rect.left) / rect.width) * 100;
+    const limitedPercent = Math.min(75, Math.max(30, rawPercent));
+
+    setSplitLeftWidth(limitedPercent);
+  }, []);
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -288,7 +322,7 @@ export function Shell() {
   }, [tabs.length, createTab]);
 
   useEffect(() => {
-    function handleKeyboardNavigation(event: KeyboardEvent) {
+    function handleKeyboardNavigation(event: globalThis.KeyboardEvent) {
       const isTabShortcut =
         event.ctrlKey &&
         !event.metaKey &&
@@ -379,38 +413,74 @@ export function Shell() {
   useEffect(() => {
     if (!isDraggingSplit) return;
 
-    function handleMouseMove(event: MouseEvent) {
-      const container = splitContainerRef.current;
-
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
-      const rawPercent = ((event.clientX - rect.left) / rect.width) * 100;
-      const limitedPercent = Math.min(75, Math.max(30, rawPercent));
-
-      setSplitLeftWidth(limitedPercent);
+    function handlePointerMove(event: PointerEvent) {
+      event.preventDefault();
+      updateSplitWidthFromClientX(event.clientX);
     }
 
-    function handleMouseUp() {
-      setIsDraggingSplit(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
+    function handlePointerUp(event: PointerEvent) {
+      event.preventDefault();
+      stopSplitDragging();
     }
 
+    function handlePointerCancel() {
+      stopSplitDragging();
+    }
+
+    function handleWindowBlur() {
+      stopSplitDragging();
+    }
+
+    function handleEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+
+      stopSplitDragging();
+    }
+
+    document.documentElement.classList.add("nostur-split-resizing");
+    document.body.classList.add("nostur-split-resizing");
+
+    document.documentElement.style.cursor = "col-resize";
+    document.documentElement.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
 
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("pointermove", handlePointerMove, true);
+    window.addEventListener("pointerup", handlePointerUp, true);
+    window.addEventListener("pointercancel", handlePointerCancel, true);
+    window.addEventListener("blur", handleWindowBlur, true);
+    window.addEventListener("keyup", handleEscape, true);
+    window.addEventListener("nostur:force-stop-resize", stopSplitDragging);
 
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", handlePointerUp, true);
+      window.removeEventListener("pointercancel", handlePointerCancel, true);
+      window.removeEventListener("blur", handleWindowBlur, true);
+      window.removeEventListener("keyup", handleEscape, true);
+      window.removeEventListener("nostur:force-stop-resize", stopSplitDragging);
 
+      document.documentElement.classList.remove("nostur-split-resizing");
+      document.body.classList.remove("nostur-split-resizing");
+
+      document.documentElement.style.cursor = "";
+      document.documentElement.style.userSelect = "";
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isDraggingSplit]);
+  }, [isDraggingSplit, stopSplitDragging, updateSplitWidthFromClientX]);
+
+  useEffect(() => {
+    if (!splitViewEnabled && isDraggingSplit) {
+      stopSplitDragging();
+    }
+  }, [splitViewEnabled, isDraggingSplit, stopSplitDragging]);
+
+  useEffect(() => {
+    return () => {
+      stopSplitDragging();
+    };
+  }, [stopSplitDragging]);
 
   const activeTab = useMemo(() => {
     return (
@@ -463,8 +533,25 @@ export function Shell() {
             {splitViewEnabled ? (
               <div
                 ref={splitContainerRef}
-                className="flex h-full min-h-0 min-w-0 gap-0 bg-[#dbe3ee] p-1"
+                className="relative flex h-full min-h-0 min-w-0 gap-0 bg-[#dbe3ee] p-1"
               >
+                {isDraggingSplit ? (
+                  <div
+                    className="absolute inset-0 z-[80] cursor-col-resize select-none bg-transparent"
+                    onPointerMove={(event) => {
+                      event.preventDefault();
+                      updateSplitWidthFromClientX(event.clientX);
+                    }}
+                    onPointerUp={(event) => {
+                      event.preventDefault();
+                      stopSplitDragging();
+                    }}
+                    onPointerCancel={() => {
+                      stopSplitDragging();
+                    }}
+                  />
+                ) : null}
+
                 <div
                   className="min-h-0 min-w-0"
                   style={{
@@ -483,12 +570,22 @@ export function Shell() {
                   role="separator"
                   aria-orientation="vertical"
                   title="Arrastrar para ajustar"
-                  onMouseDown={(event) => {
+                  onPointerDown={(event) => {
                     event.preventDefault();
+                    event.stopPropagation();
+
+                    splitDragPointerIdRef.current = event.pointerId;
                     setIsDraggingSplit(true);
+                    updateSplitWidthFromClientX(event.clientX);
+
+                    try {
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                    } catch {
+                      // Algunos entornos Electron/WebView pueden no permitir capture.
+                    }
                   }}
                   className={[
-                    "group relative z-[40] flex w-3 shrink-0 cursor-col-resize items-center justify-center",
+                    "group relative z-[90] flex w-3 shrink-0 touch-none cursor-col-resize items-center justify-center",
                     isDraggingSplit ? "bg-[#ff7a1a]/10" : "hover:bg-[#ff7a1a]/10"
                   ].join(" ")}
                 >
