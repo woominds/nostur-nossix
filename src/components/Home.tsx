@@ -794,7 +794,7 @@ export function Home() {
   const serviciosMensual = useTableroDeControlStore((state) => state.serviciosMensual) as HomeRankingSimple[];
   const paxSaliendo = useTableroDeControlStore((state) => state.paxSaliendo) as HomePaxMovimiento[];
   const paxRegresando = useTableroDeControlStore((state) => state.paxRegresando) as HomePaxMovimiento[];
-  const paxDebug = useTableroDeControlStore((state) => state.paxDebug);
+ 
 
   const [currentTime, setCurrentTime] = useState(getCurrentTimeLabel());
 
