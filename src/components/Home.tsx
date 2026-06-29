@@ -172,14 +172,7 @@ function normalizeAppKey(appId: string): string {
   return appId;
 }
 
-function getInitials(name?: string | null): string {
-  const clean = String(name || "Jorge Luis Batica").trim();
-  const parts = clean.split(" ").filter(Boolean);
 
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-
-  return `${parts[0].slice(0, 1)}${parts[1].slice(0, 1)}`.toUpperCase();
-}
 
 function getNotificacionId(notificacion: NotificacionAny): string {
   return String(
@@ -425,62 +418,7 @@ function DashboardHomeCard({
   );
 }
 
-function SellerResume({
-  seller,
-  mode
-}: {
-  seller: HomeRankingVendedor;
-  mode: "week" | "month";
-}) {
-  const utilidad =
-    mode === "week" ? parseMoney(seller.utilidadSemanalUsd) : parseMoney(seller.utilidadUsd);
 
-  const avance =
-    mode === "week"
-      ? clampProgress(seller.avanceSemanalPct)
-      : clampProgress(seller.avanceMensualPct);
-
-  const objetivo =
-    mode === "week"
-      ? parseMoney(seller.metaSemanalUsd)
-      : parseMoney(seller.metaLogradoUsd || seller.metaMedioUsd || seller.metaPisoUsd);
-
-  const tone = getProgressTone(avance);
-
-  return (
-    <div className="rounded-2xl border border-black/10 bg-[#f8fafc] p-3">
-      <div className="mb-3 flex items-center gap-2.5">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-[#172033] text-[11px] font-semibold text-white">
-          {getInitials(seller.vendedor)}
-        </div>
-
-        <div className="min-w-0">
-          <div className="truncate text-[14px] font-semibold leading-tight text-[#111827]">
-            {seller.vendedor || "Sin vendedor"}
-          </div>
-        </div>
-      </div>
-
-      <div className="text-[21px] font-semibold tracking-tight text-[#111827]">
-        {formatUsd(utilidad)}
-      </div>
-
-      <div className="mt-3">
-        <div className="mb-1.5 flex items-center justify-between text-[11px] font-normal text-[#64748b]">
-          <span>Avance</span>
-          <span className={["font-semibold", tone.text].join(" ")}>{formatPct(avance)}</span>
-        </div>
-
-        <ProgressLine value={avance} />
-      </div>
-
-      <div className="mt-2.5 flex items-center justify-between text-[11px] font-normal text-[#64748b]">
-        <span>Objetivo</span>
-        <span>{objetivo > 0 ? formatUsd(objetivo) : "Sin meta"}</span>
-      </div>
-    </div>
-  );
-}
 
 function MetaAlmundoContent({ data }: { data: HomeMetaAlmundo[] }) {
   const visible = data.filter((item) => parseMoney(item.objetivoUsd) > 0 || parseMoney(item.actualUsd) > 0);
@@ -596,7 +534,7 @@ function MetasSucursalContent({ data }: { data: HomeMetaSucursal[] }) {
 
 function WeekRankingContent({ data }: { data: HomeRankingVendedor[] }) {
   const visible = data.slice(0, 4);
-  const max = Math.max(...visible.map((item) => parseMoney(item.utilidadSemanalUsd)), 1);
+
 
   if (visible.length === 0) {
     return <EmptyMiniState text="Sin ventas semanales para mostrar." />;
