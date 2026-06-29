@@ -130,6 +130,16 @@ export type AlertaGestion = {
   valor?: string;
 };
 
+export type PaxDebugInfo = {
+  today: string;
+  next30Str: string;
+  count: number;
+  saliendo: number;
+  regresando: number;
+  error: string | null;
+  supabaseUrl: string;
+};
+
 type VentaBase = {
   origen_id: string;
   origen: "CARRITO" | "FILE" | string;
@@ -236,6 +246,7 @@ type TableroControlState = {
   serviciosHistorico: RankingSimple[];
   paxSaliendo: PaxMovimiento[];
   paxRegresando: PaxMovimiento[];
+  paxDebug: PaxDebugInfo | null;
   alertas: AlertaGestion[];
 
   loadTablero: () => Promise<void>;
@@ -728,9 +739,10 @@ export const useTableroDeControlStore = create<TableroControlState>((set, get) =
   destinosHistorico: [],
   serviciosMensual: [],
   serviciosHistorico: [],
-  paxSaliendo: [],
-  paxRegresando: [],
-  alertas: [],
+paxSaliendo: [],
+paxRegresando: [],
+paxDebug: null,
+alertas: [],
 
   loadTablero: async () => {
     set({ loading: true, error: null });
@@ -1153,25 +1165,34 @@ export const useTableroDeControlStore = create<TableroControlState>((set, get) =
       ? rankingVendedores.filter((item) => normalizeText(item.vendedor).includes(search))
       : rankingVendedores;
 
-    set({
-      loading: false,
-      error: null,
-      currentProfile,
-      canManageDashboard,
-      kpis,
-      serieSemanal,
-      rankingVendedores: filteredRankingVendedores,
-      rankingSucursales,
-      metasSucursal,
-      metasAlmundo,
-      destinosMensual,
-      destinosHistorico,
-      serviciosMensual,
-      serviciosHistorico,
-      paxSaliendo,
-      paxRegresando,
-      alertas: buildAlertas(kpis, metasAlmundo, metasSucursal)
-    });
+set({
+  loading: false,
+  error: null,
+  currentProfile,
+  canManageDashboard,
+  kpis,
+  serieSemanal,
+  rankingVendedores: filteredRankingVendedores,
+  rankingSucursales,
+  metasSucursal,
+  metasAlmundo,
+  destinosMensual,
+  destinosHistorico,
+  serviciosMensual,
+  serviciosHistorico,
+  paxSaliendo,
+  paxRegresando,
+  paxDebug: {
+    today,
+    next30Str,
+    count: paxCalendario.length,
+    saliendo: paxSaliendo.length,
+    regresando: paxRegresando.length,
+    error: paxCalendarioRes.error ? normalizeError(paxCalendarioRes.error) : null,
+    supabaseUrl: String(import.meta.env.VITE_SUPABASE_URL || "SIN_VITE_SUPABASE_URL")
+  },
+  alertas: buildAlertas(kpis, metasAlmundo, metasSucursal)
+});
   },
 
   setFilter: (key, value) => {
