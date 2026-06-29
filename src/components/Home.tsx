@@ -1062,12 +1062,7 @@ const rankingSemanalActual = useMemo(() => {
 
   const friendlyDate = getFriendlyDate();
 
-  const debugSupabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || "SIN_VITE_SUPABASE_URL");
-const debugTenantId = String(import.meta.env.VITE_TENANT_ID || "SIN_VITE_TENANT_ID");
-const debugSupabaseHost = debugSupabaseUrl
-  .replace("https://", "")
-  .replace("http://", "")
-  .slice(0, 32);
+
 
   function renderTipoCambioWidget() {
     return (
@@ -1159,44 +1154,7 @@ const debugSupabaseHost = debugSupabaseUrl
 
   return (
     <div className="relative h-full overflow-auto bg-[radial-gradient(circle_at_12%_8%,rgba(255,122,26,0.12),transparent_28%),radial-gradient(circle_at_86%_10%,rgba(255,47,118,0.09),transparent_30%),radial-gradient(circle_at_48%_94%,rgba(147,197,253,0.18),transparent_34%),linear-gradient(135deg,#f7fbfc,#eff8f8_48%,#f4f8ff)] px-6 py-4 text-[#172033]">
-<div className="fixed bottom-2 left-2 z-[9999] max-w-[620px] rounded-2xl bg-black/85 px-3 py-2 text-[10px] leading-relaxed text-white shadow-2xl">
-  <div className="font-semibold">DEBUG PAX NOSTUR</div>
 
-  <div>Tenant: {debugTenantId}</div>
-
-  <div>
-    Supabase env: {debugSupabaseHost}
-  </div>
-
-  <div>
-    Supabase store:{" "}
-    {String(paxDebug?.supabaseUrl || "SIN_URL")
-      .replace("https://", "")
-      .replace("http://", "")
-      .slice(0, 38)}
-  </div>
-
-  <div>
-    Rango: {paxDebug?.today || "—"} → {paxDebug?.next30Str || "—"}
-  </div>
-
-  <div>
-    Vista count: {paxDebug?.count ?? 0} · Store saliendo: {paxDebug?.saliendo ?? 0} · Store
-    regresando: {paxDebug?.regresando ?? 0}
-  </div>
-
-  <div>
-    Home saliendo: {paxSaliendo.length} · Home regresando: {paxRegresando.length}
-  </div>
-
-  <div>
-    Mes dashboard: {filters.mes}/{filters.anio}
-  </div>
-
-  <div className="break-words text-red-200">
-    Error: {paxDebug?.error || "sin error"}
-  </div>
-</div>
       <div className="mx-auto w-full max-w-[1840px]">
         <header className="mb-4 flex items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">

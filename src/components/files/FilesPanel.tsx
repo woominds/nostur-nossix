@@ -1106,7 +1106,7 @@ function FileWizard({
   const clientesSearch = useFilesStore((state) => state.clientesSearch);
   const catalogos = useFilesStore((state) => state.catalogos);
   const currentProfile = useFilesStore((state) => state.currentProfile);
- // const canManageFiles = useFilesStore((state) => state.canManageFiles);
+
   const searchClientesByPhone = useFilesStore((state) => state.searchClientesByPhone);
   const createDestinoInline = useFilesStore((state) => state.createDestinoInline);
   const saveFileWizard = useFilesStore((state) => state.saveFileWizard);

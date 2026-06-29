@@ -842,9 +842,7 @@ alertas: [],
       return;
     }
 
-    if (paxCalendarioRes.error) {
-      console.warn("[Home/PAX] No se pudo cargar vw_calendario_pax", paxCalendarioRes.error);
-    }
+
 
     const mensual = (mensualRes.data || []) as ComisionMensualView[];
     const ventasMes = (ventasMesRes.data || []) as VentaBase[];
@@ -852,12 +850,7 @@ alertas: [],
     const sucursales = (sucursalesRes.data || []) as SucursalLite[];
     const paxCalendario = (paxCalendarioRes.data || []) as CalendarioPaxEventoHome[];
 
-    console.warn("[Home/PAX]", {
-      today,
-      next30Str,
-      count: paxCalendario.length,
-      sample: paxCalendario.slice(0, 3)
-    });
+ 
 
     const metasRows = ((metasRes.data || []) as MetaRow[]).filter((meta) => {
       const coincideMesAnio = isSameMonthMeta(meta, mesNumber, anioNumber);
