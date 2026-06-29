@@ -2,7 +2,7 @@
   "name": "nostur-nossix",
   "productName": "NOSTUR",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "NOSTUR - Sistema integral de turismo emisivo",
   "author": "NOSTUR",
   "main": "electron/main.cjs",
