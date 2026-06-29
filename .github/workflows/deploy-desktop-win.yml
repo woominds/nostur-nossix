@@ -28,7 +28,11 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Package version: $VERSION"
-
+      - name: Create production env
+        run: |
+          echo "VITE_TENANT_ID=nossix" >> .env.production
+          echo "VITE_SUPABASE_URL=${{ secrets.NOSSIX_SUPABASE_URL }}" >> .env.production
+          echo "VITE_SUPABASE_ANON_KEY=${{ secrets.NOSSIX_SUPABASE_ANON_KEY }}" >> .env.production
       - name: Build Windows release
         run: npm run dist:win
         env:
