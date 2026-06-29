@@ -231,15 +231,7 @@ function getOnlyGroupOpen(groupKey: TabGroupKey): Record<TabGroupKey, boolean> {
   };
 }
 
-function getGroupsOpen(groupKeys: TabGroupKey[]): Record<TabGroupKey, boolean> {
-  const next = getClosedGroups();
 
-  groupKeys.forEach((groupKey) => {
-    next[groupKey] = true;
-  });
-
-  return next;
-}
 
 function SoftTooltip({ text }: { text: string }) {
   return (
