@@ -352,6 +352,144 @@ const COMMON_DESTINOS: SelectOption[] = [
   label: item
 }));
 
+
+const PRESUPUESTOS_V2_RESPONSIVE_CSS = `
+.presupuestos-v2-root {
+  container-type: inline-size;
+}
+
+.presupuestos-v2-header-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.presupuestos-v2-header-actions {
+  justify-content: flex-start;
+}
+
+.presupuestos-v2-filters-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.presupuestos-v2-filters-search,
+.presupuestos-v2-filters-reset {
+  grid-column: auto;
+}
+
+.presupuestos-v2-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.presupuestos-v2-table-head,
+.presupuestos-v2-table-row-desktop {
+  display: none !important;
+}
+
+.presupuestos-v2-table-card {
+  display: grid !important;
+}
+
+.presupuestos-v2-table-scroll {
+  max-height: calc(100vh - 390px);
+}
+
+.presupuestos-v2-ia-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.presupuestos-v2-manual-steps {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.presupuestos-v2-manual-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.presupuestos-v2-resource-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 620px) {
+  .presupuestos-v2-filters-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .presupuestos-v2-filters-search,
+  .presupuestos-v2-filters-reset {
+    grid-column: span 2 / span 2;
+  }
+
+  .presupuestos-v2-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .presupuestos-v2-manual-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 980px) {
+  .presupuestos-v2-header-inner {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .presupuestos-v2-header-actions {
+    justify-content: flex-end;
+  }
+
+  .presupuestos-v2-filters-grid {
+    grid-template-columns: minmax(0, 1fr) 140px 140px 180px 170px 130px 130px auto;
+  }
+
+  .presupuestos-v2-filters-search,
+  .presupuestos-v2-filters-reset {
+    grid-column: auto;
+  }
+
+  .presupuestos-v2-table-head {
+    display: grid !important;
+  }
+
+  .presupuestos-v2-table-row-desktop {
+    display: grid !important;
+  }
+
+  .presupuestos-v2-table-card {
+    display: none !important;
+  }
+
+  .presupuestos-v2-table-scroll {
+    max-height: calc(100vh - 360px);
+  }
+
+  .presupuestos-v2-resource-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 1180px) {
+  .presupuestos-v2-metrics {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .presupuestos-v2-ia-layout {
+    grid-template-columns: 400px minmax(0, 1fr);
+  }
+
+  .presupuestos-v2-manual-steps {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .presupuestos-v2-manual-layout {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+`;
+
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -1739,9 +1877,9 @@ function ModalShell({
   variant?: "center" | "side";
 }) {
   if (variant === "side") {
-    return createPortal(
-      <div className="pointer-events-none fixed bottom-0 right-0 top-[39px] z-[180] flex justify-end">
-        <aside className="pointer-events-auto h-full w-full max-w-[560px] overflow-hidden border-l border-black/10 bg-[#edf3f7] text-[#172033] shadow-2xl">
+    return (
+      <div className="pointer-events-none absolute inset-y-0 right-0 z-[180] flex w-full justify-end">
+        <aside className="pointer-events-auto h-full w-full max-w-[min(560px,100%)] overflow-hidden border-l border-black/10 bg-[#edf3f7] text-[#172033] shadow-2xl">
           <div className="flex h-full min-h-0 flex-col">
             <div className="shrink-0 border-b border-black/10 bg-white/85 px-4 py-3 backdrop-blur-xl">
               <div className="flex items-start justify-between gap-3">
@@ -1765,23 +1903,24 @@ function ModalShell({
             <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
           </div>
         </aside>
-      </div>,
-      document.body
+      </div>
     );
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[260] flex items-start justify-center bg-black/35 px-4 pt-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[260] flex items-start justify-center bg-black/35 px-2 pt-3 backdrop-blur-sm sm:px-4 sm:pt-6">
       <div
         className={[
-          "max-h-[calc(100vh-44px)] w-full overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl",
+          "max-h-[calc(100vh-24px)] w-full overflow-auto rounded-[18px] border border-black/10 bg-white p-3 text-[#172033] shadow-2xl sm:max-h-[calc(100vh-44px)] sm:p-4",
           maxWidth
         ].join(" ")}
       >
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-[17px] font-semibold text-[#172033]">{title}</h2>
-            {subtitle ? <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">{subtitle}</p> : null}
+            {subtitle ? (
+              <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">{subtitle}</p>
+            ) : null}
           </div>
 
           <button
@@ -1834,12 +1973,11 @@ function MetricCard({
   }[tone];
 
   return (
-    <div className="rounded-[14px] border border-black/10 bg-white/62 px-3 py-2.5 shadow-sm backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-3">
+  <div className="min-w-0 rounded-[14px] border border-black/10 bg-white/62 px-3 py-2.5 shadow-sm backdrop-blur-xl">      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-[10.5px] font-medium text-[#64748b]">{label}</div>
-          <div className="mt-0.5 truncate text-[18px] font-semibold tracking-tight text-[#172033]">
-            {value}
+<div className="mt-0.5 truncate text-[16px] font-semibold tracking-tight text-[#172033] sm:text-[18px]">
+              {value}
           </div>
         </div>
 
@@ -2750,10 +2888,10 @@ function PresupuestoFilters({
     [sucursales]
   );
 
-  return (
-    <div className="grid gap-2.5 lg:grid-cols-[minmax(0,1fr)_140px_140px_180px_170px_130px_130px_auto]">
-      <div>
-        <FieldLabel>Buscar</FieldLabel>
+return (
+  <div className="presupuestos-v2-filters-grid grid gap-2.5">
+    <div className="presupuestos-v2-filters-search">
+  <FieldLabel>Buscar</FieldLabel>
 
         <div className="flex h-8 items-center gap-2 rounded-[10px] border border-black/10 bg-white px-3">
           <Search size={14} className="shrink-0 text-[#94a3b8]" />
@@ -2822,12 +2960,11 @@ function PresupuestoFilters({
         />
       </div>
 
-      <div className="flex items-end">
-        <button
+      <div className="presupuestos-v2-filters-reset flex items-end">
+  <button
           type="button"
           onClick={onReset}
-          className="h-8 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
-        >
+className="h-8 w-full rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] xl:w-auto"        >
           Limpiar
         </button>
       </div>
@@ -3463,8 +3600,8 @@ function PresupuestoIaModal({
     >
       <InlineError message={localError} onClose={() => setLocalError(null)} />
 
-      <div className="grid gap-3 lg:grid-cols-[400px_minmax(0,1fr)]">
-        <aside className="grid content-start gap-3">
+   <div className="presupuestos-v2-ia-layout grid min-w-0 gap-3">
+       <aside className="grid min-w-0 content-start gap-3">
           <section className="rounded-[16px] border border-black/10 bg-[#f8fafc] p-3">
             <div className="mb-3">
               <h3 className="text-[14px] font-semibold text-[#172033]">Texto completo</h3>
@@ -3481,7 +3618,7 @@ function PresupuestoIaModal({
                 setLocalError(null);
               }}
               placeholder="Pegá acá todo el presupuesto completo."
-              minHeight={480}
+              minHeight={360}
               disabled={processingIa || saving}
             />
 
@@ -4662,7 +4799,7 @@ const promociones = [
     >
       <InlineError message={localError} onClose={() => setLocalError(null)} />
 
-      <div className="mb-3 grid gap-2 lg:grid-cols-4">
+     <div className="presupuestos-v2-manual-steps mb-3 grid gap-2">
         <WizardStepButton
           active={step === "aereos"}
           done={vuelos.length > 0}
@@ -4700,7 +4837,7 @@ const promociones = [
         />
       </div>
 
-      <div className="grid min-w-0 gap-3 2xl:grid-cols-[minmax(0,1fr)_340px]">
+   <div className="presupuestos-v2-manual-layout grid min-w-0 gap-3">
         <main className="min-w-0">
           {step === "aereos" ? (
             <section className="rounded-[16px] border border-black/10 bg-[#f8fafc] p-3">
@@ -5177,7 +5314,7 @@ const promociones = [
                     1. Servicios que usa esta opción
                   </h4>
 
-                  <div className="grid min-w-0 gap-2.5 xl:grid-cols-3">
+                 <div className="presupuestos-v2-resource-grid grid min-w-0 gap-2.5">
                     <ResourceCheckList
                       title="Aéreos"
                       empty="No hay aéreos cargados."
@@ -6002,7 +6139,7 @@ function PresupuestosTable({
   onSendLiveNos: (id: string) => void;
 }) {
   const grid =
-    "xl:grid-cols-[105px_minmax(150px,0.95fr)_minmax(170px,1.15fr)_95px_90px_125px_315px]";
+    "grid-cols-[105px_minmax(150px,0.95fr)_minmax(170px,1.15fr)_95px_90px_125px_315px]";
 
   if (loading) {
     return (
@@ -6023,7 +6160,7 @@ function PresupuestosTable({
     <section className="relative z-[10] overflow-hidden rounded-[16px] border border-black/10 bg-white/62 shadow-sm backdrop-blur-xl">
       <div
         className={[
-          "hidden border-b border-black/10 bg-[#f8fafc] px-3 py-2 text-[10px] font-medium uppercase tracking-[0.1em] text-[#64748b] xl:grid",
+          "presupuestos-v2-table-head border-b border-black/10 bg-[#f8fafc] px-3 py-2 text-[10px] font-medium uppercase tracking-[0.1em] text-[#64748b]",
           grid
         ].join(" ")}
       >
@@ -6036,103 +6173,248 @@ function PresupuestosTable({
         <div className="text-right">Acciones</div>
       </div>
 
-      <div className="max-h-[calc(100vh-360px)] overflow-y-auto">
+      <div className="presupuestos-v2-table-scroll overflow-y-auto">
         {presupuestos.map((presupuesto) => {
           const selected = selectedId === presupuesto.id;
 
           return (
-            <div
-              key={presupuesto.id}
-              className={[
-                "grid min-w-0 gap-2 border-b border-black/5 px-3 py-3 text-[12px] transition xl:grid",
-                grid,
-                selected ? "bg-[#eef6f7]" : "hover:bg-[#f8fafc]"
-              ].join(" ")}
-            >
-              <button
-                type="button"
-                onClick={() => onSelect(presupuesto.id)}
-                className="truncate text-left font-semibold text-[#172033]"
+            <div key={presupuesto.id} className="border-b border-black/5">
+              <div
+                className={[
+                  "presupuestos-v2-table-row-desktop min-w-0 gap-2 px-3 py-3 text-[12px] transition",
+                  grid,
+                  selected ? "bg-[#eef6f7]" : "hover:bg-[#f8fafc]"
+                ].join(" ")}
               >
-                {presupuesto.numero || "—"}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onSelect(presupuesto.id)}
+                  className="truncate text-left font-semibold text-[#172033]"
+                >
+                  {presupuesto.numero || "—"}
+                </button>
 
-              <button
-                type="button"
-                onClick={() => onSelect(presupuesto.id)}
-                className="flex min-w-0 items-center gap-2 text-left"
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[#e2e8f0] text-[10px] font-semibold text-[#334155]">
-                  {getInitials(getDisplayName(presupuesto))}
-                </span>
-
-                <span className="min-w-0">
-                  <span className="block truncate font-semibold text-[#172033]">
-                    {getDisplayName(presupuesto)}
+                <button
+                  type="button"
+                  onClick={() => onSelect(presupuesto.id)}
+                  className="flex min-w-0 items-center gap-2 text-left"
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[#e2e8f0] text-[10px] font-semibold text-[#334155]">
+                    {getInitials(getDisplayName(presupuesto))}
                   </span>
 
-                  <span className="block truncate text-[10.5px] font-normal text-[#64748b]">
-                    {presupuesto.cliente_telefono || presupuesto.cliente_email || "Sin contacto"}
+                  <span className="min-w-0">
+                    <span className="block truncate font-semibold text-[#172033]">
+                      {getDisplayName(presupuesto)}
+                    </span>
+
+                    <span className="block truncate text-[10.5px] font-normal text-[#64748b]">
+                      {presupuesto.cliente_telefono || presupuesto.cliente_email || "Sin contacto"}
+                    </span>
                   </span>
-                </span>
-              </button>
+                </button>
 
-              <div className="min-w-0">
-                <div className="truncate font-semibold text-[#172033]">
-                  {presupuesto.destino_principal || "—"}
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-[#172033]">
+                    {presupuesto.destino_principal || "—"}
+                  </div>
+
+                  <div className="truncate text-[10.5px] font-normal text-[#64748b]">
+                    {presupuesto.destino_detalle ? `${presupuesto.destino_detalle} · ` : ""}
+                    {formatDate(presupuesto.fecha_salida)} al{" "}
+                    {formatDate(presupuesto.fecha_regreso)}
+                  </div>
                 </div>
 
-                <div className="truncate text-[10.5px] font-normal text-[#64748b]">
-                  {presupuesto.destino_detalle
-                    ? `${presupuesto.destino_detalle} · `
-                    : ""}
-                  {formatDate(presupuesto.fecha_salida)} al {formatDate(presupuesto.fecha_regreso)}
+                <div className="font-normal text-[#475569]">
+                  {formatDate(presupuesto.fecha_salida)}
+                </div>
+
+                <div>
+                  <EstadoBadge estado={presupuesto.estado} />
+                </div>
+
+                <div className="font-semibold text-[#172033]">
+                  {presupuesto.precio_recomendado !== null
+                    ? formatMoneyAR(presupuesto.precio_recomendado, presupuesto.moneda_principal)
+                    : presupuesto.precio_desde !== null
+                      ? formatMoneyAR(presupuesto.precio_desde, presupuesto.moneda_principal)
+                      : "—"}
+                </div>
+
+                <div className="flex min-w-[300px] flex-nowrap items-center justify-end gap-1.5">
+                  <ActionButton
+                    label="Editar"
+                    onClick={() => onEdit(presupuesto.id)}
+                    icon={<Pencil size={13} />}
+                  />
+
+                  <ActionButton
+                    label="IA"
+                    primary
+                    onClick={() => onEditIa(presupuesto.id)}
+                    icon={<Sparkles size={13} />}
+                  />
+
+                  <ActionButton
+                    label="PDF"
+                    onClick={() => onPdf(presupuesto.id)}
+                    icon={<FileText size={13} />}
+                  />
+
+                  <RowMoreMenu
+                    onDuplicate={() => onDuplicate(presupuesto.id)}
+                    onPreview={() => onPreview(presupuesto.id)}
+                    onSendLiveNos={() => onSendLiveNos(presupuesto.id)}
+                    onDelete={() => onDelete(presupuesto.id)}
+                  />
                 </div>
               </div>
 
-              <div className="font-normal text-[#475569]">
-                {formatDate(presupuesto.fecha_salida)}
-              </div>
+              <article
+                className={[
+                  "presupuestos-v2-table-card gap-3 px-3 py-3 text-[12px] transition",
+                  selected ? "bg-[#eef6f7]" : "hover:bg-[#f8fafc]"
+                ].join(" ")}
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelect(presupuesto.id)}
+                  className="flex min-w-0 items-start gap-3 text-left"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] bg-[#e2e8f0] text-[11px] font-semibold text-[#334155]">
+                    {getInitials(getDisplayName(presupuesto))}
+                  </span>
 
-              <div>
-                <EstadoBadge estado={presupuesto.estado} />
-              </div>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="max-w-full truncate text-[13px] font-semibold text-[#172033]">
+                        {getDisplayName(presupuesto)}
+                      </span>
 
-              <div className="font-semibold text-[#172033]">
-                {presupuesto.precio_recomendado !== null
-                  ? formatMoneyAR(presupuesto.precio_recomendado, presupuesto.moneda_principal)
-                  : presupuesto.precio_desde !== null
-                    ? formatMoneyAR(presupuesto.precio_desde, presupuesto.moneda_principal)
-                    : "—"}
-              </div>
+                      <EstadoBadge estado={presupuesto.estado} />
+                    </span>
 
-              <div className="flex min-w-[300px] flex-nowrap items-center justify-end gap-1.5">
-                <ActionButton
-                  label="Editar"
-                  onClick={() => onEdit(presupuesto.id)}
-                  icon={<Pencil size={13} />}
-                />
+                    <span className="mt-0.5 block truncate text-[11px] font-normal text-[#64748b]">
+                      {presupuesto.numero || "Sin número"} ·{" "}
+                      {presupuesto.cliente_telefono || presupuesto.cliente_email || "Sin contacto"}
+                    </span>
+                  </span>
+                </button>
 
-                <ActionButton
-                  label="IA"
-                  primary
-                  onClick={() => onEditIa(presupuesto.id)}
-                  icon={<Sparkles size={13} />}
-                />
+                <div className="grid gap-2 rounded-[14px] border border-black/10 bg-white/70 p-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#94a3b8]">
+                      Destino
+                    </div>
 
-                <ActionButton
-                  label="PDF"
-                  onClick={() => onPdf(presupuesto.id)}
-                  icon={<FileText size={13} />}
-                />
+                    <div className="mt-0.5 truncate text-[12px] font-semibold text-[#172033]">
+                      {presupuesto.destino_principal || "—"}
+                    </div>
 
-                <RowMoreMenu
-                  onDuplicate={() => onDuplicate(presupuesto.id)}
-                  onPreview={() => onPreview(presupuesto.id)}
-                  onSendLiveNos={() => onSendLiveNos(presupuesto.id)}
-                  onDelete={() => onDelete(presupuesto.id)}
-                />
-              </div>
+                    <div className="mt-0.5 truncate text-[11px] font-normal text-[#64748b]">
+                      {presupuesto.destino_detalle || "Sin detalle"}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-[12px] bg-[#f8fafc] p-2">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#94a3b8]">
+                        Salida
+                      </div>
+
+                      <div className="mt-0.5 text-[12px] font-semibold text-[#172033]">
+                        {formatDate(presupuesto.fecha_salida)}
+                      </div>
+                    </div>
+
+                    <div className="rounded-[12px] bg-[#f8fafc] p-2">
+                      <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#94a3b8]">
+                        Precio
+                      </div>
+
+                      <div className="mt-0.5 truncate text-[12px] font-semibold text-[#172033]">
+                        {presupuesto.precio_recomendado !== null
+                          ? formatMoneyAR(
+                              presupuesto.precio_recomendado,
+                              presupuesto.moneda_principal
+                            )
+                          : presupuesto.precio_desde !== null
+                            ? formatMoneyAR(
+                                presupuesto.precio_desde,
+                                presupuesto.moneda_principal
+                              )
+                            : "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+ <div className="grid grid-cols-2 gap-2">
+  <button
+    type="button"
+    onClick={() => onEdit(presupuesto.id)}
+    className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[11.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+  >
+    <Pencil size={13} />
+    Editar
+  </button>
+
+  <button
+    type="button"
+    onClick={() => onEditIa(presupuesto.id)}
+    className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-3 text-[11.5px] font-medium text-white shadow-sm hover:bg-[#406b7d]"
+  >
+    <Sparkles size={13} />
+    IA
+  </button>
+
+  <button
+    type="button"
+    onClick={() => onPdf(presupuesto.id)}
+    className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[11.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+  >
+    <FileText size={13} />
+    PDF
+  </button>
+
+  <button
+    type="button"
+    onClick={() => onDuplicate(presupuesto.id)}
+    className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[11.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+  >
+    <Copy size={13} />
+    Duplicar
+  </button>
+
+  <button
+    type="button"
+    onClick={() => onPreview(presupuesto.id)}
+    className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[11.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+  >
+    <Eye size={13} />
+    Vista previa
+  </button>
+
+  <button
+    type="button"
+    onClick={() => onSendLiveNos(presupuesto.id)}
+    className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[11.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
+  >
+    <Send size={13} />
+    LiveNos
+  </button>
+
+  <button
+    type="button"
+    onClick={() => onDelete(presupuesto.id)}
+    className="col-span-2 inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-[10px] border border-red-200 bg-red-50 px-3 text-[11.5px] font-medium text-red-600 hover:bg-red-100"
+  >
+    <Trash2 size={13} />
+    Eliminar
+  </button>
+</div>
+              </article>
             </div>
           );
         })}
@@ -6882,10 +7164,12 @@ if (id) {
     );
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
-      <header className="shrink-0 border-b border-black/10 bg-white/78 px-5 py-3 backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-3">
+ 
+ return (
+  <div className="presupuestos-v2-root relative flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
+    <style>{PRESUPUESTOS_V2_RESPONSIVE_CSS}</style>
+         <header className="shrink-0 border-b border-black/10 bg-white/78 px-4 py-3 backdrop-blur-xl sm:px-5">
+       <div className="presupuestos-v2-header-inner">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">
@@ -6902,7 +7186,7 @@ if (id) {
             </p>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+         <div className="presupuestos-v2-header-actions flex shrink-0 flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => {
@@ -6974,7 +7258,7 @@ if (id) {
           ) : null}
         </section>
 
-        <section className="relative z-0 mb-3 grid gap-2.5 md:grid-cols-2 xl:grid-cols-6">
+        <section className="presupuestos-v2-metrics relative z-0 mb-3 grid gap-2.5">
           <MetricCard label="Total" value={metrics.total} icon={FileText} tone="orange" />
           <MetricCard label="Borradores" value={metrics.borradores} icon={Pencil} tone="slate" />
           <MetricCard label="Enviados" value={metrics.enviados} icon={Send} tone="blue" />
@@ -6983,8 +7267,8 @@ if (id) {
           <MetricCard label="Vencidos" value={metrics.vencidos} icon={AlertTriangle} tone="amber" />
         </section>
 
-        <section className="relative z-0 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
-          <div className="mb-2.5 flex items-center justify-between gap-3">
+<section className="relative z-0 min-w-0 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
+        <div className="mb-2.5 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-[14px] font-semibold text-[#172033]">Listado de presupuestos</h2>
               <p className="text-[11.5px] font-normal text-[#64748b]">

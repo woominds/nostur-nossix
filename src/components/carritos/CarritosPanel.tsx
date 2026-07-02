@@ -97,6 +97,113 @@ const MONEDA_OPTIONS: SelectOption[] = [
   { value: "USD", label: "USD" }
 ];
 
+const CARRITOS_RESPONSIVE_CSS = `
+.carritos-panel-root {
+  container-type: inline-size;
+}
+
+.carritos-panel-header-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.carritos-panel-header-actions {
+  justify-content: flex-start;
+}
+
+.carritos-kpis {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.carritos-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.carritos-side-detail {
+  display: none;
+}
+
+.carrito-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.carrito-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.carrito-row-travel,
+.carrito-row-money-block {
+  border: 1px solid rgb(0 0 0 / 0.10);
+  background: rgb(255 255 255 / 0.60);
+  padding: 10px;
+  border-radius: 13px;
+}
+
+.carrito-row-mobile-label {
+  display: block;
+}
+
+@container (min-width: 620px) {
+  .carritos-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 980px) {
+  .carritos-panel-header-inner {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .carritos-panel-header-actions {
+    justify-content: flex-end;
+  }
+
+ .carrito-row {
+  grid-template-columns: minmax(170px, 1.25fr) minmax(150px, 1fr) minmax(130px, 0.75fr) 118px 128px;
+}
+
+  .carrito-row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .carrito-row-travel,
+  .carrito-row-money-block {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .carrito-row-mobile-label {
+    display: none;
+  }
+}
+
+@container (min-width: 1240px) {
+  .carritos-layout {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+
+  .carritos-side-detail {
+    display: block;
+  }
+
+  .carritos-kpis {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .carrito-row {
+    grid-template-columns: minmax(180px, 1.25fr) minmax(160px, 1fr) minmax(130px, 0.75fr) 126px 128px;
+  }
+}
+`;
+
 function getToday(): string {
   const now = new Date();
   const argentinaNow = new Date(
@@ -173,12 +280,14 @@ function normalizeText(value: unknown): string {
 }
 
 function getInitials(name: string): string {
-  return name
+  const initials = name
     .split(" ")
     .filter(Boolean)
     .slice(0, 2)
     .map((part) => part.slice(0, 1).toUpperCase())
     .join("");
+
+  return initials || "C";
 }
 
 function maskCarrito(value: string): string {
@@ -483,14 +592,14 @@ function DestinosMultiSelect({
           {values.map((value) => (
             <span
               key={value}
-              className="flex h-6 items-center gap-1 rounded-md bg-[#eef6f7] px-1.5 text-[11px] font-medium text-[#334155]"
+              className="flex h-6 max-w-full items-center gap-1 rounded-md bg-[#eef6f7] px-1.5 text-[11px] font-medium text-[#334155]"
             >
               <span className="truncate">{value}</span>
 
               <button
                 type="button"
                 onClick={() => removeValue(value)}
-                className="flex h-4 w-4 items-center justify-center rounded-full text-[#64748b] hover:bg-white hover:text-red-600"
+                className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[#64748b] hover:bg-white hover:text-red-600"
               >
                 <X size={10} />
               </button>
@@ -505,7 +614,7 @@ function DestinosMultiSelect({
               setOpen(true);
             }}
             placeholder={values.length === 0 ? "Buscar o crear destinos" : "Agregar destino"}
-            className="h-6 min-w-[170px] flex-1 bg-transparent px-1 text-[12px] font-normal text-[#172033] outline-none placeholder:text-[#94a3b8]"
+            className="h-6 min-w-[150px] flex-1 bg-transparent px-1 text-[12px] font-normal text-[#172033] outline-none placeholder:text-[#94a3b8]"
           />
 
           <button
@@ -561,9 +670,9 @@ function DestinosMultiSelect({
                   Crear destino nuevo
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
-                  <div className="flex h-8 items-center rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#172033]">
-                    {query.trim()}
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
+                  <div className="flex h-8 min-w-0 items-center rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#172033]">
+                    <span className="truncate">{query.trim()}</span>
                   </div>
 
                   <input
@@ -612,7 +721,7 @@ function BooleanChip({
       ].join(" ")}
     >
       {checked ? <ToggleRight size={15} /> : <ToggleLeft size={15} />}
-      {label}
+      <span className="truncate">{label}</span>
     </button>
   );
 }
@@ -636,19 +745,21 @@ function CardMetric({
   }[tone];
 
   return (
-    <div className="rounded-[14px] border border-black/10 bg-white/62 px-3 py-2.5 shadow-sm backdrop-blur-xl">
+    <div className="min-w-0 rounded-[14px] border border-black/10 bg-white/62 px-3 py-2.5 shadow-sm backdrop-blur-xl">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-[10.5px] font-medium text-[#64748b]">{label}</div>
-          <div className="mt-0.5 truncate text-[18px] font-semibold tracking-tight text-[#172033]">
+
+          <div className="mt-0.5 truncate text-[16px] font-semibold tracking-tight text-[#172033] sm:text-[18px]">
             {value}
           </div>
         </div>
 
         <div
-          className={["flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1", toneClass].join(
-            " "
-          )}
+          className={[
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1",
+            toneClass
+          ].join(" ")}
         >
           <Icon size={14} strokeWidth={1.8} />
         </div>
@@ -762,10 +873,10 @@ function LineButton({ children, onClick }: { children: ReactNode; onClick: () =>
 }
 
 function WizardStepper({ step }: { step: WizardStep }) {
-  const steps = ["Cliente", "Venta Ábaco", "Pagos comerciales", "Tesorería", "Confirmar"];
+  const steps = ["Cliente", "Venta", "Pagos", "Tesorería", "Confirmar"];
 
   return (
-    <div className="mb-3 grid grid-cols-5 gap-1.5">
+    <div className="mb-3 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
       {steps.map((label, index) => {
         const number = index + 1;
         const active = step === number;
@@ -775,7 +886,7 @@ function WizardStepper({ step }: { step: WizardStep }) {
           <div
             key={label}
             className={[
-              "rounded-[12px] border px-2 py-1.5 text-center text-[11px] font-medium",
+              "rounded-[12px] border px-2 py-1.5 text-center text-[10.5px] font-medium sm:text-[11px]",
               active
                 ? "border-[#4f7c90] bg-[#4f7c90] text-white"
                 : done
@@ -836,7 +947,9 @@ function WizardSummary({
         <div className="rounded-[14px] border border-black/10 bg-white p-3">
           <div className="flex justify-between gap-3">
             <span className="text-[#64748b]">Final</span>
-            <strong className="font-semibold">{formatMoneyAR(totalFinal, draft.venta.moneda)}</strong>
+            <strong className="font-semibold">
+              {formatMoneyAR(totalFinal, draft.venta.moneda)}
+            </strong>
           </div>
 
           <div className="flex justify-between gap-3">
@@ -856,7 +969,9 @@ function WizardSummary({
           <div className="mt-1 flex justify-between gap-3 border-t border-black/10 pt-1">
             <span className="text-[#64748b]">Saldo pasajero</span>
 
-            <strong className={saldo > 0 ? "font-semibold text-red-600" : "font-semibold text-emerald-700"}>
+            <strong
+              className={saldo > 0 ? "font-semibold text-red-600" : "font-semibold text-emerald-700"}
+            >
               {formatMoneyAR(saldo, draft.venta.moneda)}
             </strong>
           </div>
@@ -882,7 +997,6 @@ function WizardSummary({
     </aside>
   );
 }
-
 function CarritoWizard({
   onClose,
   onSaved
@@ -1263,8 +1377,8 @@ function CarritoWizard({
   }));
 
   return createPortal(
-    <div className="pointer-events-none fixed bottom-0 right-0 top-[39px] z-[180] flex justify-end">
-      <aside className="pointer-events-auto h-full w-full max-w-[720px] overflow-hidden border-l border-black/10 bg-[#edf3f7] text-[#172033] shadow-2xl">
+    <div className="pointer-events-none fixed bottom-0 right-0 top-[39px] z-[180] flex w-full justify-end">
+      <aside className="pointer-events-auto h-full w-full max-w-[min(720px,100%)] overflow-hidden border-l border-black/10 bg-[#edf3f7] text-[#172033] shadow-2xl">
         <div className="flex h-full min-h-0 flex-col">
           <div className="shrink-0 border-b border-black/10 bg-white/85 px-4 py-3 backdrop-blur-xl">
             <div className="flex items-start justify-between gap-3">
@@ -1288,7 +1402,7 @@ function CarritoWizard({
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto p-4">
+          <div className="min-h-0 flex-1 overflow-auto p-3 sm:p-4">
             <WizardStepper step={step} />
             <WizardError message={wizardError} onClose={() => setWizardError(null)} />
 
@@ -1415,7 +1529,7 @@ function CarritoWizard({
                   </section>
                 ) : null}
 
-                {step === 2 ? (
+                                {step === 2 ? (
                   <section>
                     <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
                       Paso 2 · Venta Ábaco
@@ -2203,8 +2317,8 @@ function CarritoDetailModal({
   const abacoUrl = `https://abaco.almundo.com/bo/cart/${carrito.numero_carrito}`;
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center bg-black/35 px-4 pt-12 backdrop-blur-sm">
-      <div className="max-h-[calc(100vh-72px)] w-full max-w-4xl overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl">
+    <div className="fixed inset-0 z-[200] flex items-start justify-center bg-black/35 px-2 pt-3 backdrop-blur-sm sm:px-4 sm:pt-8">
+      <div className="max-h-[calc(100vh-24px)] w-full max-w-4xl overflow-auto rounded-[18px] border border-black/10 bg-white p-3 text-[#172033] shadow-2xl sm:max-h-[calc(100vh-64px)] sm:p-4">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="truncate text-[17px] font-semibold text-[#172033]">
@@ -2237,6 +2351,7 @@ function CarritoDetailModal({
             <div className="text-[12px] font-normal text-[#64748b]">
               {carrito.clientes?.telefono || "—"}
             </div>
+
             <div className="text-[12px] font-normal text-[#64748b]">
               {carrito.clientes?.email || "Sin email"}
             </div>
@@ -2396,10 +2511,10 @@ export function CarritosPanel() {
   const carritos = getFilteredCarritos();
   const metrics = getMetrics();
 
-const [filtersOpen, setFiltersOpen] = useState(false);
-const [wizardOpen, setWizardOpen] = useState(false);
-const [detailCarrito, setDetailCarrito] = useState<Carrito | null>(null);
-const [toast, setToast] = useState<ToastState>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [detailCarrito, setDetailCarrito] = useState<Carrito | null>(null);
+  const [toast, setToast] = useState<ToastState>(null);
 
   const selectedCarrito = useMemo(
     () => carritos.find((carrito) => carrito.id === selectedCarritoId) || carritos[0] || null,
@@ -2409,10 +2524,6 @@ const [toast, setToast] = useState<ToastState>(null);
   useEffect(() => {
     loadCarritos();
   }, [loadCarritos]);
-
-
-
-
 
   function showToast(message: string, type: "success" | "error" = "success") {
     setToast({ type, message });
@@ -2471,34 +2582,38 @@ const [toast, setToast] = useState<ToastState>(null);
     { value: "todos", label: "Todos" }
   ];
 
-
   const selectedVendedorFilterLabel =
-  vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos";
+    vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos";
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
-      <header className="shrink-0 border-b border-black/10 bg-white/78 px-5 py-3 backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-3">
+    <div className="carritos-panel-root flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
+      <style>{CARRITOS_RESPONSIVE_CSS}</style>
+
+      <header className="shrink-0 border-b border-black/10 bg-white/78 px-4 py-3 backdrop-blur-xl sm:px-5">
+        <div className="carritos-panel-header-inner">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">Carritos</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">
+                Carritos
+              </h1>
 
               <span className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-nostur-orange ring-1 ring-orange-100">
                 Almundo
               </span>
             </div>
 
-           <p className="mt-1 text-[12px] font-normal text-[#64748b]">
-  Carga de ventas Almundo. Por defecto cada vendedor ve sus carritos, pero puede filtrar por todos.
-</p>
+            <p className="mt-1 max-w-2xl text-[12px] font-normal leading-5 text-[#64748b]">
+              Carga de ventas Almundo. Por defecto cada vendedor ve sus carritos, pero puede
+              filtrar por todos.
+            </p>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="carritos-panel-header-actions flex shrink-0 flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={loadCarritos}
               disabled={loading}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-white px-2.5 text-[11px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-white px-3 text-[11.5px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
             >
               <RefreshCcw size={13} className={loading ? "animate-spin" : ""} />
               Actualizar
@@ -2507,7 +2622,7 @@ const [toast, setToast] = useState<ToastState>(null);
             <button
               type="button"
               onClick={() => setWizardOpen(true)}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-2.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#406b7d]"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-3 text-[11.5px] font-medium text-white shadow-sm transition hover:bg-[#406b7d]"
             >
               <Plus size={13} />
               Nuevo carrito
@@ -2548,13 +2663,13 @@ const [toast, setToast] = useState<ToastState>(null);
                 </span>
               </div>
 
-             <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
-  {filters.periodMode === "mes"
-    ? `${formatMonthLabel(filters.month)} · ${filters.desde} → ${filters.hasta}`
-    : `Rango reportes · ${filters.desde} → ${filters.hasta}`}{" "}
-  · Vendedor: {selectedVendedorFilterLabel} · Estado:{" "}
-  {filters.estado === "todos" ? "Todos" : filters.estado} · Riesgo: {filters.riesgo}
-</div>
+              <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
+                {filters.periodMode === "mes"
+                  ? `${formatMonthLabel(filters.month)} · ${filters.desde} → ${filters.hasta}`
+                  : `Rango reportes · ${filters.desde} → ${filters.hasta}`}{" "}
+                · Vendedor: {selectedVendedorFilterLabel} · Estado:{" "}
+                {filters.estado === "todos" ? "Todos" : filters.estado} · Riesgo: {filters.riesgo}
+              </div>
             </button>
 
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
@@ -2632,21 +2747,21 @@ const [toast, setToast] = useState<ToastState>(null);
                   />
                 </div>
 
-               <div>
-  <FieldLabel>Vendedor</FieldLabel>
+                <div>
+                  <FieldLabel>Vendedor</FieldLabel>
 
-  <NosturSelect
-    value={filters.vendedorId}
-    onChange={(value) => {
-      setFilter("vendedorId", value);
+                  <NosturSelect
+                    value={filters.vendedorId}
+                    onChange={(value) => {
+                      setFilter("vendedorId", value);
 
-      window.setTimeout(() => {
-        loadCarritos();
-      }, 0);
-    }}
-    options={vendedorOptions}
-  />
-</div>
+                      window.setTimeout(() => {
+                        loadCarritos();
+                      }, 0);
+                    }}
+                    options={vendedorOptions}
+                  />
+                </div>
 
                 <div>
                   <FieldLabel>Sucursal</FieldLabel>
@@ -2722,7 +2837,7 @@ const [toast, setToast] = useState<ToastState>(null);
           ) : null}
         </section>
 
-        <section className="relative z-0 mb-3 grid gap-2.5 md:grid-cols-3 xl:grid-cols-6">
+        <section className="carritos-kpis relative z-0 mb-3 grid gap-2.5">
           <CardMetric label="Carritos" value={metrics.carritos} icon={ShoppingCart} />
           <CardMetric label="Total venta" value={formatMoneyAR(metrics.totalVenta)} icon={FileText} />
           <CardMetric
@@ -2731,13 +2846,18 @@ const [toast, setToast] = useState<ToastState>(null);
             icon={CheckCircle2}
             tone="green"
           />
-          <CardMetric label="Saldo" value={formatMoneyAR(metrics.saldo)} icon={AlertTriangle} tone="red" />
+          <CardMetric
+            label="Saldo"
+            value={formatMoneyAR(metrics.saldo)}
+            icon={AlertTriangle}
+            tone="red"
+          />
           <CardMetric label="Riesgos" value={metrics.riesgos} icon={AlertTriangle} tone="red" />
           <CardMetric label="En control" value={metrics.enControl} icon={Eye} tone="blue" />
         </section>
 
-        <div className="relative z-0 grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-          <section className="min-w-0 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
+        <div className="carritos-layout relative z-0 grid min-w-0 gap-3">
+          <section className="min-w-0 overflow-hidden rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
             <div className="mb-2.5 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-[14px] font-semibold text-[#172033]">Listado de carritos</h2>
@@ -2764,40 +2884,44 @@ const [toast, setToast] = useState<ToastState>(null);
                   const tieneSaldo = parseMoney(carrito.saldo_cta_cte) > 0.009;
                   const estaInactivo = carrito.activo === false;
 
-                  return (
-                    <div
-                      key={carrito.id}
-                      onClick={() => selectCarrito(carrito.id)}
-                      className={[
-                        "grid min-w-0 cursor-pointer gap-2 rounded-[12px] border px-2.5 py-2 text-left transition lg:grid-cols-[1.35fr_1.15fr_1fr_128px_136px]",
-                        selected
-                          ? "border-[#4f7c90]/50 bg-[#eef6f7]"
-                          : estaInactivo
-                            ? "border-black/10 bg-[#f8fafc] opacity-60 hover:bg-white"
-                            : "border-black/10 bg-[#f8fafc] hover:bg-white"
-                      ].join(" ")}
-                      title={
-                        estaInactivo
-                          ? "Carrito inactivo"
-                          : tieneSaldo
-                            ? "Carrito con saldo pendiente / Cta Cte"
-                            : "Carrito sin saldo pendiente"
-                      }
-                    >
+ return (
+  <article
+    key={carrito.id}
+    onClick={() => {
+      selectCarrito(carrito.id);
+      setDetailCarrito(carrito);
+    }}
+    className={[
+      "carrito-row grid min-w-0 cursor-pointer gap-3 rounded-[14px] border px-3 py-3 text-left transition",
+      selected
+        ? "border-[#4f7c90]/50 bg-[#eef6f7]"
+        : estaInactivo
+          ? "border-black/10 bg-[#f8fafc] opacity-60 hover:bg-white"
+          : "border-black/10 bg-[#f8fafc] hover:bg-white"
+    ].join(" ")}
+  >
                       <div className="min-w-0">
-                        <div className="truncate text-[12px] font-semibold text-[#172033]">
-                          {cliente?.nombre_completo || "Sin cliente"}
+                        <div className="flex min-w-0 items-start gap-2.5">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] bg-[#e2e8f0] text-[11px] font-semibold text-[#334155]">
+                            {getInitials(cliente?.nombre_completo || "C")}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[13px] font-semibold text-[#172033]">
+                              {cliente?.nombre_completo || "Sin cliente"}
+                            </div>
+
+                            <div className="truncate text-[11.5px] font-normal text-[#64748b]">
+                              {cliente?.telefono || "—"}
+                            </div>
+
+                            <div className="truncate text-[11.5px] font-medium text-[#4f7c90]">
+                              {carrito.numero_carrito}
+                            </div>
+                          </div>
                         </div>
 
-                        <div className="truncate text-[11px] font-normal text-[#64748b]">
-                          {cliente?.telefono || "—"}
-                        </div>
-
-                        <div className="truncate text-[11px] font-medium text-[#4f7c90]">
-                          {carrito.numero_carrito}
-                        </div>
-
-                        <div className="mt-1">
+                        <div className="mt-2">
                           <SellerBadge
                             vendedorId={carrito.vendedor_id}
                             vendedorNombre={carrito.vendedor}
@@ -2806,7 +2930,11 @@ const [toast, setToast] = useState<ToastState>(null);
                         </div>
                       </div>
 
-                      <div className="min-w-0">
+                      <div className="carrito-row-travel min-w-0">
+                        <div className="carrito-row-mobile-label text-[10px] font-medium uppercase tracking-[0.12em] text-[#94a3b8]">
+                          Viaje
+                        </div>
+
                         <div className="truncate text-[12px] font-semibold text-[#172033]">
                           {carrito.destino || "Sin destino"}
                         </div>
@@ -2822,17 +2950,41 @@ const [toast, setToast] = useState<ToastState>(null);
                         </div>
                       </div>
 
-                      <div className="min-w-0">
-                        <div className="text-[12px] font-semibold text-[#172033]">
-                          {formatMoneyAR(carrito.importe_final ?? carrito.importe, carrito.moneda)}
+                      <div className="grid grid-cols-2 gap-2 min-[980px]:block">
+                        <div className="carrito-row-money-block">
+                          <div className="carrito-row-mobile-label text-[10px] font-medium uppercase tracking-[0.12em] text-[#94a3b8]">
+                            Final
+                          </div>
+
+                          <div className="truncate text-[12px] font-semibold text-[#172033]">
+                            {formatMoneyAR(
+                              carrito.importe_final ?? carrito.importe,
+                              carrito.moneda
+                            )}
+                          </div>
+
+                          <div className="truncate text-[11px] font-normal text-[#64748b]">
+                            Pagado {formatMoneyAR(carrito.total_pagado, carrito.moneda)}
+                          </div>
                         </div>
 
-                        <div className="text-[11px] font-normal text-[#64748b]">
-                          Pagado {formatMoneyAR(carrito.total_pagado, carrito.moneda)}
+                        <div className="carrito-row-money-block min-[980px]:hidden">
+                          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#94a3b8]">
+                            Saldo
+                          </div>
+
+                          <div
+                            className={[
+                              "truncate text-[12px] font-semibold",
+                              tieneSaldo ? "text-amber-700" : "text-emerald-700"
+                            ].join(" ")}
+                          >
+                            {formatMoneyAR(carrito.saldo_cta_cte, carrito.moneda)}
+                          </div>
                         </div>
 
                         {tieneSaldo ? (
-                          <div className="text-[11px] font-medium text-[#64748b]">
+                          <div className="hidden text-[11px] font-medium text-[#64748b] min-[980px]:block">
                             Saldo {formatMoneyAR(carrito.saldo_cta_cte, carrito.moneda)}
                           </div>
                         ) : null}
@@ -2862,79 +3014,75 @@ const [toast, setToast] = useState<ToastState>(null);
                         ) : null}
                       </div>
 
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setDetailCarrito(carrito);
-                          }}
-                          className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[#64748b] hover:bg-white hover:text-[#172033]"
-                          title="Ver detalle"
-                        >
-                          <Eye size={13} />
-                        </button>
+                      <div
+                   
+  className="grid grid-cols-2 gap-2 min-[980px]:flex min-[980px]:items-center min-[980px]:justify-end min-[980px]:gap-1"
+  onClick={(event) => event.stopPropagation()}
+>
+  <button
+    type="button"
+    onClick={() => {
+      selectCarrito(carrito.id);
+      setDetailCarrito(carrito);
+    }}
+    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0"
+    title="Ver detalle"
+  >
+    <Eye size={14} />
+    <span className="min-[980px]:hidden">Ver detalle</span>
+  </button>
 
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            window.open(
-                              `https://abaco.almundo.com/bo/cart/${carrito.numero_carrito}`,
-                              "_blank"
-                            );
-                          }}
-                          className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[#64748b] hover:bg-white hover:text-[#172033]"
-                          title="Abrir Ábaco"
-                        >
-                          <ShoppingCart size={13} />
-                        </button>
+  <button
+    type="button"
+    onClick={() =>
+      window.open(`https://abaco.almundo.com/bo/cart/${carrito.numero_carrito}`, "_blank")
+    }
+    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0"
+    title="Abrir Ábaco"
+  >
+    <ShoppingCart size={14} />
+    <span className="min-[980px]:hidden">Ábaco</span>
+  </button>
 
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleSendToControl(carrito);
-                          }}
-                          className={[
-                            "flex h-7 w-7 items-center justify-center rounded-[9px] hover:bg-white",
-                            ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(
-                              carrito.estado
-                            )
-                              ? "text-emerald-600 opacity-60"
-                              : "text-[#4f7c90]"
-                          ].join(" ")}
-                          title={
-                            ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(
-                              carrito.estado
-                            )
-                              ? "Ya fue enviado a control o ya fue controlado"
-                              : "Enviar a control"
-                          }
-                        >
-                          <CheckCircle2 size={13} />
-                        </button>
+  <button
+    type="button"
+    onClick={() => handleSendToControl(carrito)}
+    className={[
+      "inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] px-3 text-[12px] font-medium shadow-sm ring-1 ring-black/10 hover:bg-white min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0",
+      ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(carrito.estado)
+        ? "bg-emerald-50 text-emerald-600 opacity-60"
+        : "bg-[#eef6f7] text-[#4f7c90]"
+    ].join(" ")}
+    title={
+      ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(carrito.estado)
+        ? "Ya fue enviado a control o ya fue controlado"
+        : "Enviar a control"
+    }
+  >
+    <CheckCircle2 size={14} />
+    <span className="min-[980px]:hidden">Control</span>
+  </button>
 
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleToggle(carrito);
-                          }}
-                          className="flex h-7 w-7 items-center justify-center rounded-[9px] text-[#64748b] hover:bg-white hover:text-[#172033]"
-                          title={carrito.activo ? "Desactivar" : "Activar"}
-                        >
-                          {carrito.activo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                        </button>
-                      </div>
-                    </div>
+  <button
+    type="button"
+    onClick={() => handleToggle(carrito)}
+    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0"
+    title={carrito.activo ? "Desactivar" : "Activar"}
+  >
+    {carrito.activo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+    <span className="min-[980px]:hidden">
+      {carrito.activo ? "Desactivar" : "Activar"}
+    </span>
+  </button>
+</div>
+                    </article>
                   );
                 })}
               </div>
             )}
           </section>
 
-          <aside className="min-w-0 rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
+          <aside className="carritos-side-detail min-w-0 rounded-[16px] border border-black/10 bg-white/68 p-3 shadow-sm backdrop-blur-xl">
             {selectedCarrito ? (
               <>
                 <div className="mb-3 flex items-start justify-between gap-3">
@@ -3122,7 +3270,10 @@ const [toast, setToast] = useState<ToastState>(null);
       <Toast toast={toast} onClose={() => setToast(null)} />
 
       {wizardOpen ? (
-        <CarritoWizard onClose={() => setWizardOpen(false)} onSaved={(message) => showToast(message)} />
+        <CarritoWizard
+          onClose={() => setWizardOpen(false)}
+          onSaved={(message) => showToast(message)}
+        />
       ) : null}
 
       {detailCarrito ? (
@@ -3138,3 +3289,4 @@ const [toast, setToast] = useState<ToastState>(null);
 }
 
 export default CarritosPanel;
+
