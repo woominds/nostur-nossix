@@ -821,6 +821,12 @@ export function ConfigPanel() {
   const [listSearch, setListSearch] = useState("");
   const [notice, setNotice] = useState<NoticeState>(null);
 
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<Profile | null>(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [resetPasswordSaving, setResetPasswordSaving] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
@@ -1029,6 +1035,98 @@ export function ConfigPanel() {
     if (editingId === id) {
       resetForm();
     }
+  }
+
+    function openResetPasswordModal(profile: Profile) {
+    if (!canResetUserPasswords) {
+      showNotice(
+        "error",
+        "Sin permisos",
+        "Tu usuario no tiene permisos para resetear contraseñas."
+      );
+      return;
+    }
+
+    setResetPasswordTarget(profile);
+    setResetPasswordValue("");
+    setResetPasswordConfirm("");
+    setShowResetPassword(false);
+    setNotice(null);
+  }
+
+  function closeResetPasswordModal() {
+    if (resetPasswordSaving) return;
+
+    setResetPasswordTarget(null);
+    setResetPasswordValue("");
+    setResetPasswordConfirm("");
+    setShowResetPassword(false);
+  }
+
+  async function handleResetPassword() {
+    if (!resetPasswordTarget) return;
+
+    const password = resetPasswordValue.trim();
+    const confirmPassword = resetPasswordConfirm.trim();
+
+    if (password.length < 8) {
+      showNotice(
+        "error",
+        "Contraseña inválida",
+        "La contraseña temporal debe tener al menos 8 caracteres."
+      );
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      showNotice(
+        "error",
+        "Las contraseñas no coinciden",
+        "Revisá la contraseña temporal y la confirmación."
+      );
+      return;
+    }
+
+    setResetPasswordSaving(true);
+
+    const { data, error: functionError } = await supabase.functions.invoke(
+      "admin-reset-user-password",
+      {
+        body: {
+          user_id: resetPasswordTarget.id,
+          password
+        }
+      }
+    );
+
+    setResetPasswordSaving(false);
+
+    if (functionError) {
+      showNotice(
+        "error",
+        "No se pudo resetear la contraseña",
+        functionError.message || "Falló la función admin-reset-user-password."
+      );
+      return;
+    }
+
+    if (!data?.ok) {
+      showNotice(
+        "error",
+        "No se pudo resetear la contraseña",
+        data?.error || "La función no devolvió una respuesta válida."
+      );
+      return;
+    }
+
+    showNotice(
+      "success",
+      "Contraseña actualizada",
+      `La contraseña temporal de ${getItemName("profiles", resetPasswordTarget as unknown as Record<string, unknown>)} fue actualizada correctamente.`
+    );
+
+    closeResetPasswordModal();
+    await loadConfig();
   }
 
   async function handleSubmit(event: SyntheticEvent<HTMLFormElement>) {
@@ -1814,15 +1912,113 @@ export function ConfigPanel() {
   const activeTabMeta = tabs.find((tab) => tab.id === activeTab) || tabs[0];
   const ActiveIcon = activeTabMeta.icon;
   const currentProfileRecord = currentProfile as
-    | (Profile & { is_support_user?: boolean })
+    | (Profile & { is_support_user?: boolean | null; is_super_admin?: boolean | null })
     | null;
 
   const canSeeDeployPanel =
     currentProfileRecord?.email?.toLowerCase() === "soporte@nostur.com.ar" ||
     currentProfileRecord?.is_support_user === true;
 
-  return (
+  const canResetUserPasswords =
+    Boolean(currentProfileRecord?.activo) &&
+    (currentProfileRecord?.is_support_user === true ||
+      currentProfileRecord?.is_super_admin === true ||
+      currentProfileRecord?.rol === "admin_general" ||
+      currentProfileRecord?.rol === "gerencia");
+
+   return (
     <div className="h-full overflow-auto bg-[#edf3f7] px-5 py-4 text-[#172033]">
+      {resetPasswordTarget ? (
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-[460px] rounded-[18px] border border-black/10 bg-white p-4 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-[12px] bg-orange-50 text-nostur-orange ring-1 ring-orange-100">
+                    <KeyRound size={17} strokeWidth={1.8} />
+                  </div>
+
+                  <div className="min-w-0">
+                    <h2 className="truncate text-[15px] font-semibold text-[#172033]">
+                      Resetear contraseña
+                    </h2>
+                    <p className="truncate text-[11.5px] font-normal text-[#64748b]">
+                      {getItemName("profiles", resetPasswordTarget as unknown as Record<string, unknown>)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeResetPasswordModal}
+                disabled={resetPasswordSaving}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#172033] disabled:opacity-50"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="mb-3 rounded-[14px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-[11.5px] font-semibold leading-relaxed text-amber-800">
+              Se va a establecer una contraseña temporal para el usuario. Compartila por un medio seguro.
+            </div>
+
+            <div className="grid gap-3">
+              <div>
+                <FieldLabel>Nueva contraseña temporal</FieldLabel>
+                <div className="flex gap-2">
+                  <input
+                    value={resetPasswordValue}
+                    onChange={(event) => setResetPasswordValue(event.target.value)}
+                    type={showResetPassword ? "text" : "password"}
+                    placeholder="Mínimo 8 caracteres"
+                    className="h-9 min-w-0 flex-1 rounded-xl border border-black/10 bg-[#f8fafc] px-3 text-xs font-semibold text-[#111827] outline-none transition placeholder:text-[#94a3b8] focus:border-nostur-orange"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPassword((current) => !current)}
+                    className="flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 bg-white/70 text-[#64748b] hover:bg-white"
+                  >
+                    {showResetPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <FieldLabel>Confirmar contraseña</FieldLabel>
+                <TextInput
+                  value={resetPasswordConfirm}
+                  onChange={setResetPasswordConfirm}
+                  placeholder="Repetí la contraseña"
+                  type={showResetPassword ? "text" : "password"}
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeResetPasswordModal}
+                disabled={resetPasswordSaving}
+                className="h-8 rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc] disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetPassword}
+                disabled={resetPasswordSaving}
+                className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
+              >
+                {resetPasswordSaving ? "Actualizando..." : "Actualizar contraseña"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mx-auto w-full max-w-[calc(100vw-110px)]">
         <header className="mb-3 rounded-[16px] border border-black/10 bg-white/78 px-4 py-3 shadow-sm backdrop-blur-xl">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2168,7 +2364,7 @@ export function ConfigPanel() {
                             {active ? "Activo" : "Inactivo"}
                           </button>
 
-                          <button
+                                               <button
                             type="button"
                             onClick={() => handleEdit(item)}
                             className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#64748b] hover:bg-black/5 hover:text-[#172033]"
@@ -2176,6 +2372,17 @@ export function ConfigPanel() {
                           >
                             <Pencil size={14} strokeWidth={1.8} />
                           </button>
+
+                          {activeTab === "profiles" && canResetUserPasswords ? (
+                            <button
+                              type="button"
+                              onClick={() => openResetPasswordModal(item as unknown as Profile)}
+                              className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#64748b] hover:bg-orange-50 hover:text-nostur-orange"
+                              title="Resetear contraseña"
+                            >
+                              <KeyRound size={14} strokeWidth={1.8} />
+                            </button>
+                          ) : null}
 
                           {activeTab === "credenciales" ? (
                             <button

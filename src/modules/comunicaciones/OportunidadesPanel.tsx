@@ -555,9 +555,9 @@ function NosturSelect({
     );
   }, [options, search]);
 
-  return (
-    <div className="relative">
-      <button
+return (
+  <div className={["relative", open ? "z-[1200]" : "z-0"].join(" ")}>
+    <button
         type="button"
         disabled={disabled}
         onClick={() => {
@@ -583,9 +583,9 @@ function NosturSelect({
 
       {open ? (
         <>
-          <button
-            type="button"
-            className="fixed inset-0 z-[940] cursor-default bg-transparent"
+         <button
+  type="button"
+  className="fixed inset-0 z-[1180] cursor-default bg-transparent"
             onClick={() => {
               setSearch("");
               setOpen(false);
@@ -593,7 +593,7 @@ function NosturSelect({
             tabIndex={-1}
           />
 
-          <div className="absolute left-0 right-0 top-[44px] z-[950] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl">
+        <div className="absolute left-0 right-0 top-[44px] z-[1210] overflow-hidden rounded-2xl border border-black/10 bg-white shadow-2xl">
             {searchable ? (
               <div className="border-b border-black/10 p-2">
                 <input
@@ -1874,7 +1874,7 @@ function canActOnOpportunity(item: OportunidadVM) {
         onCreateFile={createFileFromSelectedOpportunity}
       />
 
-      <header className="shrink-0 border-b border-black/10 bg-white/82 px-5 py-3 backdrop-blur-xl">
+      <header className="relative z-[900] shrink-0 border-b border-black/10 bg-white/82 px-5 py-3 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -1932,7 +1932,7 @@ function canActOnOpportunity(item: OportunidadVM) {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-auto p-4">
+      <main className="relative z-0 min-h-0 flex-1 overflow-auto p-4">
         <div className="grid gap-3 md:grid-cols-5">
           <MiniMetric label="Oportunidades" value={oportunidades.length} />
           <MiniMetric label="Estados" value={estados.length} />
