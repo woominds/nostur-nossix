@@ -12,6 +12,8 @@ export type ProfileLite = {
   rol: string;
   color?: string | null;
   activo: boolean;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
 };
 
 export type SucursalLite = {
@@ -35,15 +37,25 @@ export type KpiPrincipal = {
   facturacionMesArs: number;
   facturacionTotalUsd: number;
   facturacionTotalArs: number;
+
   facturacionAlmundoUsd: number;
+  facturacionAlmundoArs: number;
   facturacionFilesUsd: number;
+  facturacionFilesArs: number;
+
   utilidadTotalUsd: number;
+  utilidadTotalArs: number;
   utilidadCarritosUsd: number;
+  utilidadCarritosArs: number;
   utilidadFilesUsd: number;
+  utilidadFilesArs: number;
+
   ventasConfirmadas: number;
   carritosConfirmados: number;
   filesConfirmados: number;
+
   ticketPromedioUsd: number;
+  ticketPromedioArs: number;
 };
 
 export type SerieSemana = {
@@ -128,6 +140,34 @@ export type AlertaGestion = {
   titulo: string;
   detalle: string;
   valor?: string;
+};
+
+export type AdminMontoResumen = {
+  ars: number;
+  usd: number;
+  cantidad: number;
+};
+
+export type AdminHomeResumen = {
+  deudaOperadores: {
+    total: AdminMontoResumen;
+    vencida: AdminMontoResumen;
+    proximos5Dias: AdminMontoResumen;
+  };
+  facturasPagar: {
+    proximos5Dias: AdminMontoResumen;
+    vencidas: AdminMontoResumen;
+  };
+  facturasCobrar: {
+    totalPendiente: AdminMontoResumen;
+    vencidas: AdminMontoResumen;
+    proximos5Dias: AdminMontoResumen;
+  };
+  cajas: {
+    totalArs: number;
+    totalUsd: number;
+    cantidad: number;
+  };
 };
 
 export type PaxDebugInfo = {
@@ -248,6 +288,7 @@ type TableroControlState = {
   paxRegresando: PaxMovimiento[];
   paxDebug: PaxDebugInfo | null;
   alertas: AlertaGestion[];
+  adminResumen: AdminHomeResumen;
 
   loadTablero: () => Promise<void>;
   setFilter: <K extends keyof TableroFilters>(key: K, value: TableroFilters[K]) => void;
@@ -257,6 +298,34 @@ type TableroControlState = {
   clearError: () => void;
 };
 
+const emptyAdminMontoResumen: AdminMontoResumen = {
+  ars: 0,
+  usd: 0,
+  cantidad: 0
+};
+
+const emptyAdminResumen: AdminHomeResumen = {
+  deudaOperadores: {
+    total: emptyAdminMontoResumen,
+    vencida: emptyAdminMontoResumen,
+    proximos5Dias: emptyAdminMontoResumen
+  },
+  facturasPagar: {
+    proximos5Dias: emptyAdminMontoResumen,
+    vencidas: emptyAdminMontoResumen
+  },
+  facturasCobrar: {
+    totalPendiente: emptyAdminMontoResumen,
+    vencidas: emptyAdminMontoResumen,
+    proximos5Dias: emptyAdminMontoResumen
+  },
+  cajas: {
+    totalArs: 0,
+    totalUsd: 0,
+    cantidad: 0
+  }
+};
+
 const emptyKpis: KpiPrincipal = {
   facturacionHistoricaUsd: 0,
   facturacionHistoricaArs: 0,
@@ -264,15 +333,25 @@ const emptyKpis: KpiPrincipal = {
   facturacionMesArs: 0,
   facturacionTotalUsd: 0,
   facturacionTotalArs: 0,
+
   facturacionAlmundoUsd: 0,
+  facturacionAlmundoArs: 0,
   facturacionFilesUsd: 0,
+  facturacionFilesArs: 0,
+
   utilidadTotalUsd: 0,
+  utilidadTotalArs: 0,
   utilidadCarritosUsd: 0,
+  utilidadCarritosArs: 0,
   utilidadFilesUsd: 0,
+  utilidadFilesArs: 0,
+
   ventasConfirmadas: 0,
   carritosConfirmados: 0,
   filesConfirmados: 0,
-  ticketPromedioUsd: 0
+
+  ticketPromedioUsd: 0,
+  ticketPromedioArs: 0
 };
 
 function getArgentinaTodayISO(): string {
@@ -365,25 +444,117 @@ function getNumber(value: string | number | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function getVentaFacturacionArs(venta: VentaBase): number {
-  const moneda = String(venta.moneda || "ARS").toUpperCase();
-  const precioOriginal = getNumber(venta.precio_venta_original);
-  const facturacionUsd = getNumber(venta.facturacion_usd);
-  const tc = getNumber(venta.tc_promedio_usd_ars);
+function addToAdminMonto(
+  current: AdminMontoResumen,
+  importe: string | number | null | undefined,
+  moneda: string | null | undefined
+): AdminMontoResumen {
+  const next = {
+    ...current,
+    cantidad: current.cantidad + 1
+  };
 
-  if (moneda === "ARS") {
-    return precioOriginal;
+  const amount = getNumber(importe);
+  const currency = String(moneda || "ARS").toUpperCase().trim();
+
+  if (currency === "USD") {
+    next.usd += amount;
+  } else {
+    next.ars += amount;
   }
 
-  if (moneda === "USD" && precioOriginal > 0 && tc > 0) {
-    return precioOriginal * tc;
-  }
+  return next;
+}
 
-  if (facturacionUsd > 0 && tc > 0) {
-    return facturacionUsd * tc;
+function getRecordNumber(record: Record<string, unknown>, keys: string[]): number {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (value !== null && value !== undefined && value !== "") {
+      return getNumber(value as string | number);
+    }
   }
 
   return 0;
+}
+
+function getRecordText(record: Record<string, unknown>, keys: string[], fallback = ""): string {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (value !== null && value !== undefined && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+
+  return fallback;
+}
+
+function getRecordDate(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+
+    if (value !== null && value !== undefined && String(value).trim()) {
+      return String(value).slice(0, 10);
+    }
+  }
+
+  return null;
+}
+
+function addDaysISO(dateISO: string, days: number): string {
+  const [year, month, day] = dateISO.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  date.setDate(date.getDate() + days);
+
+  return formatDateLocalISO(date);
+}
+
+function isAdminHomeProfile(profile: ProfileLite | null): boolean {
+  return Boolean(
+    profile?.activo &&
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
+        profile.rol === "gerencia")
+  );
+}
+
+function getVentaMonedaOriginal(venta: VentaBase): string {
+  return String(venta.moneda || "ARS").trim().toUpperCase();
+}
+
+function getVentaFacturacionOriginal(venta: VentaBase): number {
+  const precioOriginal = getNumber(venta.precio_venta_original);
+
+  if (precioOriginal > 0) return precioOriginal;
+
+  return 0;
+}
+
+function getVentaFacturacionUsdOriginal(venta: VentaBase): number {
+  return getVentaMonedaOriginal(venta) === "USD" ? getVentaFacturacionOriginal(venta) : 0;
+}
+
+function getVentaFacturacionArsOriginal(venta: VentaBase): number {
+  return getVentaMonedaOriginal(venta) === "ARS" ? getVentaFacturacionOriginal(venta) : 0;
+}
+
+function getVentaUtilidadOriginal(venta: VentaBase): number {
+  const utilidadOriginal = getNumber(venta.utilidad_original);
+
+  if (utilidadOriginal !== 0) return utilidadOriginal;
+
+  return getNumber(venta.utilidad_usd);
+}
+
+function getVentaUtilidadUsdOriginal(venta: VentaBase): number {
+  return getVentaMonedaOriginal(venta) === "USD" ? getVentaUtilidadOriginal(venta) : 0;
+}
+
+function getVentaUtilidadArsOriginal(venta: VentaBase): number {
+  return getVentaMonedaOriginal(venta) === "ARS" ? getVentaUtilidadOriginal(venta) : 0;
 }
 
 function normalizeText(value: unknown): string {
@@ -534,15 +705,10 @@ function getWeekBuckets(
   return buckets;
 }
 
-function getCurrentWeekRange(monthStart: string, monthEnd: string): { desde: string; hasta: string } {
+function getCurrentCommercialWeekRange(): { desde: string; hasta: string } {
   const today = getArgentinaTodayISO();
-
-  if (today < monthStart || today > monthEnd) {
-    const buckets = getWeekBuckets(monthStart, monthEnd);
-    return buckets[0] || { desde: monthStart, hasta: monthEnd };
-  }
-
   const current = new Date(`${today}T00:00:00`);
+
   const day = current.getDay();
   const diffToMonday = day === 0 ? -6 : 1 - day;
 
@@ -552,12 +718,9 @@ function getCurrentWeekRange(monthStart: string, monthEnd: string): { desde: str
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekStart.getDate() + 6);
 
-  const weekStartStr = formatDateLocalISO(weekStart);
-  const weekEndStr = formatDateLocalISO(weekEnd);
-
   return {
-    desde: weekStartStr < monthStart ? monthStart : weekStartStr,
-    hasta: weekEndStr > monthEnd ? monthEnd : weekEndStr
+    desde: formatDateLocalISO(weekStart),
+    hasta: formatDateLocalISO(weekEnd)
   };
 }
 
@@ -743,6 +906,7 @@ paxSaliendo: [],
 paxRegresando: [],
 paxDebug: null,
 alertas: [],
+adminResumen: emptyAdminResumen,
 
   loadTablero: async () => {
     set({ loading: true, error: null });
@@ -778,59 +942,106 @@ alertas: [],
     const anioNumber = Number(filters.anio);
     const desde = getDateStartForQuery(filters.anio, filters.mes);
     const hasta = getDateEndForQuery(filters.anio, filters.mes);
-    const semanaActual = getCurrentWeekRange(desde, hasta);
+    const semanaActual = getCurrentCommercialWeekRange();
 
     const today = getArgentinaTodayISO();
     const next30Str = addDaysToISODate(today, 30);
 
-    const [
-      mensualRes,
-      ventasMesRes,
-      ventasHistoricoRes,
-      metasRes,
-      sucursalesRes,
-      paxCalendarioRes
-    ] = await Promise.all([
-      supabase
-        .from("vw_comisiones_vendedores_mensual")
+const canViewAdminHome = isAdminHomeProfile(currentProfile);
+const adminHasta = addDaysISO(today, 5);
+
+const [
+  mensualRes,
+  ventasMesRes,
+  ventasSemanaActualRes,
+  ventasHistoricoRes,
+  metasRes,
+  sucursalesRes,
+  paxCalendarioRes,
+  deudaOperadoresRes,
+  facturasPagarRes,
+  facturasCobrarRes,
+  cajasSaldosRes
+] = await Promise.all([
+  supabase
+    .from("vw_comisiones_vendedores_mensual")
+    .select("*")
+    .eq("mes", mesNumber)
+    .eq("anio", anioNumber)
+    .order("utilidad_total_usd", { ascending: false }),
+
+  supabase
+    .from("vw_comisiones_ventas_base")
+    .select("*")
+    .gte("fecha", desde)
+    .lte("fecha", hasta)
+    .order("fecha", { ascending: false }),
+
+  supabase
+    .from("vw_comisiones_ventas_base")
+    .select("*")
+    .gte("fecha", semanaActual.desde)
+    .lte("fecha", semanaActual.hasta)
+    .order("fecha", { ascending: false }),
+
+  supabase
+    .from("vw_comisiones_ventas_base")
+    .select("*")
+    .order("fecha", { ascending: false })
+    .limit(2500),
+
+  supabase.from("metas").select("*").eq("activa", true),
+
+  supabase.from("sucursales").select("*").order("nombre"),
+
+  supabase
+    .from("vw_calendario_pax")
+    .select("*")
+    .gte("fecha", today)
+    .lte("fecha", next30Str)
+    .order("fecha", { ascending: true })
+    .order("pasajero", { ascending: true })
+    .limit(80),
+
+  canViewAdminHome
+    ? supabase
+        .from("files")
         .select("*")
-        .eq("mes", mesNumber)
-        .eq("anio", anioNumber)
-        .order("utilidad_total_usd", { ascending: false }),
+        .eq("activo", true)
+        .gt("saldo_pendiente_operador", 0)
+    : Promise.resolve({ data: [], error: null }),
 
-      supabase
-        .from("vw_comisiones_ventas_base")
+  canViewAdminHome
+    ? supabase
+        .from("v_facturas_pagar_resumen")
         .select("*")
-        .gte("fecha", desde)
-        .lte("fecha", hasta)
-        .order("fecha", { ascending: false }),
+    : Promise.resolve({ data: [], error: null }),
 
-      supabase
-        .from("vw_comisiones_ventas_base")
+  canViewAdminHome
+    ? supabase
+        .from("facturas_cobrar")
         .select("*")
-        .order("fecha", { ascending: false })
-        .limit(2500),
+    : Promise.resolve({ data: [], error: null }),
 
-      supabase.from("metas").select("*").eq("activa", true),
-
-      supabase.from("sucursales").select("*").order("nombre"),
-
-      supabase
-        .from("vw_calendario_pax")
+  canViewAdminHome
+    ? supabase
+        .from("cajas")
         .select("*")
-        .gte("fecha", today)
-        .lte("fecha", next30Str)
-        .order("fecha", { ascending: true })
-        .order("pasajero", { ascending: true })
-        .limit(80)
-    ]);
+        .or("activo.eq.true,activa.eq.true")
+    : Promise.resolve({ data: [], error: null })
+]);
 
-    const firstError =
-      mensualRes.error ||
-      ventasMesRes.error ||
-      ventasHistoricoRes.error ||
-      metasRes.error ||
-      sucursalesRes.error;
+ const firstError =
+  mensualRes.error ||
+  ventasMesRes.error ||
+  ventasSemanaActualRes.error ||
+  ventasHistoricoRes.error ||
+  metasRes.error ||
+  sucursalesRes.error ||
+  deudaOperadoresRes.error ||
+  facturasPagarRes.error ||
+  facturasCobrarRes.error ||
+  cajasSaldosRes.error;
 
     if (firstError) {
       set({
@@ -844,11 +1055,170 @@ alertas: [],
 
 
 
-    const mensual = (mensualRes.data || []) as ComisionMensualView[];
-    const ventasMes = (ventasMesRes.data || []) as VentaBase[];
-    const ventasHistorico = (ventasHistoricoRes.data || []) as VentaBase[];
-    const sucursales = (sucursalesRes.data || []) as SucursalLite[];
-    const paxCalendario = (paxCalendarioRes.data || []) as CalendarioPaxEventoHome[];
+ const mensual = (mensualRes.data || []) as ComisionMensualView[];
+const ventasMes = (ventasMesRes.data || []) as VentaBase[];
+const ventasSemanaActual = (ventasSemanaActualRes.data || []) as VentaBase[];
+const ventasHistorico = (ventasHistoricoRes.data || []) as VentaBase[];
+const sucursales = (sucursalesRes.data || []) as SucursalLite[];
+const paxCalendario = (paxCalendarioRes.data || []) as CalendarioPaxEventoHome[];
+const deudaOperadoresRows = (deudaOperadoresRes.data || []) as Record<string, unknown>[];
+const facturasPagarRows = (facturasPagarRes.data || []) as Record<string, unknown>[];
+const facturasCobrarRows = (facturasCobrarRes.data || []) as Record<string, unknown>[];
+const cajasRows = (cajasSaldosRes.data || []) as Record<string, unknown>[];
+
+const adminResumen: AdminHomeResumen = {
+  deudaOperadores: {
+    total: { ...emptyAdminMontoResumen },
+    vencida: { ...emptyAdminMontoResumen },
+    proximos5Dias: { ...emptyAdminMontoResumen }
+  },
+  facturasPagar: {
+    proximos5Dias: { ...emptyAdminMontoResumen },
+    vencidas: { ...emptyAdminMontoResumen }
+  },
+  facturasCobrar: {
+    totalPendiente: { ...emptyAdminMontoResumen },
+    vencidas: { ...emptyAdminMontoResumen },
+    proximos5Dias: { ...emptyAdminMontoResumen }
+  },
+  cajas: {
+    totalArs: 0,
+    totalUsd: 0,
+    cantidad: 0
+  }
+};
+
+if (canViewAdminHome) {
+  deudaOperadoresRows.forEach((row) => {
+    const moneda = getRecordText(row, ["moneda"], "ARS");
+    const importe = getRecordNumber(row, ["saldo_pendiente_operador", "neto_operador"]);
+    const vencimiento = getRecordDate(row, ["fecha_vencimiento_operador", "fecha_out", "fecha_in"]);
+
+    adminResumen.deudaOperadores.total = addToAdminMonto(
+      adminResumen.deudaOperadores.total,
+      importe,
+      moneda
+    );
+
+    if (vencimiento && vencimiento < today) {
+      adminResumen.deudaOperadores.vencida = addToAdminMonto(
+        adminResumen.deudaOperadores.vencida,
+        importe,
+        moneda
+      );
+    }
+
+    if (vencimiento && vencimiento >= today && vencimiento <= adminHasta) {
+      adminResumen.deudaOperadores.proximos5Dias = addToAdminMonto(
+        adminResumen.deudaOperadores.proximos5Dias,
+        importe,
+        moneda
+      );
+    }
+  });
+
+  facturasPagarRows.forEach((row) => {
+    const moneda = getRecordText(row, ["moneda"], "ARS");
+    const estado = normalizeText(getRecordText(row, ["estado", "estado_pago"], ""));
+    const vencimiento = getRecordDate(row, [
+      "fecha_vencimiento",
+      "vencimiento",
+      "fecha_pago",
+      "proximo_vencimiento"
+    ]);
+
+    if (estado.includes("pagad") || estado.includes("cancelad")) return;
+
+    const importe =
+      getRecordNumber(row, [
+        "saldo_pendiente",
+        "saldo",
+        "importe_pendiente",
+        "total_pendiente",
+        "importe_total",
+        "total",
+        "importe"
+      ]) || 0;
+
+    if (vencimiento && vencimiento < today) {
+      adminResumen.facturasPagar.vencidas = addToAdminMonto(
+        adminResumen.facturasPagar.vencidas,
+        importe,
+        moneda
+      );
+    }
+
+    if (vencimiento && vencimiento >= today && vencimiento <= adminHasta) {
+      adminResumen.facturasPagar.proximos5Dias = addToAdminMonto(
+        adminResumen.facturasPagar.proximos5Dias,
+        importe,
+        moneda
+      );
+    }
+  });
+
+  facturasCobrarRows.forEach((row) => {
+    const moneda = getRecordText(row, ["moneda"], "ARS");
+    const estado = normalizeText(getRecordText(row, ["estado", "estado_cobro"], ""));
+    const vencimiento = getRecordDate(row, [
+      "fecha_vencimiento",
+      "vencimiento",
+      "fecha_cobro",
+      "fecha_emision"
+    ]);
+
+    if (estado.includes("cobrad") || estado.includes("cancelad")) return;
+
+    const importe =
+      getRecordNumber(row, [
+        "saldo_pendiente",
+        "saldo",
+        "importe_pendiente",
+        "total_pendiente",
+        "importe_total",
+        "total",
+        "importe"
+      ]) || 0;
+
+    adminResumen.facturasCobrar.totalPendiente = addToAdminMonto(
+      adminResumen.facturasCobrar.totalPendiente,
+      importe,
+      moneda
+    );
+
+    if (vencimiento && vencimiento < today) {
+      adminResumen.facturasCobrar.vencidas = addToAdminMonto(
+        adminResumen.facturasCobrar.vencidas,
+        importe,
+        moneda
+      );
+    }
+
+    if (vencimiento && vencimiento >= today && vencimiento <= adminHasta) {
+      adminResumen.facturasCobrar.proximos5Dias = addToAdminMonto(
+        adminResumen.facturasCobrar.proximos5Dias,
+        importe,
+        moneda
+      );
+    }
+  });
+
+  cajasRows.forEach((row) => {
+    const tipo = normalizeText(getRecordText(row, ["tipo"], ""));
+    if (tipo === "almundo") return;
+
+    const moneda = getRecordText(row, ["moneda"], "ARS");
+    const saldo = getRecordNumber(row, ["saldo_actual", "saldo", "saldo_inicial"]);
+
+    if (moneda.toUpperCase() === "USD") {
+      adminResumen.cajas.totalUsd += saldo;
+    } else {
+      adminResumen.cajas.totalArs += saldo;
+    }
+
+    adminResumen.cajas.cantidad += 1;
+  });
+}
 
  
 
@@ -860,63 +1230,110 @@ alertas: [],
       return coincideMesAnio || cruzaMes || cruzaSemanaActual;
     });
 
-    const facturacionCarritosMesUsd = ventasMes
-      .filter((venta) => venta.origen === "CARRITO")
-      .reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
+const ventasMesCarritos = ventasMes.filter((venta) => venta.origen === "CARRITO");
+const ventasMesFiles = ventasMes.filter((venta) => venta.origen === "FILE");
 
-    const facturacionFilesMesUsd = ventasMes
-      .filter((venta) => venta.origen === "FILE")
-      .reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
+const ventasMesUsd = ventasMes.filter((venta) => getVentaMonedaOriginal(venta) === "USD");
+const ventasMesArs = ventasMes.filter((venta) => getVentaMonedaOriginal(venta) === "ARS");
 
-    const facturacionMesUsd = facturacionCarritosMesUsd + facturacionFilesMesUsd;
+const facturacionCarritosMesUsd = ventasMesCarritos.reduce(
+  (total, venta) => total + getVentaFacturacionUsdOriginal(venta),
+  0
+);
 
-    const facturacionMesArs = ventasMes.reduce(
-      (total, venta) => total + getVentaFacturacionArs(venta),
-      0
-    );
+const facturacionCarritosMesArs = ventasMesCarritos.reduce(
+  (total, venta) => total + getVentaFacturacionArsOriginal(venta),
+  0
+);
 
-    const facturacionHistoricaUsd = ventasHistorico.reduce(
-      (total, venta) => total + getNumber(venta.facturacion_usd),
-      0
-    );
+const facturacionFilesMesUsd = ventasMesFiles.reduce(
+  (total, venta) => total + getVentaFacturacionUsdOriginal(venta),
+  0
+);
 
-    const facturacionHistoricaArs = ventasHistorico.reduce(
-      (total, venta) => total + getVentaFacturacionArs(venta),
-      0
-    );
+const facturacionFilesMesArs = ventasMesFiles.reduce(
+  (total, venta) => total + getVentaFacturacionArsOriginal(venta),
+  0
+);
 
-    const utilidadCarritosUsd = ventasMes
-      .filter((venta) => venta.origen === "CARRITO")
-      .reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
+const facturacionMesUsd = ventasMes.reduce(
+  (total, venta) => total + getVentaFacturacionUsdOriginal(venta),
+  0
+);
 
-    const utilidadFilesUsd = ventasMes
-      .filter((venta) => venta.origen === "FILE")
-      .reduce((total, venta) => total + getNumber(venta.utilidad_usd), 0);
+const facturacionMesArs = ventasMes.reduce(
+  (total, venta) => total + getVentaFacturacionArsOriginal(venta),
+  0
+);
 
-    const utilidadTotalUsd = utilidadCarritosUsd + utilidadFilesUsd;
+const facturacionHistoricaUsd = ventasHistorico.reduce(
+  (total, venta) => total + getVentaFacturacionUsdOriginal(venta),
+  0
+);
 
-    const kpis: KpiPrincipal = {
-      facturacionHistoricaUsd,
-      facturacionHistoricaArs,
+const facturacionHistoricaArs = ventasHistorico.reduce(
+  (total, venta) => total + getVentaFacturacionArsOriginal(venta),
+  0
+);
 
-      facturacionMesUsd,
-      facturacionMesArs,
+const utilidadCarritosUsd = ventasMesCarritos.reduce(
+  (total, venta) => total + getVentaUtilidadUsdOriginal(venta),
+  0
+);
 
-      facturacionTotalUsd: facturacionMesUsd,
-      facturacionTotalArs: facturacionMesArs,
+const utilidadCarritosArs = ventasMesCarritos.reduce(
+  (total, venta) => total + getVentaUtilidadArsOriginal(venta),
+  0
+);
 
-      facturacionAlmundoUsd: facturacionCarritosMesUsd,
-      facturacionFilesUsd: facturacionFilesMesUsd,
+const utilidadFilesUsd = ventasMesFiles.reduce(
+  (total, venta) => total + getVentaUtilidadUsdOriginal(venta),
+  0
+);
 
-      utilidadTotalUsd,
-      utilidadCarritosUsd,
-      utilidadFilesUsd,
+const utilidadFilesArs = ventasMesFiles.reduce(
+  (total, venta) => total + getVentaUtilidadArsOriginal(venta),
+  0
+);
 
-      ventasConfirmadas: ventasMes.length,
-      carritosConfirmados: ventasMes.filter((venta) => venta.origen === "CARRITO").length,
-      filesConfirmados: ventasMes.filter((venta) => venta.origen === "FILE").length,
-      ticketPromedioUsd: ventasMes.length > 0 ? facturacionMesUsd / ventasMes.length : 0
-    };
+const utilidadTotalUsd = utilidadCarritosUsd + utilidadFilesUsd;
+const utilidadTotalArs = utilidadCarritosArs + utilidadFilesArs;
+
+const ticketPromedioUsd =
+  ventasMesUsd.length > 0 ? facturacionMesUsd / ventasMesUsd.length : 0;
+
+const ticketPromedioArs =
+  ventasMesArs.length > 0 ? facturacionMesArs / ventasMesArs.length : 0;
+
+const kpis: KpiPrincipal = {
+  facturacionHistoricaUsd,
+  facturacionHistoricaArs,
+
+  facturacionMesUsd,
+  facturacionMesArs,
+
+  facturacionTotalUsd: facturacionMesUsd,
+  facturacionTotalArs: facturacionMesArs,
+
+  facturacionAlmundoUsd: facturacionCarritosMesUsd,
+  facturacionAlmundoArs: facturacionCarritosMesArs,
+  facturacionFilesUsd: facturacionFilesMesUsd,
+  facturacionFilesArs: facturacionFilesMesArs,
+
+  utilidadTotalUsd,
+  utilidadTotalArs,
+  utilidadCarritosUsd,
+  utilidadCarritosArs,
+  utilidadFilesUsd,
+  utilidadFilesArs,
+
+  ventasConfirmadas: ventasMes.length,
+  carritosConfirmados: ventasMesCarritos.length,
+  filesConfirmados: ventasMesFiles.length,
+
+  ticketPromedioUsd,
+  ticketPromedioArs
+};
 
     const weeks = getWeekBuckets(desde, hasta);
 
@@ -950,6 +1367,15 @@ alertas: [],
       ventasPorVendedorMap.set(key, current);
     });
 
+    const ventasSemanaPorVendedorMap = new Map<string, VentaBase[]>();
+
+ventasSemanaActual.forEach((venta) => {
+  const key = venta.vendedor_id || `sin-vendedor-${normalizeText(venta.vendedor) || "general"}`;
+  const current = ventasSemanaPorVendedorMap.get(key) || [];
+  current.push(venta);
+  ventasSemanaPorVendedorMap.set(key, current);
+});
+
     const mensualPorVendedorMap = new Map<string, ComisionMensualView[]>();
 
     mensual.forEach((item) => {
@@ -959,21 +1385,25 @@ alertas: [],
       mensualPorVendedorMap.set(key, current);
     });
 
-    const vendedorKeys = new Set<string>([
-      ...Array.from(ventasPorVendedorMap.keys()),
-      ...Array.from(mensualPorVendedorMap.keys())
-    ]);
+   const vendedorKeys = new Set<string>([
+  ...Array.from(ventasPorVendedorMap.keys()),
+  ...Array.from(ventasSemanaPorVendedorMap.keys()),
+  ...Array.from(mensualPorVendedorMap.keys())
+]);
 
     const rankingVendedores: RankingVendedor[] = Array.from(vendedorKeys).map((key) => {
-      const ventasDelVendedor = ventasPorVendedorMap.get(key) || [];
-      const mensualDelVendedor = mensualPorVendedorMap.get(key) || [];
-      const firstMensual = mensualDelVendedor[0] || null;
-      const firstVenta = ventasDelVendedor[0] || null;
-      const vendedorId = firstMensual?.vendedor_id || firstVenta?.vendedor_id || null;
+     const ventasDelVendedor = ventasPorVendedorMap.get(key) || [];
+const ventasSemanaDelVendedor = ventasSemanaPorVendedorMap.get(key) || [];
+const mensualDelVendedor = mensualPorVendedorMap.get(key) || [];
 
-      const ventasSemanaActual = ventasDelVendedor.filter(
-        (venta) => venta.fecha >= semanaActual.desde && venta.fecha <= semanaActual.hasta
-      );
+const firstMensual = mensualDelVendedor[0] || null;
+const firstVenta = ventasDelVendedor[0] || ventasSemanaDelVendedor[0] || null;
+
+const vendedorId = firstMensual?.vendedor_id || firstVenta?.vendedor_id || null;
+
+const ventasSemanaActualDelVendedor = ventasSemanaDelVendedor.filter(
+  (venta) => venta.fecha >= semanaActual.desde && venta.fecha <= semanaActual.hasta
+);
 
       const utilidadMensual =
         mensualDelVendedor.length > 0
@@ -991,10 +1421,10 @@ alertas: [],
             )
           : ventasDelVendedor.reduce((total, venta) => total + getNumber(venta.facturacion_usd), 0);
 
-      const utilidadSemanalUsd = ventasSemanaActual.reduce(
-        (total, venta) => total + getNumber(venta.utilidad_usd),
-        0
-      );
+     const utilidadSemanalUsd = ventasSemanaActualDelVendedor.reduce(
+  (total, venta) => total + getNumber(venta.utilidad_usd),
+  0
+);
 
       const metaMensual = getMetaVendedorMensual(metasRows, vendedorId, mesNumber, anioNumber);
 
@@ -1184,7 +1614,8 @@ set({
     error: paxCalendarioRes.error ? normalizeError(paxCalendarioRes.error) : null,
     supabaseUrl: String(import.meta.env.VITE_SUPABASE_URL || "SIN_VITE_SUPABASE_URL")
   },
-  alertas: buildAlertas(kpis, metasAlmundo, metasSucursal)
+  alertas: buildAlertas(kpis, metasAlmundo, metasSucursal),
+  adminResumen
 });
   },
 

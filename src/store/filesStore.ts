@@ -1,3 +1,5 @@
+// src/store/filesStore.ts
+
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 
@@ -36,6 +38,9 @@ export type Operador = {
 export type Caja = {
   id: string;
   nombre: string;
+  moneda?: string;
+  tipo?: string;
+  sucursal_id?: string | null;
   activa?: boolean;
   activo?: boolean;
 };
@@ -80,6 +85,9 @@ export type FileItem = {
   fecha_visible_files: string | null;
   confirmado_vendedor: boolean;
   confirmado_at: string | null;
+  fecha_vencimiento_operador?: string | null;
+  saldo_pendiente_operador?: string | number | null;
+  estado_pago_operador?: string | null;
   estado: string;
   observaciones: string | null;
   vendedor: string | null;
@@ -115,6 +123,48 @@ export type MovimientoTesoreria = {
   tipo_cambio?: number | null;
   moneda_equivalente?: string | null;
   importe_equivalente?: number | null;
+};
+
+export type FileVoucherServicioInput = {
+  servicio_detalle: string;
+  cantidad_pasajeros: number;
+  fecha_inicio: string | null;
+  fecha_fin: string | null;
+};
+
+export type FileVoucherInput = {
+  requiere_voucher: boolean;
+  reserva_id: string | null;
+  a_favor_de: string | null;
+  servicios: FileVoucherServicioInput[];
+};
+
+export type FileVoucher = {
+  id: string;
+  file_id: string;
+  numero_voucher: string | number | null;
+  requiere_voucher: boolean;
+  reserva_id: string | null;
+  a_favor_de: string | null;
+  generado_at: string | null;
+  generado_by: string | null;
+  pdf_storage_path: string | null;
+  activo: boolean;
+  created_at: string;
+  updated_at: string;
+};
+  
+
+export type FileVoucherServicio = {
+  id: string;
+  voucher_id: string;
+  servicio_detalle: string;
+  cantidad_pasajeros: number;
+  fecha_inicio: string | null;
+  fecha_fin: string | null;
+  orden: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ClienteDraft = {
@@ -158,6 +208,30 @@ export type FileWizardInput = {
   };
   pagosComerciales: PagoComercial[];
   movimientosTesoreria: MovimientoTesoreria[];
+    voucher?: FileVoucherInput | null;
+};
+
+export type FileDetalleUpdateInput = {
+  operador_id?: string | null;
+  operador?: string | null;
+  servicio_id?: string | null;
+  servicio?: string | null;
+  destino?: string | null;
+  fecha_in?: string | null;
+  fecha_out?: string | null;
+  solo_ida?: boolean;
+  importe_bruto: number;
+  importe_final: number;
+  moneda: string;
+  neto_operador: number;
+  estado?: string | null;
+  observaciones?: string | null;
+  riesgo?: boolean;
+  importe_riesgo?: number;
+  riesgo_motivo?: string | null;
+  fecha_vencimiento_operador?: string | null;
+  saldo_pendiente_operador?: number;
+  estado_pago_operador?: string | null;
 };
 
 export type FilesFilters = {
@@ -192,9 +266,11 @@ type FilesState = {
   canManageFiles: boolean;
   sellerDefaultApplied: boolean;
 
-  files: FileItem[];
+   files: FileItem[];
   pagosComerciales: PagoComercial[];
   movimientosTesoreria: MovimientoTesoreria[];
+  vouchers: FileVoucher[];
+  voucherServicios: FileVoucherServicio[];
 
   clientesSearch: Cliente[];
 
@@ -214,7 +290,9 @@ type FilesState = {
   loadFiles: () => Promise<void>;
   searchClientesByPhone: (telefono: string) => Promise<void>;
   createDestinoInline: (nombre: string, pais?: string) => Promise<string | null>;
-  saveFileWizard: (input: FileWizardInput) => Promise<boolean>;
+   saveFileWizard: (input: FileWizardInput) => Promise<boolean>;
+  createVoucherForFile: (fileId: string, input: FileVoucherInput) => Promise<boolean>;
+  updateFileDetalle: (fileId: string, input: FileDetalleUpdateInput) => Promise<boolean>;
   toggleFileActivo: (file: FileItem) => Promise<boolean>;
 
   setFilter: <K extends keyof FilesFilters>(key: K, value: FilesFilters[K]) => void;
@@ -306,7 +384,14 @@ function normalizePhone(value: string): string {
 }
 
 function getNumber(value: string | number | null | undefined): number {
-  const parsed = Number(value || 0);
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+
+  const normalized = String(value || "")
+    .replace(/\./g, "")
+    .replace(",", ".")
+    .replace(/[^\d.-]/g, "");
+
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -378,6 +463,8 @@ export const useFilesStore = create<FilesState>((set, get) => ({
   files: [],
   pagosComerciales: [],
   movimientosTesoreria: [],
+  vouchers: [],
+  voucherServicios: [],
 
   clientesSearch: [],
 
@@ -404,10 +491,12 @@ export const useFilesStore = create<FilesState>((set, get) => ({
         loading: false,
         currentProfile: null,
         canManageFiles: false,
-        files: [],
-        pagosComerciales: [],
-        movimientosTesoreria: [],
-        clientesSearch: [],
+     files: [],
+pagosComerciales: [],
+movimientosTesoreria: [],
+vouchers: [],
+voucherServicios: [],
+clientesSearch: [],
         error: "No hay usuario autenticado."
       });
 
@@ -454,7 +543,6 @@ export const useFilesStore = create<FilesState>((set, get) => ({
 
     if (!sellerDefaultApplied) {
       const role = String(currentProfile?.rol || "").toLowerCase();
-
       const defaultVendedorId = role === "vendedor" ? currentUserId : "todos";
 
       effectiveFilters = {
@@ -516,7 +604,12 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       supabase.from("destinos").select("*").eq("activo", true).order("nombre"),
       supabase.from("servicios").select("*").eq("activo", true).order("nombre"),
       supabase.from("formas_pago").select("*").eq("activo", true).order("nombre"),
-      supabase.from("cajas").select("*").or("activo.eq.true,activa.eq.true").order("nombre"),
+      supabase
+        .from("cajas")
+        .select("*")
+        .or("activo.eq.true,activa.eq.true")
+        .neq("tipo", "ALMUNDO")
+        .order("nombre"),
       supabase.from("sucursales").select("*").order("nombre"),
       supabase
         .from("profiles")
@@ -550,16 +643,19 @@ export const useFilesStore = create<FilesState>((set, get) => ({
     const files = (filesRes.data || []) as FileItem[];
     const fileIds = files.map((file) => file.id);
 
-    let pagosComerciales: PagoComercial[] = [];
-    let movimientosTesoreria: MovimientoTesoreria[] = [];
+let pagosComerciales: PagoComercial[] = [];
+let movimientosTesoreria: MovimientoTesoreria[] = [];
+let vouchers: FileVoucher[] = [];
+let voucherServicios: FileVoucherServicio[] = [];
 
-    if (fileIds.length > 0) {
-      const [pagosRes, movimientosRes] = await Promise.all([
-        supabase.from("file_pagos_comerciales").select("*").in("file_id", fileIds),
-        supabase.from("file_movimientos_tesoreria").select("*").in("file_id", fileIds)
-      ]);
+if (fileIds.length > 0) {
+  const [pagosRes, movimientosRes, vouchersRes] = await Promise.all([
+    supabase.from("file_pagos_comerciales").select("*").in("file_id", fileIds),
+    supabase.from("file_movimientos_tesoreria").select("*").in("file_id", fileIds),
+    supabase.from("file_vouchers").select("*").in("file_id", fileIds).eq("activo", true)
+  ]);
 
-      const childError = pagosRes.error || movimientosRes.error;
+  const childError = pagosRes.error || movimientosRes.error || vouchersRes.error;
 
       if (childError) {
         set({
@@ -572,8 +668,32 @@ export const useFilesStore = create<FilesState>((set, get) => ({
         return;
       }
 
-      pagosComerciales = (pagosRes.data || []) as PagoComercial[];
-      movimientosTesoreria = (movimientosRes.data || []) as MovimientoTesoreria[];
+     pagosComerciales = (pagosRes.data || []) as PagoComercial[];
+movimientosTesoreria = (movimientosRes.data || []) as MovimientoTesoreria[];
+vouchers = (vouchersRes.data || []) as FileVoucher[];
+
+const voucherIds = vouchers.map((voucher) => voucher.id);
+
+if (voucherIds.length > 0) {
+  const serviciosRes = await supabase
+    .from("file_voucher_servicios")
+    .select("*")
+    .in("voucher_id", voucherIds)
+    .order("orden", { ascending: true });
+
+  if (serviciosRes.error) {
+    set({
+      loading: false,
+      currentProfile,
+      canManageFiles,
+      error: normalizeError(serviciosRes.error)
+    });
+
+    return;
+  }
+
+  voucherServicios = (serviciosRes.data || []) as FileVoucherServicio[];
+}
     }
 
     set({
@@ -582,9 +702,11 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       currentProfile,
       canManageFiles,
       files,
-      pagosComerciales,
-      movimientosTesoreria,
-      catalogos: {
+pagosComerciales,
+movimientosTesoreria,
+vouchers,
+voucherServicios,
+catalogos: {
         operadores: (operadoresRes.data || []) as Operador[],
         destinos: (destinosRes.data || []) as CatalogItem[],
         servicios: (serviciosRes.data || []) as CatalogItem[],
@@ -803,20 +925,26 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       }
     }
 
-    const movimientosPayload = input.movimientosTesoreria
-      .filter((movimiento) => getNumber(movimiento.importe) > 0)
-      .map((movimiento) => ({
+    const movimientosValidos = input.movimientosTesoreria.filter(
+      (movimiento) => getNumber(movimiento.importe) > 0
+    );
+
+    const movimientosPayload = movimientosValidos.map((movimiento) => {
+      const caja = get().catalogos.cajas.find((item) => item.id === movimiento.caja_id);
+
+      return {
         file_id: fileId,
         caja_id: movimiento.caja_id || null,
-        caja: nullableText(movimiento.caja),
+        caja: nullableText(movimiento.caja || caja?.nombre),
         forma_pago_id: movimiento.forma_pago_id || null,
         forma_pago: nullableText(movimiento.forma_pago),
-        importe: movimiento.importe || 0,
-        moneda: movimiento.moneda || input.file.moneda || "ARS",
+        importe: getNumber(movimiento.importe),
+        moneda: movimiento.moneda || caja?.moneda || input.file.moneda || "ARS",
         tipo_cambio: movimiento.tipo_cambio || null,
         moneda_equivalente: movimiento.moneda_equivalente || null,
         importe_equivalente: movimiento.importe_equivalente || null
-      }));
+      };
+    });
 
     if (movimientosPayload.length > 0) {
       const movimientosRes = await supabase
@@ -825,6 +953,69 @@ export const useFilesStore = create<FilesState>((set, get) => ({
 
       if (movimientosRes.error) {
         set({ saving: false, error: normalizeError(movimientosRes.error) });
+        return false;
+      }
+    }
+
+    const cajaMovimientosPayload = movimientosValidos
+      .map((movimiento) => {
+        const caja = get().catalogos.cajas.find((item) => item.id === movimiento.caja_id);
+
+        if (!caja?.id) return null;
+
+        return {
+          fecha: input.file.fecha_venta || getToday(),
+          tipo: "INGRESO",
+          categoria: "Cobro cliente",
+          descripcion: `Cobro file ${input.file.numero_file}`,
+          caja_id: caja.id,
+          sucursal_id: caja.sucursal_id || sucursalId || null,
+          moneda: caja.moneda || movimiento.moneda || input.file.moneda || "ARS",
+          importe: getNumber(movimiento.importe),
+          referencia_tipo: "FILE",
+          referencia_id: fileId,
+          referencia_texto: input.file.numero_file,
+          origen: "FILE",
+          vendedor_id: vendedorId,
+          cliente_id: clienteId,
+          forma_pago: nullableText(movimiento.forma_pago),
+          observaciones: nullableText(input.file.observaciones),
+          created_by: currentUserId,
+          updated_by: currentUserId
+        };
+      })
+      .filter(
+        (
+          movimiento
+        ): movimiento is {
+          fecha: string;
+          tipo: string;
+          categoria: string;
+          descripcion: string;
+          caja_id: string;
+          sucursal_id: string | null;
+          moneda: string;
+          importe: number;
+          referencia_tipo: string;
+          referencia_id: string;
+          referencia_texto: string;
+          origen: string;
+          vendedor_id: string;
+          cliente_id: string;
+          forma_pago: string | null;
+          observaciones: string | null;
+          created_by: string;
+          updated_by: string;
+        } => Boolean(movimiento)
+      );
+
+    if (cajaMovimientosPayload.length > 0) {
+      const cajaMovimientosRes = await supabase
+        .from("caja_movimientos")
+        .insert(cajaMovimientosPayload);
+
+      if (cajaMovimientosRes.error) {
+        set({ saving: false, error: normalizeError(cajaMovimientosRes.error) });
         return false;
       }
     }
@@ -847,9 +1038,200 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       }
     }
 
+    if (input.voucher?.requiere_voucher) {
+  const serviciosValidos = input.voucher.servicios.filter((servicio) =>
+    cleanText(servicio.servicio_detalle)
+  );
+
+  const voucherRes = await supabase
+    .from("file_vouchers")
+    .insert({
+      file_id: fileId,
+      requiere_voucher: true,
+      reserva_id: nullableText(input.voucher.reserva_id),
+      a_favor_de: nullableText(input.voucher.a_favor_de) || cleanText(input.cliente.nombre_completo),
+      activo: true
+    })
+    .select("id")
+    .single();
+
+  if (voucherRes.error) {
+    set({ saving: false, error: normalizeError(voucherRes.error) });
+    return false;
+  }
+
+  const voucherId = voucherRes.data.id;
+
+  if (serviciosValidos.length > 0) {
+    const serviciosPayload = serviciosValidos.map((servicio, index) => ({
+      voucher_id: voucherId,
+      servicio_detalle: cleanText(servicio.servicio_detalle),
+      cantidad_pasajeros: Math.max(Number(servicio.cantidad_pasajeros || 1), 1),
+      fecha_inicio: servicio.fecha_inicio || null,
+      fecha_fin: servicio.fecha_fin || null,
+      orden: index + 1
+    }));
+
+    const serviciosRes = await supabase
+      .from("file_voucher_servicios")
+      .insert(serviciosPayload);
+
+    if (serviciosRes.error) {
+      set({ saving: false, error: normalizeError(serviciosRes.error) });
+      return false;
+    }
+  }
+}
+
     await get().loadFiles();
 
     set({ saving: false, clientesSearch: [] });
+    return true;
+  },
+  createVoucherForFile: async (fileId, input) => {
+    set({ saving: true, error: null });
+
+    const currentUserId = await getCurrentUserId();
+
+    if (!currentUserId) {
+      set({ saving: false, error: "No hay usuario autenticado." });
+      return false;
+    }
+
+    const currentFile = get().files.find((file) => file.id === fileId);
+
+    if (!currentFile) {
+      set({ saving: false, error: "No se encontró el file." });
+      return false;
+    }
+
+    const existingVoucher = get().vouchers.find((voucher) => voucher.file_id === fileId);
+
+    if (existingVoucher) {
+      set({ saving: false, error: "Este file ya tiene voucher cargado." });
+      return false;
+    }
+
+    const serviciosValidos = input.servicios.filter((servicio) =>
+      cleanText(servicio.servicio_detalle)
+    );
+
+    if (serviciosValidos.length === 0) {
+      set({ saving: false, error: "Agregá al menos un servicio para el voucher." });
+      return false;
+    }
+
+    const voucherRes = await supabase
+      .from("file_vouchers")
+      .insert({
+        file_id: fileId,
+        requiere_voucher: true,
+        reserva_id: nullableText(input.reserva_id),
+        a_favor_de:
+          nullableText(input.a_favor_de) ||
+          currentFile.clientes?.nombre_completo ||
+          "Cliente",
+        activo: true
+      })
+      .select("id")
+      .single();
+
+    if (voucherRes.error) {
+      set({ saving: false, error: normalizeError(voucherRes.error) });
+      return false;
+    }
+
+    const voucherId = voucherRes.data.id;
+
+    const serviciosPayload = serviciosValidos.map((servicio, index) => ({
+      voucher_id: voucherId,
+      servicio_detalle: cleanText(servicio.servicio_detalle),
+      cantidad_pasajeros: Math.max(Number(servicio.cantidad_pasajeros || 1), 1),
+      fecha_inicio: servicio.fecha_inicio || null,
+      fecha_fin: servicio.fecha_fin || null,
+      orden: index + 1
+    }));
+
+    const serviciosRes = await supabase
+      .from("file_voucher_servicios")
+      .insert(serviciosPayload);
+
+    if (serviciosRes.error) {
+      set({ saving: false, error: normalizeError(serviciosRes.error) });
+      return false;
+    }
+
+    await get().loadFiles();
+
+    set({ saving: false });
+    return true;
+  },
+  updateFileDetalle: async (fileId, input) => {
+    set({ saving: true, error: null });
+
+    const currentUserId = await getCurrentUserId();
+
+    if (!currentUserId) {
+      set({ saving: false, error: "No hay usuario autenticado." });
+      return false;
+    }
+
+    const currentFile = get().files.find((file) => file.id === fileId);
+    const operador = input.operador_id
+      ? get().catalogos.operadores.find((item) => item.id === input.operador_id)
+      : null;
+
+    const importeFinal = getNumber(input.importe_final);
+    const totalPagado = getNumber(currentFile?.total_pagado);
+    const saldoCtaCte = Math.max(importeFinal - totalPagado, 0);
+
+    const updatePayload = {
+      operador_id: input.operador_id || null,
+      operador: input.operador || operador?.nombre || null,
+
+      servicio_id: input.servicio_id || null,
+      servicio: nullableText(input.servicio),
+      destino: nullableText(input.destino),
+
+      fecha_in: input.fecha_in || null,
+      fecha_out: input.solo_ida ? null : input.fecha_out || null,
+      solo_ida: Boolean(input.solo_ida),
+
+      importe_bruto: getNumber(input.importe_bruto),
+      importe_final: importeFinal,
+      moneda: input.moneda || "ARS",
+      neto_operador: getNumber(input.neto_operador),
+
+      saldo_cta_cte: saldoCtaCte,
+      pago_parcial: saldoCtaCte > 0.009,
+
+      estado: input.estado || "CARGADO",
+      observaciones: nullableText(input.observaciones),
+
+      riesgo: Boolean(input.riesgo),
+      importe_riesgo: Boolean(input.riesgo) ? getNumber(input.importe_riesgo) : 0,
+      riesgo_motivo: Boolean(input.riesgo) ? nullableText(input.riesgo_motivo) : null,
+
+      fecha_vencimiento_operador: input.fecha_vencimiento_operador || null,
+      saldo_pendiente_operador: getNumber(input.saldo_pendiente_operador),
+      estado_pago_operador: nullableText(input.estado_pago_operador),
+
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from("files")
+      .update(updatePayload)
+      .eq("id", fileId);
+
+    if (error) {
+      set({ saving: false, error: normalizeError(error) });
+      return false;
+    }
+
+    await get().loadFiles();
+
+    set({ saving: false });
     return true;
   },
 

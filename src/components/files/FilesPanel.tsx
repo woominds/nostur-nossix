@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { printFileVoucherPdf } from "../../lib/fileVoucherPdf";
 import {
   AlertTriangle,
   CalendarDays,
@@ -11,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
+  Edit3,
   Eye,
   FileText,
   Filter,
@@ -30,7 +32,8 @@ import {
   type FileWizardInput,
   type Cliente,
   type MovimientoTesoreria,
-  type PagoComercial
+  type PagoComercial,
+  type FileVoucherServicioInput
 } from "../../store/filesStore";
 import { IconButton } from "../ui/IconButton";
 import { formatMoneyAR } from "../../lib/formatters";
@@ -82,6 +85,12 @@ type WizardDraft = {
   importe_riesgo: string;
   riesgo_motivo: string;
   confirmado: boolean;
+    voucher: {
+    requiere_voucher: boolean;
+    reserva_id: string;
+    a_favor_de: string;
+    servicios: FileVoucherServicioInput[];
+  };
 };
 
 const ESTADO_OPTIONS: SelectOption[] = [
@@ -91,7 +100,8 @@ const ESTADO_OPTIONS: SelectOption[] = [
   { value: "CONTROLADO", label: "Controlado" },
   { value: "FACTURADO", label: "Facturado" },
   { value: "COBRADO", label: "Cobrado" },
-  { value: "CANCELADO", label: "Cancelado" }
+  { value: "CANCELADO", label: "Cancelado" },
+  { value: "CTA_CTE", label: "Cta Cte" }
 ];
 
 const MONEDA_OPTIONS: SelectOption[] = [
@@ -344,7 +354,20 @@ function createInitialDraft(): WizardDraft {
     riesgo: false,
     importe_riesgo: "",
     riesgo_motivo: "",
-    confirmado: false
+        confirmado: false,
+    voucher: {
+      requiere_voucher: false,
+      reserva_id: "",
+      a_favor_de: "",
+      servicios: [
+        {
+          servicio_detalle: "",
+          cantidad_pasajeros: 1,
+          fecha_inicio: getToday(),
+          fecha_fin: getToday()
+        }
+      ]
+    }
   };
 }
 
@@ -903,7 +926,12 @@ function CardMetric({
           </div>
         </div>
 
-        <div className={["flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1", toneClass].join(" ")}>
+        <div
+          className={[
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1",
+            toneClass
+          ].join(" ")}
+        >
           <Icon size={14} strokeWidth={1.8} />
         </div>
       </div>
@@ -1095,6 +1123,11 @@ function WizardSummary({
   );
 }
 
+/* =========================================================
+   WIZARD NUEVO FILE
+   Se conserva el flujo actual completo.
+========================================================= */
+
 function FileWizard({
   onClose,
   onSaved
@@ -1158,7 +1191,14 @@ function FileWizard({
       cliente: {
         ...current.cliente,
         [key]: value
-      }
+      },
+      voucher:
+        key === "nombre_completo" && !current.voucher.a_favor_de
+          ? {
+              ...current.voucher,
+              a_favor_de: String(value || "")
+            }
+          : current.voucher
     }));
   }
 
@@ -1200,20 +1240,24 @@ function FileWizard({
   function selectCliente(cliente: Cliente) {
     setWizardError(null);
 
-    setDraft((current) => ({
-      ...current,
-      phonePrefix: cliente.telefono.startsWith("+549") ? "+549" : current.phonePrefix,
-      phoneLocal: cliente.telefono.replace(current.phonePrefix, "").replace("+549", ""),
-      cliente: {
-        id: cliente.id,
-        nombre_completo: cliente.nombre_completo,
-        telefono: cliente.telefono,
-        email: cliente.email || "",
-        origen: cliente.origen || "",
-        vendedor_id: cliente.vendedor_id || currentProfile?.id || "",
-        sucursal_id: cliente.sucursal_id || currentProfile?.sucursal_id || ""
-      }
-    }));
+   setDraft((current) => ({
+  ...current,
+  phonePrefix: cliente.telefono.startsWith("+549") ? "+549" : current.phonePrefix,
+  phoneLocal: cliente.telefono.replace(current.phonePrefix, "").replace("+549", ""),
+  cliente: {
+    id: cliente.id,
+    nombre_completo: cliente.nombre_completo,
+    telefono: cliente.telefono,
+    email: cliente.email || "",
+    origen: cliente.origen || "",
+    vendedor_id: cliente.vendedor_id || currentProfile?.id || "",
+    sucursal_id: cliente.sucursal_id || currentProfile?.sucursal_id || ""
+  },
+  voucher: {
+    ...current.voucher,
+    a_favor_de: current.voucher.a_favor_de || cliente.nombre_completo
+  }
+}));
   }
 
   function updatePago(index: number, patch: Partial<PagoComercial>) {
@@ -1235,6 +1279,76 @@ function FileWizard({
       movimientosTesoreria: current.movimientosTesoreria.map((movimiento, itemIndex) =>
         itemIndex === index ? { ...movimiento, ...patch } : movimiento
       )
+    }));
+  }
+
+    function setVoucher<K extends keyof WizardDraft["voucher"]>(
+    key: K,
+    value: WizardDraft["voucher"][K]
+  ) {
+    setWizardError(null);
+    setDraft((current) => ({
+      ...current,
+      voucher: {
+        ...current.voucher,
+        [key]: value
+      }
+    }));
+  }
+
+  function updateVoucherServicio(index: number, patch: Partial<FileVoucherServicioInput>) {
+    setWizardError(null);
+
+    setDraft((current) => ({
+      ...current,
+      voucher: {
+        ...current.voucher,
+        servicios: current.voucher.servicios.map((servicio, itemIndex) =>
+          itemIndex === index ? { ...servicio, ...patch } : servicio
+        )
+      }
+    }));
+  }
+
+function addVoucherServicio() {
+  setWizardError(null);
+
+  setDraft((current) => {
+    const fechaInicio = current.venta.fecha_in || getToday();
+    const fechaFin = current.venta.solo_ida
+      ? fechaInicio
+      : current.venta.fecha_out || fechaInicio;
+
+    return {
+      ...current,
+      voucher: {
+        ...current.voucher,
+        servicios: [
+          ...current.voucher.servicios,
+          {
+            servicio_detalle: "",
+            cantidad_pasajeros: 1,
+            fecha_inicio: fechaInicio,
+            fecha_fin: fechaFin
+          }
+        ]
+      }
+    };
+  });
+}
+
+  function removeVoucherServicio(index: number) {
+    setWizardError(null);
+
+    setDraft((current) => ({
+      ...current,
+      voucher: {
+        ...current.voucher,
+        servicios:
+          current.voucher.servicios.length <= 1
+            ? current.voucher.servicios
+            : current.voucher.servicios.filter((_, itemIndex) => itemIndex !== index)
+      }
     }));
   }
 
@@ -1262,6 +1376,27 @@ function FileWizard({
       if (!draft.venta.servicio.trim()) return "Seleccioná o cargá el servicio.";
       if (draft.venta.destinos.length === 0) return "Seleccioná o cargá al menos un destino.";
       if (totalFinal <= 0) return "El importe final debe ser mayor a cero.";
+            if (draft.voucher.requiere_voucher) {
+        if (!draft.voucher.a_favor_de.trim()) {
+          return "Completá el campo A favor de para el voucher.";
+        }
+
+        const serviciosValidos = draft.voucher.servicios.filter((servicio) =>
+          servicio.servicio_detalle.trim()
+        );
+
+        if (serviciosValidos.length === 0) {
+          return "Agregá al menos un servicio para el voucher.";
+        }
+
+        const servicioSinPax = serviciosValidos.find(
+          (servicio) => Number(servicio.cantidad_pasajeros || 0) <= 0
+        );
+
+        if (servicioSinPax) {
+          return "La cantidad de pasajeros del voucher debe ser mayor a cero.";
+        }
+      }
     }
 
     if (currentStep === 3) {
@@ -1390,7 +1525,22 @@ function FileWizard({
         sucursal_id: draft.cliente.sucursal_id || currentProfile?.sucursal_id || null
       },
       pagosComerciales: draft.pagosComerciales.filter((pago) => parseMoney(pago.importe) > 0),
-      movimientosTesoreria: draft.movimientosTesoreria
+            movimientosTesoreria: draft.movimientosTesoreria,
+      voucher: draft.voucher.requiere_voucher
+        ? {
+            requiere_voucher: true,
+            reserva_id: draft.voucher.reserva_id || null,
+            a_favor_de: draft.voucher.a_favor_de || draft.cliente.nombre_completo || null,
+            servicios: draft.voucher.servicios
+              .filter((servicio) => servicio.servicio_detalle.trim())
+              .map((servicio) => ({
+                servicio_detalle: servicio.servicio_detalle,
+                cantidad_pasajeros: Number(servicio.cantidad_pasajeros || 1),
+                fecha_inicio: servicio.fecha_inicio || null,
+                fecha_fin: servicio.fecha_fin || null
+              }))
+          }
+        : null
     };
 
     const ok = await saveFileWizard(payload);
@@ -1421,10 +1571,10 @@ function FileWizard({
     label: item.nombre
   }));
 
-  const cajaOptions: SelectOption[] = catalogos.cajas.map((item) => ({
-    value: item.nombre,
-    label: item.nombre
-  }));
+ const cajaOptions: SelectOption[] = catalogos.cajas.map((item) => ({
+  value: item.id,
+  label: item.nombre
+}));
 
   const vendedorOptions: SelectOption[] = catalogos.vendedores.map((item) => ({
     value: item.id,
@@ -1464,7 +1614,6 @@ function FileWizard({
 
           <div className="min-h-0 flex-1 overflow-auto p-4">
             <WizardStepper step={step} />
-
             <WizardError message={wizardError} onClose={() => setWizardError(null)} />
 
             <div className="grid gap-3">
@@ -1576,7 +1725,7 @@ function FileWizard({
                   </section>
                 ) : null}
 
-                                {step === 2 ? (
+                {step === 2 ? (
                   <section>
                     <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">
                       Paso 2 · File / Operador
@@ -1730,6 +1879,165 @@ function FileWizard({
                           placeholder="Notas comerciales o de control..."
                         />
                       </div>
+                      <div className="md:col-span-2">
+  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <div>
+        <div className="text-[12px] font-semibold text-[#172033]">
+          Voucher de servicios
+        </div>
+        <div className="text-[11.5px] font-normal text-[#64748b]">
+          Usalo cuando el file requiera voucher para entregar al cliente.
+        </div>
+      </div>
+
+      <BooleanChip
+        checked={draft.voucher.requiere_voucher}
+        onChange={(value) => {
+          setVoucher("requiere_voucher", value);
+
+          if (value) {
+            setDraft((current) => ({
+              ...current,
+              voucher: {
+                ...current.voucher,
+                requiere_voucher: true,
+                a_favor_de: current.voucher.a_favor_de || current.cliente.nombre_completo,
+               servicios:
+  current.voucher.servicios.length > 0
+    ? current.voucher.servicios.map((servicio) => ({
+        ...servicio,
+        fecha_inicio: servicio.fecha_inicio || current.venta.fecha_in || getToday(),
+        fecha_fin:
+          servicio.fecha_fin ||
+          (current.venta.solo_ida
+            ? current.venta.fecha_in || getToday()
+            : current.venta.fecha_out || current.venta.fecha_in || getToday())
+      }))
+    : [
+        {
+          servicio_detalle: "",
+          cantidad_pasajeros: 1,
+          fecha_inicio: current.venta.fecha_in || getToday(),
+          fecha_fin: current.venta.solo_ida
+            ? current.venta.fecha_in || getToday()
+            : current.venta.fecha_out || current.venta.fecha_in || getToday()
+        }
+      ]
+              }
+            }));
+          }
+        }}
+        label="Requiere voucher"
+      />
+    </div>
+
+    {draft.voucher.requiere_voucher ? (
+      <div className="mt-3 grid gap-3">
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <FieldLabel>ID de reserva</FieldLabel>
+            <TextInput
+              value={draft.voucher.reserva_id}
+              onChange={(value) => setVoucher("reserva_id", value)}
+              placeholder="Ej: RES-12345 / localizador operador"
+            />
+          </div>
+
+          <div>
+            <FieldLabel>A favor de</FieldLabel>
+            <TextInput
+              value={draft.voucher.a_favor_de}
+              onChange={(value) => setVoucher("a_favor_de", value)}
+              placeholder="Cliente / pasajero / grupo"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-2">
+          {draft.voucher.servicios.map((servicio, index) => (
+            <div
+              key={`voucher-servicio-${index}`}
+              className="rounded-[14px] border border-black/10 bg-white p-3"
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-[12px] font-semibold text-[#172033]">
+                  Servicio {index + 1}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => removeVoucherServicio(index)}
+                  disabled={draft.voucher.servicios.length <= 1}
+                  className="h-7 rounded-[9px] border border-black/10 bg-white px-2 text-[11px] font-medium text-[#64748b] hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                >
+                  Eliminar
+                </button>
+              </div>
+
+              <div className="grid gap-3">
+                <div>
+                  <FieldLabel>Servicio / detalle libre</FieldLabel>
+                  <TextArea
+                    value={servicio.servicio_detalle}
+                    onChange={(value) =>
+                      updateVoucherServicio(index, { servicio_detalle: value })
+                    }
+                    placeholder="Ej: 03 noches de alojamiento en Hotel X con desayuno / Traslado aeropuerto-hotel / Excursión..."
+                  />
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-[130px_1fr_1fr]">
+                  <div>
+                    <FieldLabel>Pasajeros</FieldLabel>
+                    <TextInput
+                      value={String(servicio.cantidad_pasajeros || 1)}
+                      onChange={(value) =>
+                        updateVoucherServicio(index, {
+                          cantidad_pasajeros: Math.max(parseInt(value.replace(/\D/g, ""), 10) || 1, 1)
+                        })
+                      }
+                      inputMode="numeric"
+                      placeholder="1"
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Fecha inicio</FieldLabel>
+                    <NosturDateInput
+                      value={servicio.fecha_inicio || ""}
+                      onChange={(value) =>
+                        updateVoucherServicio(index, { fecha_inicio: value })
+                      }
+                      min={getToday()}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Fecha fin</FieldLabel>
+                    <NosturDateInput
+                      value={servicio.fecha_fin || ""}
+                      onChange={(value) =>
+                        updateVoucherServicio(index, { fecha_fin: value })
+                      }
+                      min={servicio.fecha_inicio || getToday()}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <LineButton onClick={addVoucherServicio}>
+            + Agregar servicio al voucher
+          </LineButton>
+        </div>
+      </div>
+    ) : null}
+  </div>
+</div>
                     </div>
 
                     <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
@@ -1934,13 +2242,6 @@ function FileWizard({
                           {formatMoneyAR(saldoComercial, draft.venta.moneda)}
                         </strong>
                       </div>
-
-                      {saldoComercial > 0 ? (
-                        <div className="mt-3 rounded-[12px] bg-amber-50 p-2.5 font-medium text-amber-700">
-                          Si este saldo corresponde a deuda del pasajero, marcá pago parcial. Si
-                          corresponde a deuda con el operador, usá riesgo operador.
-                        </div>
-                      ) : null}
                     </div>
                   </section>
                 ) : null}
@@ -1963,11 +2264,18 @@ function FileWizard({
                         >
                           <div>
                             <FieldLabel>Caja</FieldLabel>
-                            <NosturSelect
-                              value={movimiento.caja || ""}
-                              onChange={(value) => updateMovimiento(index, { caja: value })}
-                              options={cajaOptions}
-                            />
+                           <NosturSelect
+  value={movimiento.caja_id || ""}
+  onChange={(value) => {
+    const selectedCaja = catalogos.cajas.find((item) => item.id === value);
+
+    updateMovimiento(index, {
+      caja_id: value,
+      caja: selectedCaja?.nombre || ""
+    });
+  }}
+  options={cajaOptions}
+/>
                           </div>
 
                           <div>
@@ -2053,35 +2361,6 @@ function FileWizard({
                         + Agregar movimiento
                       </LineButton>
                     </div>
-
-                    <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
-                      <div className="flex justify-between">
-                        <span className="text-[#64748b]">Total imputado</span>
-                        <strong className="font-semibold">
-                          {formatMoneyAR(totalTesoreria, draft.venta.moneda)}
-                        </strong>
-                      </div>
-
-                      <div className="flex justify-between">
-                        <span className="text-[#64748b]">Diferencia contra total cliente</span>
-                        <strong
-                          className={
-                            Math.abs(totalTesoreria - totalFinal) > 0.009
-                              ? "font-semibold text-red-600"
-                              : "font-semibold text-emerald-700"
-                          }
-                        >
-                          {formatMoneyAR(totalTesoreria - totalFinal, draft.venta.moneda)}
-                        </strong>
-                      </div>
-
-                      {draft.riesgo ? (
-                        <div className="mt-3 rounded-[12px] border border-red-200 bg-red-50 p-2.5 font-medium text-red-700">
-                          Este file tiene riesgo operador: el ingreso del cliente entra ahora a Caja;
-                          la deuda con el operador se cancelará luego desde Riesgos.
-                        </div>
-                      ) : null}
-                    </div>
                   </section>
                 ) : null}
 
@@ -2114,6 +2393,19 @@ function FileWizard({
                           {draft.venta.solo_ida ? "Solo ida" : formatDateAR(draft.venta.fecha_out)}
                         </div>
                       </div>
+
+                      {draft.voucher.requiere_voucher ? (
+  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:col-span-2">
+    <FieldLabel>Voucher</FieldLabel>
+    <div className="font-semibold text-[#172033]">
+      Requiere voucher · {draft.voucher.a_favor_de || "Sin titular"}
+    </div>
+    <div className="font-normal text-[#64748b]">
+      Reserva: {draft.voucher.reserva_id || "Sin ID"} ·{" "}
+      {draft.voucher.servicios.filter((servicio) => servicio.servicio_detalle.trim()).length} servicio/s
+    </div>
+  </div>
+) : null}
 
                       <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
                         <FieldLabel>Importes</FieldLabel>
@@ -2163,11 +2455,6 @@ function FileWizard({
                         <div className="font-semibold text-[#172033]">
                           Riesgo operador: {draft.riesgo ? "SÍ" : "NO"}
                         </div>
-                        {draft.riesgo ? (
-                          <div className="font-semibold text-red-700">
-                            Importe riesgo: {formatMoneyAR(importeRiesgo, draft.venta.moneda)}
-                          </div>
-                        ) : null}
                       </div>
                     </div>
 
@@ -2246,11 +2533,251 @@ function FileWizard({
 
 function FileDetailModal({
   file,
-  onClose
+  onClose,
+  onSaved
 }: {
   file: FileItem;
   onClose: () => void;
+  onSaved: (message: string) => void;
 }) {
+  const saving = useFilesStore((state) => state.saving);
+  const catalogos = useFilesStore((state) => state.catalogos);
+  const updateFileDetalle = useFilesStore((state) => state.updateFileDetalle);
+  const createVoucherForFile = useFilesStore((state) => state.createVoucherForFile);
+  const vouchers = useFilesStore((state) => state.vouchers);
+  const voucherServicios = useFilesStore((state) => state.voucherServicios);
+
+  const [editing, setEditing] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+    const voucher = vouchers.find((item) => item.file_id === file.id) || null;
+
+  const serviciosVoucher = voucher
+    ? voucherServicios.filter((servicio) => servicio.voucher_id === voucher.id)
+    : [];
+
+      const [voucherDraft, setVoucherDraft] = useState<{
+    reserva_id: string;
+    a_favor_de: string;
+    servicios: FileVoucherServicioInput[];
+  }>(() => ({
+    reserva_id: "",
+    a_favor_de: file.clientes?.nombre_completo || "",
+ servicios: [
+  {
+    servicio_detalle: file.servicio || "",
+    cantidad_pasajeros: 1,
+    fecha_inicio: file.fecha_in || getToday(),
+    fecha_fin: file.solo_ida
+      ? file.fecha_in || getToday()
+      : file.fecha_out || file.fecha_in || getToday()
+  }
+]
+  }));
+
+  const [draft, setDraft] = useState(() => ({
+    operador_id: file.operador_id || "",
+    operador: file.operador || "",
+    servicio: file.servicio || "",
+    destino: file.destino || "",
+    fecha_in: file.fecha_in || "",
+    fecha_out: file.fecha_out || "",
+    solo_ida: Boolean(file.solo_ida),
+    importe_bruto: String(file.importe_bruto ?? "").replace(".", ","),
+    importe_final: String(file.importe_final ?? "").replace(".", ","),
+    moneda: file.moneda || "ARS",
+    neto_operador: String(file.neto_operador ?? "").replace(".", ","),
+    estado: file.estado || "CARGADO",
+    observaciones: file.observaciones || "",
+    riesgo: Boolean(file.riesgo),
+    importe_riesgo: String(file.importe_riesgo ?? "").replace(".", ","),
+    riesgo_motivo: file.riesgo_motivo || "",
+    fecha_vencimiento_operador: file.fecha_vencimiento_operador || "",
+    saldo_pendiente_operador: String(file.saldo_pendiente_operador ?? "").replace(".", ","),
+    estado_pago_operador: file.estado_pago_operador || ""
+  }));
+
+  const operadorOptions: SelectOption[] = [
+    { value: "", label: "Sin operador" },
+    ...catalogos.operadores.map((item) => ({
+      value: item.id,
+      label: item.nombre
+    }))
+  ];
+
+  const servicioOptions: SelectOption[] = [
+    { value: "", label: "Sin servicio" },
+    ...catalogos.servicios.map((item) => ({
+      value: item.nombre,
+      label: item.nombre
+    }))
+  ];
+
+  const estadoOptions: SelectOption[] = ESTADO_OPTIONS.filter((option) => option.value !== "todos");
+
+  const estadoPagoOperadorOptions: SelectOption[] = [
+    { value: "", label: "Sin definir" },
+    { value: "PENDIENTE", label: "Pendiente" },
+    { value: "PARCIAL", label: "Parcial" },
+    { value: "PAGADO", label: "Pagado" },
+    { value: "VENCIDO", label: "Vencido" }
+  ];
+
+  const bruto = parseMoney(draft.importe_bruto);
+  const final = parseMoney(draft.importe_final);
+  const neto = parseMoney(draft.neto_operador);
+  const margen = final - neto;
+  const saldoOperador = parseMoney(draft.saldo_pendiente_operador);
+
+  function setField<K extends keyof typeof draft>(key: K, value: (typeof draft)[K]) {
+    setLocalError(null);
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+    function setVoucherDraftField<K extends keyof typeof voucherDraft>(
+    key: K,
+    value: (typeof voucherDraft)[K]
+  ) {
+    setLocalError(null);
+    setVoucherDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateVoucherDraftServicio(index: number, patch: Partial<FileVoucherServicioInput>) {
+    setLocalError(null);
+
+    setVoucherDraft((current) => ({
+      ...current,
+      servicios: current.servicios.map((servicio, itemIndex) =>
+        itemIndex === index ? { ...servicio, ...patch } : servicio
+      )
+    }));
+  }
+
+ function addVoucherDraftServicio() {
+  setLocalError(null);
+
+  const fechaInicio = file.fecha_in || getToday();
+  const fechaFin = file.solo_ida
+    ? fechaInicio
+    : file.fecha_out || fechaInicio;
+
+  setVoucherDraft((current) => ({
+    ...current,
+    servicios: [
+      ...current.servicios,
+      {
+        servicio_detalle: "",
+        cantidad_pasajeros: 1,
+        fecha_inicio: fechaInicio,
+        fecha_fin: fechaFin
+      }
+    ]
+  }));
+}
+
+  function removeVoucherDraftServicio(index: number) {
+    setLocalError(null);
+
+    setVoucherDraft((current) => ({
+      ...current,
+      servicios:
+        current.servicios.length <= 1
+          ? current.servicios
+          : current.servicios.filter((_, itemIndex) => itemIndex !== index)
+    }));
+  }
+
+  async function handleCreateVoucher() {
+    const serviciosValidos = voucherDraft.servicios.filter((servicio) =>
+      servicio.servicio_detalle.trim()
+    );
+
+    if (!voucherDraft.a_favor_de.trim()) {
+      setLocalError("Completá el campo A favor de.");
+      return;
+    }
+
+    if (serviciosValidos.length === 0) {
+      setLocalError("Agregá al menos un servicio para el voucher.");
+      return;
+    }
+
+    const ok = await createVoucherForFile(file.id, {
+      requiere_voucher: true,
+      reserva_id: voucherDraft.reserva_id || null,
+      a_favor_de: voucherDraft.a_favor_de || file.clientes?.nombre_completo || null,
+      servicios: serviciosValidos.map((servicio) => ({
+        servicio_detalle: servicio.servicio_detalle,
+        cantidad_pasajeros: Number(servicio.cantidad_pasajeros || 1),
+        fecha_inicio: servicio.fecha_inicio || null,
+        fecha_fin: servicio.fecha_fin || null
+      }))
+    });
+
+    if (ok) {
+      setLocalError(null);
+      onSaved("Voucher creado correctamente.");
+    }
+  }
+
+    function handlePrintVoucher() {
+    if (!voucher) {
+      setLocalError("Este file no tiene voucher cargado.");
+      return;
+    }
+
+    try {
+      printFileVoucherPdf({
+        file,
+        voucher,
+        servicios: serviciosVoucher
+      });
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : "No se pudo generar el voucher.");
+    }
+  }
+
+  async function save() {
+    if (final <= 0) {
+      setLocalError("El importe final debe ser mayor a cero.");
+      return;
+    }
+
+    if (!draft.solo_ida && draft.fecha_out && draft.fecha_in && draft.fecha_out < draft.fecha_in) {
+      setLocalError("La fecha OUT no puede ser anterior a la fecha IN.");
+      return;
+    }
+
+    const selectedOperador = catalogos.operadores.find((item) => item.id === draft.operador_id);
+
+    const ok = await updateFileDetalle(file.id, {
+      operador_id: draft.operador_id || null,
+      operador: selectedOperador?.nombre || draft.operador || null,
+      servicio: draft.servicio || null,
+      destino: draft.destino || null,
+      fecha_in: draft.fecha_in || null,
+      fecha_out: draft.solo_ida ? null : draft.fecha_out || null,
+      solo_ida: draft.solo_ida,
+      importe_bruto: bruto,
+      importe_final: final,
+      moneda: draft.moneda,
+      neto_operador: neto,
+      estado: draft.estado || "CARGADO",
+      observaciones: draft.observaciones || null,
+      riesgo: draft.riesgo,
+      importe_riesgo: draft.riesgo ? parseMoney(draft.importe_riesgo) : 0,
+      riesgo_motivo: draft.riesgo ? draft.riesgo_motivo || null : null,
+      fecha_vencimiento_operador: draft.fecha_vencimiento_operador || null,
+      saldo_pendiente_operador: saldoOperador,
+      estado_pago_operador: draft.estado_pago_operador || null
+    });
+
+    if (ok) {
+      onSaved("File actualizado correctamente.");
+      onClose();
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-[200] flex items-start justify-center bg-black/35 px-4 pt-12 backdrop-blur-sm">
       <div className="max-h-[calc(100vh-72px)] w-full max-w-4xl overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl">
@@ -2259,19 +2786,42 @@ function FileDetailModal({
             <h2 className="truncate text-[17px] font-semibold text-[#172033]">
               File {file.numero_file}
             </h2>
+
             <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">
-              {file.clientes?.nombre_completo || "Sin cliente"} · {file.destino || "Sin destino"}
+              {file.clientes?.nombre_completo || "Sin cliente"} · {draft.destino || "Sin destino"}
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#172033]"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setEditing((current) => !current)}
+              className={[
+                "inline-flex h-8 items-center gap-1.5 rounded-[10px] px-3 text-[12px] font-medium transition",
+                editing
+                  ? "border border-[#4f7c90]/30 bg-[#eef6f7] text-[#172033]"
+                  : "border border-black/10 bg-white text-[#334155] hover:bg-[#f8fafc]"
+              ].join(" ")}
+            >
+              <Edit3 size={13} />
+              {editing ? "Editando" : "Editar"}
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#172033]"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
+
+        {localError ? (
+          <div className="mb-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-medium text-red-700">
+            {localError}
+          </div>
+        ) : null}
 
         <div className="grid gap-2.5 md:grid-cols-3">
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
@@ -2286,75 +2836,512 @@ function FileDetailModal({
 
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
             <FieldLabel>Viaje</FieldLabel>
-            <div className="text-[13px] font-semibold text-[#172033]">{file.destino || "—"}</div>
-            <div className="text-[12px] font-normal text-[#64748b]">
-              {formatDateAR(file.fecha_in)} →{" "}
-              {file.solo_ida ? "Solo ida" : formatDateAR(file.fecha_out)}
-            </div>
+
+            {editing ? (
+              <TextInput
+                value={draft.destino}
+                onChange={(value) => setField("destino", value)}
+                placeholder="Destino"
+              />
+            ) : (
+              <>
+                <div className="text-[13px] font-semibold text-[#172033]">{draft.destino || "—"}</div>
+                <div className="text-[12px] font-normal text-[#64748b]">
+                  {formatDateAR(draft.fecha_in)} →{" "}
+                  {draft.solo_ida ? "Solo ida" : formatDateAR(draft.fecha_out)}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
             <FieldLabel>Total</FieldLabel>
-            <div className="text-[13px] font-semibold text-[#172033]">
-              {formatMoneyAR(file.importe_final, file.moneda)}
-            </div>
-            <div className="text-[12px] font-normal text-[#64748b]">{file.estado}</div>
+
+            {editing ? (
+              <div className="grid grid-cols-[1fr_92px] gap-2">
+                <TextInput
+                  value={draft.importe_final}
+                  onChange={(value) => setField("importe_final", value)}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
+
+                <NosturSelect
+                  value={draft.moneda}
+                  onChange={(value) => setField("moneda", value)}
+                  options={MONEDA_OPTIONS}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="text-[13px] font-semibold text-[#172033]">
+                  {formatMoneyAR(final, draft.moneda)}
+                </div>
+                <div className="text-[12px] font-normal text-[#64748b]">{draft.estado}</div>
+              </>
+            )}
           </div>
         </div>
 
         <div className="mt-3 grid gap-2.5 md:grid-cols-2">
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px] font-normal text-[#475569]">
-            <div className="mb-1.5">
-              Servicio: <strong className="font-semibold">{file.servicio || "—"}</strong>
-            </div>
-            <div className="mb-1.5">
-              Método contacto: <strong className="font-semibold">{file.metodo_contacto || "—"}</strong>
-            </div>
-            <div className="mb-1.5">
-              Operador: <strong className="font-semibold">{file.operador || "—"}</strong>
-            </div>
-            <div className="mb-1.5">
-              Vendedor: <strong className="font-semibold">{file.vendedor || "—"}</strong>
-            </div>
-            <div>
-              Riesgo: <strong className="font-semibold">{file.riesgo ? "SÍ" : "NO"}</strong>
-            </div>
+            {editing ? (
+              <div className="grid gap-3">
+                <div>
+                  <FieldLabel>Servicio</FieldLabel>
+                  <NosturSelect
+                    value={draft.servicio}
+                    onChange={(value) => setField("servicio", value)}
+                    options={servicioOptions}
+                    placeholder="Seleccionar servicio"
+                  />
+                </div>
+
+                <div>
+                  <FieldLabel>Operador</FieldLabel>
+                  <NosturSelect
+                    value={draft.operador_id}
+                    onChange={(value) => {
+                      const selected = catalogos.operadores.find((item) => item.id === value);
+                      setField("operador_id", value);
+                      setField("operador", selected?.nombre || "");
+                    }}
+                    options={operadorOptions}
+                    placeholder="Seleccionar operador"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <FieldLabel>Fecha IN</FieldLabel>
+                    <NosturDateInput
+                      value={draft.fecha_in}
+                      onChange={(value) => {
+                        setField("fecha_in", value);
+
+                        if (draft.fecha_out && value && draft.fecha_out < value) {
+                          setField("fecha_out", value);
+                        }
+                      }}
+                      align="left"
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Fecha OUT</FieldLabel>
+                    {draft.solo_ida ? (
+                      <div className="flex h-8 items-center rounded-[10px] border border-black/10 bg-white px-3 text-[12px] text-[#94a3b8]">
+                        Solo ida
+                      </div>
+                    ) : (
+                      <NosturDateInput
+                        value={draft.fecha_out}
+                        onChange={(value) => setField("fecha_out", value)}
+                        min={draft.fecha_in || undefined}
+                        align="left"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <BooleanChip
+                  checked={draft.solo_ida}
+                  onChange={(value) => {
+                    setField("solo_ida", value);
+                    if (value) setField("fecha_out", "");
+                  }}
+                  label="Solo ida"
+                />
+
+                <div>
+                  <FieldLabel>Estado file</FieldLabel>
+                  <NosturSelect
+                    value={draft.estado}
+                    onChange={(value) => setField("estado", value)}
+                    options={estadoOptions}
+                  />
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="mb-1.5">
+                  Servicio: <strong className="font-semibold">{file.servicio || "—"}</strong>
+                </div>
+                <div className="mb-1.5">
+                  Método contacto: <strong className="font-semibold">{file.metodo_contacto || "—"}</strong>
+                </div>
+                <div className="mb-1.5">
+                  Operador: <strong className="font-semibold">{file.operador || "—"}</strong>
+                </div>
+                <div className="mb-1.5">
+                  Vendedor: <strong className="font-semibold">{file.vendedor || "—"}</strong>
+                </div>
+                <div>
+                  Riesgo: <strong className="font-semibold">{file.riesgo ? "SÍ" : "NO"}</strong>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px] font-normal text-[#475569]">
-            <div className="mb-1.5">
-              Bruto:{" "}
-              <strong className="font-semibold">
-                {formatMoneyAR(file.importe_bruto, file.moneda)}
-              </strong>
-            </div>
-            <div className="mb-1.5">
-              Neto operador:{" "}
-              <strong className="font-semibold">
-                {formatMoneyAR(file.neto_operador, file.moneda)}
-              </strong>
-            </div>
-            <div className="mb-1.5">
-              Pagado:{" "}
-              <strong className="font-semibold">
-                {formatMoneyAR(file.total_pagado, file.moneda)}
-              </strong>
-            </div>
-            <div>
-              Saldo:{" "}
-              <strong className="font-semibold">
-                {formatMoneyAR(file.saldo_cta_cte, file.moneda)}
-              </strong>
-            </div>
+            {editing ? (
+              <div className="grid gap-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <FieldLabel>Bruto</FieldLabel>
+                    <TextInput
+                      value={draft.importe_bruto}
+                      onChange={(value) => setField("importe_bruto", value)}
+                      placeholder="0,00"
+                      inputMode="decimal"
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Neto operador</FieldLabel>
+                    <TextInput
+                      value={draft.neto_operador}
+                      onChange={(value) => {
+                        setField("neto_operador", value);
+
+                        if (
+                          !draft.saldo_pendiente_operador ||
+                          parseMoney(draft.saldo_pendiente_operador) === 0
+                        ) {
+                          setField("saldo_pendiente_operador", value);
+                        }
+                      }}
+                      placeholder="0,00"
+                      inputMode="decimal"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <FieldLabel>Vencimiento operador</FieldLabel>
+                    <NosturDateInput
+                      value={draft.fecha_vencimiento_operador}
+                      onChange={(value) => setField("fecha_vencimiento_operador", value)}
+                      align="left"
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Saldo operador</FieldLabel>
+                    <TextInput
+                      value={draft.saldo_pendiente_operador}
+                      onChange={(value) => setField("saldo_pendiente_operador", value)}
+                      placeholder="0,00"
+                      inputMode="decimal"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <FieldLabel>Estado pago operador</FieldLabel>
+                  <NosturSelect
+                    value={draft.estado_pago_operador}
+                    onChange={(value) => setField("estado_pago_operador", value)}
+                    options={estadoPagoOperadorOptions}
+                  />
+                </div>
+
+                <BooleanChip
+                  checked={draft.riesgo}
+                  onChange={(value) => {
+                    setField("riesgo", value);
+                    if (!value) {
+                      setField("importe_riesgo", "");
+                      setField("riesgo_motivo", "");
+                    }
+                  }}
+                  label="Riesgo operador"
+                />
+
+                {draft.riesgo ? (
+                  <div className="grid grid-cols-[160px_1fr] gap-2">
+                    <div>
+                      <FieldLabel>Importe riesgo</FieldLabel>
+                      <TextInput
+                        value={draft.importe_riesgo}
+                        onChange={(value) => setField("importe_riesgo", value)}
+                        placeholder="0,00"
+                        inputMode="decimal"
+                      />
+                    </div>
+
+                    <div>
+                      <FieldLabel>Motivo riesgo</FieldLabel>
+                      <TextInput
+                        value={draft.riesgo_motivo}
+                        onChange={(value) => setField("riesgo_motivo", value)}
+                        placeholder="Motivo"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div className="mb-1.5">
+                  Bruto:{" "}
+                  <strong className="font-semibold">
+                    {formatMoneyAR(file.importe_bruto, file.moneda)}
+                  </strong>
+                </div>
+                <div className="mb-1.5">
+                  Neto operador:{" "}
+                  <strong className="font-semibold">
+                    {formatMoneyAR(file.neto_operador, file.moneda)}
+                  </strong>
+                </div>
+                <div className="mb-1.5">
+                  Pagado:{" "}
+                  <strong className="font-semibold">
+                    {formatMoneyAR(file.total_pagado, file.moneda)}
+                  </strong>
+                </div>
+                <div className="mb-1.5">
+                  Saldo pasajero:{" "}
+                  <strong className="font-semibold">
+                    {formatMoneyAR(file.saldo_cta_cte, file.moneda)}
+                  </strong>
+                </div>
+                <div className="mb-1.5">
+                  Saldo operador:{" "}
+                  <strong className="font-semibold">
+                    {formatMoneyAR(file.saldo_pendiente_operador || 0, file.moneda)}
+                  </strong>
+                </div>
+                <div>
+                  Estado operador:{" "}
+                  <strong className="font-semibold">{file.estado_pago_operador || "—"}</strong>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
-        {file.riesgo ? (
+        <div className="mt-3 rounded-[14px] border border-black/10 bg-white p-3 text-[12px]">
+          <div className="flex justify-between gap-3">
+            <span className="text-[#64748b]">Importe final</span>
+            <strong className="font-semibold">{formatMoneyAR(final, draft.moneda)}</strong>
+          </div>
+
+          <div className="flex justify-between gap-3">
+            <span className="text-[#64748b]">Neto operador</span>
+            <strong className="font-semibold">{formatMoneyAR(neto, draft.moneda)}</strong>
+          </div>
+
+          <div className="mt-2 flex justify-between gap-3 border-t border-black/10 pt-2">
+            <span className="font-semibold text-[#172033]">Margen estimado</span>
+            <strong className={margen >= 0 ? "font-semibold text-emerald-700" : "font-semibold text-red-700"}>
+              {formatMoneyAR(margen, draft.moneda)}
+            </strong>
+          </div>
+        </div>
+
+        {editing ? (
+          <div className="mt-3">
+            <FieldLabel>Observaciones</FieldLabel>
+            <TextArea
+              value={draft.observaciones}
+              onChange={(value) => setField("observaciones", value)}
+              placeholder="Notas internas del file..."
+            />
+          </div>
+        ) : file.observaciones ? (
+          <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px] font-normal text-[#475569]">
+            <strong className="font-semibold">Observaciones:</strong> {file.observaciones}
+          </div>
+        ) : null}
+
+        {file.riesgo && !editing ? (
           <div className="mt-3 rounded-[14px] border border-red-200 bg-red-50 p-3 text-[12px] font-medium text-red-700">
             <strong>Motivo riesgo:</strong> {file.riesgo_motivo || "Sin motivo cargado"}
           </div>
         ) : null}
 
+                    <div className="mt-3 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <FieldLabel>Voucher</FieldLabel>
+
+              {voucher ? (
+                <>
+                  <div className="font-semibold text-[#172033]">
+                    Voucher N° {voucher.numero_voucher || "—"}
+                  </div>
+                  <div className="font-normal text-[#64748b]">
+                    Reserva: {voucher.reserva_id || "—"} · A favor de:{" "}
+                    {voucher.a_favor_de || file.clientes?.nombre_completo || "—"}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="font-semibold text-[#172033]">
+                    Este file no tiene voucher cargado
+                  </div>
+                  <div className="font-normal text-[#64748b]">
+                    Podés cargarlo ahora y generar el PDF para el cliente.
+                  </div>
+                </>
+              )}
+            </div>
+
+            {voucher ? (
+              <button
+                type="button"
+                onClick={handlePrintVoucher}
+                className="h-8 shrink-0 rounded-[10px] bg-[#4f7c90] px-3 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d]"
+              >
+                Generar voucher PDF
+              </button>
+            ) : null}
+          </div>
+
+          {voucher ? (
+            <div className="grid gap-1.5">
+              {serviciosVoucher.length > 0 ? (
+                serviciosVoucher.map((servicio) => (
+                  <div
+                    key={servicio.id}
+                    className="rounded-[10px] border border-black/10 bg-white px-3 py-2"
+                  >
+                    <div className="font-medium text-[#172033]">
+                      {servicio.servicio_detalle}
+                    </div>
+                    <div className="mt-0.5 text-[11px] font-normal text-[#64748b]">
+                      {servicio.cantidad_pasajeros} pasajero/s · {formatDateAR(servicio.fecha_inicio)} →{" "}
+                      {formatDateAR(servicio.fecha_fin)}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[#64748b]">
+                  Sin servicios cargados.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <FieldLabel>ID de reserva</FieldLabel>
+                  <TextInput
+                    value={voucherDraft.reserva_id}
+                    onChange={(value) => setVoucherDraftField("reserva_id", value)}
+                    placeholder="ID reserva / localizador"
+                  />
+                </div>
+
+                <div>
+                  <FieldLabel>A favor de</FieldLabel>
+                  <TextInput
+                    value={voucherDraft.a_favor_de}
+                    onChange={(value) => setVoucherDraftField("a_favor_de", value)}
+                    placeholder="Cliente / pasajero"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                {voucherDraft.servicios.map((servicio, index) => (
+                  <div
+                    key={`voucher-draft-${index}`}
+                    className="rounded-[12px] border border-black/10 bg-white p-3"
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <div className="font-semibold text-[#172033]">
+                        Servicio {index + 1}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => removeVoucherDraftServicio(index)}
+                        disabled={voucherDraft.servicios.length <= 1}
+                        className="h-7 rounded-[9px] border border-black/10 bg-white px-2 text-[11px] font-medium text-[#64748b] hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div>
+                        <FieldLabel>Servicio / detalle libre</FieldLabel>
+                        <TextArea
+                          value={servicio.servicio_detalle}
+                          onChange={(value) =>
+                            updateVoucherDraftServicio(index, { servicio_detalle: value })
+                          }
+                          placeholder="Detalle del servicio para el voucher..."
+                        />
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-[130px_1fr_1fr]">
+                        <div>
+                          <FieldLabel>Pasajeros</FieldLabel>
+                          <TextInput
+                            value={String(servicio.cantidad_pasajeros || 1)}
+                            onChange={(value) =>
+                              updateVoucherDraftServicio(index, {
+                                cantidad_pasajeros: Math.max(
+                                  parseInt(value.replace(/\D/g, ""), 10) || 1,
+                                  1
+                                )
+                              })
+                            }
+                            inputMode="numeric"
+                            placeholder="1"
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel>Fecha inicio</FieldLabel>
+                          <NosturDateInput
+                            value={servicio.fecha_inicio || ""}
+                            onChange={(value) =>
+                              updateVoucherDraftServicio(index, { fecha_inicio: value })
+                            }
+                            align="left"
+                          />
+                        </div>
+
+                        <div>
+                          <FieldLabel>Fecha fin</FieldLabel>
+                          <NosturDateInput
+                            value={servicio.fecha_fin || ""}
+                            onChange={(value) =>
+                              updateVoucherDraftServicio(index, { fecha_fin: value })
+                            }
+                            min={servicio.fecha_inicio || undefined}
+                            align="left"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <LineButton onClick={addVoucherDraftServicio}>
+                  + Agregar servicio
+                </LineButton>
+
+                <button
+                  type="button"
+                  onClick={handleCreateVoucher}
+                  disabled={saving}
+                  className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
+                >
+                  {saving ? "Creando..." : "Crear voucher"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
@@ -2363,6 +3350,17 @@ function FileDetailModal({
           >
             Cerrar
           </button>
+
+          {editing ? (
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
+            >
+              {saving ? "Guardando..." : "Guardar cambios"}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>
@@ -2376,6 +3374,8 @@ export function FilesPanel() {
   const filters = useFilesStore((state) => state.filters);
   const catalogos = useFilesStore((state) => state.catalogos);
   const selectedFileId = useFilesStore((state) => state.selectedFileId);
+    const vouchers = useFilesStore((state) => state.vouchers);
+  const voucherServicios = useFilesStore((state) => state.voucherServicios);
 
   const loadFiles = useFilesStore((state) => state.loadFiles);
   const setFilter = useFilesStore((state) => state.setFilter);
@@ -2397,6 +3397,19 @@ export function FilesPanel() {
   const selectedFile = useMemo(
     () => files.find((file) => file.id === selectedFileId) || files[0] || null,
     [files, selectedFileId]
+  );
+
+    const selectedVoucher = useMemo(
+    () => (selectedFile ? vouchers.find((voucher) => voucher.file_id === selectedFile.id) || null : null),
+    [selectedFile, vouchers]
+  );
+
+  const selectedVoucherServicios = useMemo(
+    () =>
+      selectedVoucher
+        ? voucherServicios.filter((servicio) => servicio.voucher_id === selectedVoucher.id)
+        : [],
+    [selectedVoucher, voucherServicios]
   );
 
   const selectedMonthLabel = getMonthLabel(filters.mes);
@@ -2434,6 +3447,23 @@ export function FilesPanel() {
     const ok = await toggleFileActivo(file);
 
     if (ok) showToast(file.activo ? "File desactivado." : "File activado.");
+  }
+
+    function handlePrintSelectedVoucher() {
+    if (!selectedFile || !selectedVoucher) {
+      showToast("Este file no tiene voucher cargado.", "error");
+      return;
+    }
+
+    try {
+      printFileVoucherPdf({
+        file: selectedFile,
+        voucher: selectedVoucher,
+        servicios: selectedVoucherServicios
+      });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "No se pudo generar el voucher.", "error");
+    }
   }
 
   const vendedorOptions: SelectOption[] = [
@@ -2741,6 +3771,7 @@ export function FilesPanel() {
                 {files.map((file) => {
                   const selected = selectedFile?.id === file.id;
                   const cliente = file.clientes;
+                  const margen = parseMoney(file.importe_final) - parseMoney(file.neto_operador);
 
                   return (
                     <button
@@ -2785,7 +3816,7 @@ export function FilesPanel() {
                           {formatMoneyAR(file.importe_final, file.moneda)}
                         </div>
                         <div className="text-[11px] font-normal text-[#64748b]">
-                          Pagado {formatMoneyAR(file.total_pagado, file.moneda)}
+                          Margen {formatMoneyAR(margen, file.moneda)}
                         </div>
                       </div>
 
@@ -2797,6 +3828,12 @@ export function FilesPanel() {
                         {file.riesgo ? (
                           <span className="rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
                             Riesgo
+                          </span>
+                        ) : null}
+
+                        {parseMoney(file.neto_operador) <= 0 ? (
+                          <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                            Falta neto
                           </span>
                         ) : null}
                       </div>
@@ -2911,20 +3948,23 @@ export function FilesPanel() {
                       </strong>
                     </div>
                     <div className="flex justify-between">
-                      <span>Pagado</span>
+                      <span>Margen</span>
                       <strong className="font-semibold">
-                        {formatMoneyAR(selectedFile.total_pagado, selectedFile.moneda)}
+                        {formatMoneyAR(
+                          parseMoney(selectedFile.importe_final) - parseMoney(selectedFile.neto_operador),
+                          selectedFile.moneda
+                        )}
                       </strong>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
+                                  <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => setDetailFile(selectedFile)}
                       className="h-8 rounded-[10px] border border-black/10 bg-white text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
                     >
-                      Ver
+                      Ver / editar
                     </button>
 
                     <button
@@ -2934,6 +3974,24 @@ export function FilesPanel() {
                     >
                       Operador
                     </button>
+
+                    {selectedVoucher ? (
+                      <button
+                        type="button"
+                        onClick={handlePrintSelectedVoucher}
+                        className="col-span-2 h-8 rounded-[10px] bg-[#4f7c90] text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d]"
+                      >
+                        Generar voucher PDF
+                      </button>
+                                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setDetailFile(selectedFile)}
+                        className="col-span-2 h-8 rounded-[10px] border border-[#4f7c90]/30 bg-[#eef6f7] text-[12px] font-medium text-[#172033] hover:bg-white"
+                      >
+                        Ver / generar voucher
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -2964,7 +4022,13 @@ export function FilesPanel() {
         />
       ) : null}
 
-      {detailFile ? <FileDetailModal file={detailFile} onClose={() => setDetailFile(null)} /> : null}
+      {detailFile ? (
+        <FileDetailModal
+          file={detailFile}
+          onClose={() => setDetailFile(null)}
+          onSaved={(message) => showToast(message)}
+        />
+      ) : null}
     </div>
   );
 }

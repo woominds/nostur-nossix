@@ -62,7 +62,15 @@ const SECTION_COLORS: Record<SidebarSectionKey, string> = {
   apps: "#ff2f76"
 };
 
-const CHAT_APP_IDS = ["livenos", "oportunidades", "cande", "nia", "control-ia"];
+const CHAT_APP_IDS = [
+  "livenos",
+  "contactos-live",
+  "historiales-live",
+  "oportunidades",
+  "cande",
+  "nia",
+  "control-ia"
+];
 
 const VENTAS_APP_IDS = [
   "clientes",

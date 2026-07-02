@@ -116,11 +116,24 @@ type TarifaPasajeroFlexible = {
   visible_en_pdf?: boolean;
 };
 
-const ALMUNDO_LOGO_URL = "/brand/almundo-logo.png";
-
+const ALMUNDO_LOGO_URL = getAssetUrl("/brand/almundo-logo.png");
 /* =========================================================
    HELPERS GENERALES
 ========================================================= */
+
+function getAssetUrl(path: string): string {
+  if (path.startsWith("http://") || path.startsWith("https://") || path.startsWith("data:")) {
+    return path;
+  }
+
+  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+
+  if (typeof window !== "undefined" && window.location?.origin && window.location.origin !== "null") {
+    return `${window.location.origin}${cleanPath}`;
+  }
+
+  return cleanPath;
+}
 
 function formatMoneyAR(value: number | null | undefined, moneda?: string | null): string {
   const amount = Number(value || 0);

@@ -37,6 +37,8 @@ import { ConfigPanel } from "./config/ConfigPanel";
 import { ImportadorCatalogosPanel } from "./config/ImportadorCatalogosPanel";
 
 import { LiveNosPanel } from "../modules/comunicaciones/LiveNosPanel";
+import { ContactosLivePanel } from "../modules/comunicaciones/ContactosLivePanel";
+import { HistorialesLivePanel } from "../modules/comunicaciones/HistorialesLivePanel";
 import { OportunidadesPanel } from "../modules/comunicaciones/OportunidadesPanel";
 import { CandePanel } from "../modules/comunicaciones/CandePanel";
 import { NiaPanel } from "../modules/comunicaciones/NiaPanel";
@@ -64,12 +66,14 @@ function normalizeInternalAppId(moduleId: string): string {
   if (moduleId === "settings") return "configuracion";
   if (moduleId === "configuracion") return "configuracion";
 
-  if (moduleId === "livenos") return "livenos";
-  if (moduleId === "oportunidades") return "oportunidades";
-  if (moduleId === "cande") return "cande";
-  if (moduleId === "nia") return "nia";
-  if (moduleId === "control-ia") return "control-ia";
-  if (moduleId === "mi-perfil") return "mi-perfil";
+ if (moduleId === "livenos") return "livenos";
+if (moduleId === "contactos-live") return "contactos-live";
+if (moduleId === "historiales-live") return "historiales-live";
+if (moduleId === "oportunidades") return "oportunidades";
+if (moduleId === "cande") return "cande";
+if (moduleId === "nia") return "nia";
+if (moduleId === "control-ia") return "control-ia";
+if (moduleId === "mi-perfil") return "mi-perfil";
 
   return moduleId;
 }
@@ -141,6 +145,8 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
   const isImportadorCatalogos = activeUrl === "internal://importador-catalogos";
 
   const isLiveNos = activeUrl === "internal://livenos";
+  const isContactosLive = activeUrl === "internal://contactos-live";
+const isHistorialesLive = activeUrl === "internal://historiales-live";
   const isOportunidades = activeUrl === "internal://oportunidades";
   const isCande = activeUrl === "internal://cande";
   const isNia = activeUrl === "internal://nia";
@@ -150,6 +156,8 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
   if (isHome) return <Home />;
 
   if (isLiveNos) return <LiveNosPanel />;
+  if (isContactosLive) return <ContactosLivePanel />;
+if (isHistorialesLive) return <HistorialesLivePanel />;
   if (isOportunidades) return <OportunidadesPanel />;
   if (isCande) return <CandePanel />;
   if (isNia) return <NiaPanel />;

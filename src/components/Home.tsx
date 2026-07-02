@@ -89,6 +89,34 @@ type HomeMetaSucursal = {
   faltaUsd?: string | number | null;
 };
 
+type HomeAdminMontoResumen = {
+  ars: number;
+  usd: number;
+  cantidad: number;
+};
+
+type HomeAdminResumen = {
+  deudaOperadores: {
+    total: HomeAdminMontoResumen;
+    vencida: HomeAdminMontoResumen;
+    proximos5Dias: HomeAdminMontoResumen;
+  };
+  facturasPagar: {
+    proximos5Dias: HomeAdminMontoResumen;
+    vencidas: HomeAdminMontoResumen;
+  };
+  facturasCobrar: {
+    totalPendiente: HomeAdminMontoResumen;
+    vencidas: HomeAdminMontoResumen;
+    proximos5Dias: HomeAdminMontoResumen;
+  };
+  cajas: {
+    totalArs: number;
+    totalUsd: number;
+    cantidad: number;
+  };
+};
+
 type HomeRankingSimple = {
   nombre: string;
   valor: number;
@@ -361,8 +389,8 @@ function KpiHomeCard({
   tone = "orange"
 }: {
   title: string;
-  value: string;
-  detail: string;
+  value: ReactNode;
+  detail: ReactNode;
   icon: ReactNode;
   tone?: "orange" | "green" | "blue" | "amber" | "slate";
 }) {
@@ -375,18 +403,22 @@ function KpiHomeCard({
   }[tone];
 
   return (
-    <SoftCard className="min-h-[100px]">
+    <SoftCard className="min-h-[118px]">
       <div className="flex h-full items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-[12px] font-normal leading-none text-[#64748b]">{title}</div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] font-normal leading-none text-[#64748b]">
+            {title}
+          </div>
 
-          <div className="mt-2 truncate text-[20px] font-semibold tracking-tight text-[#111827]">
+          <div className="mt-2 min-w-0 text-[20px] font-semibold tracking-tight text-[#111827]">
             {value}
           </div>
 
-          <div className="mt-1 truncate text-[11px] font-normal leading-tight text-[#64748b]">
-            {detail}
-          </div>
+          {detail ? (
+            <div className="mt-1 min-w-0 text-[11px] font-normal leading-tight text-[#64748b]">
+              {detail}
+            </div>
+          ) : null}
         </div>
 
         <div
@@ -398,6 +430,68 @@ function KpiHomeCard({
         </div>
       </div>
     </SoftCard>
+  );
+}
+
+function DualMoneyValue({
+  usd,
+  ars
+}: {
+  usd: string;
+  ars: string;
+}) {
+  return (
+    <div className="grid gap-0.5 leading-none">
+      <div className="truncate text-[20px] font-semibold tracking-tight text-[#111827]">
+        {usd}
+      </div>
+      <div className="truncate text-[20px] font-semibold tracking-tight text-[#111827]">
+        {ars}
+      </div>
+    </div>
+  );
+}
+
+function formatAdminDualMonto(monto: HomeAdminMontoResumen): string {
+  const parts: string[] = [];
+
+  if (monto.usd) parts.push(formatUsd(monto.usd));
+  if (monto.ars) parts.push(`$ ${formatMoneyAR(monto.ars)}`);
+
+  return parts.length > 0 ? parts.join(" · ") : "$ 0,00";
+}
+
+function AdminHomeCard({
+  title,
+  value,
+  detail,
+  tone = "slate"
+}: {
+  title: string;
+  value: string;
+  detail: string;
+  tone?: "slate" | "red" | "amber" | "green" | "blue";
+}) {
+  const toneClass = {
+    slate: "border-black/10 bg-white/70",
+    red: "border-red-200 bg-red-50",
+    amber: "border-amber-200 bg-amber-50",
+    green: "border-emerald-200 bg-emerald-50",
+    blue: "border-blue-200 bg-blue-50"
+  }[tone];
+
+  return (
+    <div className={["rounded-[16px] border p-3 shadow-sm", toneClass].join(" ")}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[#64748b]">
+        {title}
+      </div>
+      <div className="mt-2 truncate text-[18px] font-semibold tracking-tight text-[#111827]">
+        {value}
+      </div>
+      <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
+        {detail}
+      </div>
+    </div>
   );
 }
 
@@ -785,6 +879,8 @@ export function Home() {
   const goToNextMonth = useTableroDeControlStore((state) => state.goToNextMonth);
   const filters = useTableroDeControlStore((state) => state.filters);
   const kpis = useTableroDeControlStore((state) => state.kpis);
+  const currentProfile = useTableroDeControlStore((state) => state.currentProfile);
+const adminResumen = useTableroDeControlStore((state) => state.adminResumen) as HomeAdminResumen;
   const rankingVendedores = useTableroDeControlStore(
     (state) => state.rankingVendedores
   ) as HomeRankingVendedor[];
@@ -818,6 +914,9 @@ export function Home() {
 
   const internalApps = useMemo(() => {
     const seen = new Set<string>();
+
+
+
 
     return appRegistry
       .filter((app) => app.url.startsWith("internal://"))
@@ -1062,7 +1161,12 @@ const rankingSemanalActual = useMemo(() => {
 
   const friendlyDate = getFriendlyDate();
 
-
+  const canViewAdminHome =
+    Boolean(currentProfile?.activo) &&
+    (currentProfile?.rol === "gerencia" ||
+      currentProfile?.rol === "admin_general" ||
+      Boolean(currentProfile?.is_support_user) ||
+      Boolean(currentProfile?.is_super_admin));
 
   function renderTipoCambioWidget() {
     return (
@@ -1324,29 +1428,44 @@ const rankingSemanalActual = useMemo(() => {
             />
 
             <div className="mb-3 grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
-              <KpiHomeCard
-                title="Facturación histórica"
-                value={formatUsd(kpis.facturacionHistoricaUsd || 0)}
-                detail={`${formatMoneyAR(kpis.facturacionHistoricaArs || 0)} ARS acumulado`}
-                icon={<WalletCards size={16} strokeWidth={2} />}
-                tone="green"
-              />
+  <KpiHomeCard
+  title="Facturación histórica"
+  value={
+    <DualMoneyValue
+      usd={formatUsd(kpis.facturacionHistoricaUsd || 0)}
+      ars={`$ ${formatMoneyAR(kpis.facturacionHistoricaArs || 0)}`}
+    />
+  }
+  detail="Importes originales"
+  icon={<WalletCards size={16} strokeWidth={2} />}
+  tone="green"
+/>
 
-              <KpiHomeCard
-                title="Facturación del mes"
-                value={formatUsd(kpis.facturacionMesUsd || 0)}
-                detail={`${formatMoneyAR(kpis.facturacionMesArs || 0)} ARS · Carritos + Files`}
-                icon={<FileText size={16} strokeWidth={2} />}
-                tone="orange"
-              />
+<KpiHomeCard
+  title="Facturación del mes"
+  value={
+    <DualMoneyValue
+      usd={formatUsd(kpis.facturacionMesUsd || 0)}
+      ars={`$ ${formatMoneyAR(kpis.facturacionMesArs || 0)}`}
+    />
+  }
+  detail="Importes originales"
+  icon={<FileText size={16} strokeWidth={2} />}
+  tone="orange"
+/>
 
-              <KpiHomeCard
-                title="Utilidad mensual"
-                value={formatUsd(kpis.utilidadTotalUsd || 0)}
-                detail="Base metas y comisiones"
-                icon={<TrendingUp size={16} strokeWidth={2} />}
-                tone="green"
-              />
+<KpiHomeCard
+  title="Utilidad mensual"
+  value={
+    <DualMoneyValue
+      usd={formatUsd(kpis.utilidadTotalUsd || 0)}
+      ars={`$ ${formatMoneyAR(kpis.utilidadTotalArs || 0)}`}
+    />
+  }
+  detail="Base metas y comisiones"
+  icon={<TrendingUp size={16} strokeWidth={2} />}
+  tone="green"
+/>
 
               <KpiHomeCard
                 title="Ventas confirmadas"
@@ -1356,14 +1475,64 @@ const rankingSemanalActual = useMemo(() => {
                 tone="blue"
               />
 
-              <KpiHomeCard
-                title="Ticket promedio"
-                value={formatUsd(kpis.ticketPromedioUsd || 0)}
-                detail="Facturación mensual / ventas"
-                icon={<DollarSign size={16} strokeWidth={2} />}
-                tone="amber"
-              />
+<KpiHomeCard
+  title="Ticket promedio"
+  value={
+    <DualMoneyValue
+      usd={formatUsd(kpis.ticketPromedioUsd || 0)}
+      ars={`$ ${formatMoneyAR(kpis.ticketPromedioArs || 0)}`}
+    />
+  }
+  detail="Facturación mensual / ventas por moneda"
+  icon={<DollarSign size={16} strokeWidth={2} />}
+  tone="amber"
+/>
             </div>
+
+            {canViewAdminHome ? (
+  <section className="grid gap-3">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <h2 className="text-[14px] font-semibold text-[#172033]">
+          Administración
+        </h2>
+        <p className="text-[11.5px] font-normal text-[#64748b]">
+          Resumen operativo de pagos, cobros, operadores y cajas.
+        </p>
+      </div>
+    </div>
+
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <AdminHomeCard
+        title="Deuda operadores"
+        value={formatAdminDualMonto(adminResumen.deudaOperadores.total)}
+        detail={`${adminResumen.deudaOperadores.vencida.cantidad} vencidas · ${adminResumen.deudaOperadores.proximos5Dias.cantidad} próximos 5 días`}
+        tone={adminResumen.deudaOperadores.vencida.cantidad > 0 ? "red" : "slate"}
+      />
+
+      <AdminHomeCard
+        title="Facturas a pagar"
+        value={formatAdminDualMonto(adminResumen.facturasPagar.proximos5Dias)}
+        detail={`${adminResumen.facturasPagar.proximos5Dias.cantidad} vencen hasta +5 días · ${adminResumen.facturasPagar.vencidas.cantidad} vencidas`}
+        tone={adminResumen.facturasPagar.vencidas.cantidad > 0 ? "red" : "amber"}
+      />
+
+      <AdminHomeCard
+        title="Facturas a cobrar"
+        value={formatAdminDualMonto(adminResumen.facturasCobrar.totalPendiente)}
+        detail={`${adminResumen.facturasCobrar.vencidas.cantidad} vencidas · ${adminResumen.facturasCobrar.proximos5Dias.cantidad} próximos 5 días`}
+        tone={adminResumen.facturasCobrar.vencidas.cantidad > 0 ? "red" : "blue"}
+      />
+
+      <AdminHomeCard
+        title="Resumen de cajas"
+        value={`${formatUsd(adminResumen.cajas.totalUsd)} · $ ${formatMoneyAR(adminResumen.cajas.totalArs)}`}
+        detail={`${adminResumen.cajas.cantidad} cajas operativas`}
+        tone="green"
+      />
+    </div>
+  </section>
+) : null}
 
             <div className="grid gap-3 xl:grid-cols-2">
              <DashboardHomeCard

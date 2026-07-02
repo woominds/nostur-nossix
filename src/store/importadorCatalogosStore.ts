@@ -1043,7 +1043,7 @@ function buildInitialMap(catalogType: ImportCatalogType, columns: string[]): Imp
     map.updated_at = guessColumn(columns, ["updated_at", "actualizado"]);
   }
 
-  if (catalogType === "live_contactos") {
+if (catalogType === "live_contactos") {
     map.live_contact_id = guessColumn(columns, ["id", "ID", "live_contact_id", "id contacto", "contact id"]);
     map.apellidos = guessColumn(columns, ["apellidos", "apellido", "surname"]);
     map.nombre = guessColumn(columns, ["nombre", "name"]);
@@ -1058,8 +1058,23 @@ function buildInitialMap(catalogType: ImportCatalogType, columns: string[]): Imp
     map.dinamicos = guessColumn(columns, ["dinamicos", "dinámicos", "dynamic"]);
     map.direccion = guessColumn(columns, ["direccion", "dirección", "address"]);
     map.fecha_cumpleanos = guessColumn(columns, ["fecha cumpleaños", "fecha_cumpleanos", "cumpleaños", "birthday"]);
-    map.live_fecha_creado = guessColumn(columns, ["fecha creado", "fecha_creado", "created"]);
-    map.live_fecha_editado = guessColumn(columns, ["fecha editado", "fecha_editado", "updated"]);
+   map.live_fecha_creado = guessColumn(columns, [
+  "fecha_add",
+  "fecha add",
+  "fecha creado",
+  "fecha_creado",
+  "created",
+  "created_at"
+]);
+
+map.live_fecha_editado = guessColumn(columns, [
+  "fecha_edt",
+  "fecha edt",
+  "fecha editado",
+  "fecha_editado",
+  "updated",
+  "updated_at"
+]);
     map.habeas_data = guessColumn(columns, ["habeas data", "habeas_data"]);
     map.pais = guessColumn(columns, ["pais", "país", "country"]);
     map.ubicacion = guessColumn(columns, ["ubicacion", "ubicación", "location"]);
@@ -2501,47 +2516,73 @@ export const useImportadorCatalogosStore = create<ImportadorCatalogosState>((set
         return true;
       }
 
-      if (catalogType === "live_conversaciones") {
-        const contactosMap = new Map<string, Record<string, ImportMappedValue>>();
+     if (catalogType === "live_conversaciones") {
+  const contactosMap = new Map<string, Record<string, ImportMappedValue>>();
 
-        const conversaciones = rowsToImport.map((row) => {
-          const mapped = row.mapped;
-          const liveContactId = cleanText(mapped.live_contact_id);
+  const conversaciones = rowsToImport.map((row) => {
+    const mapped = row.mapped;
+    const liveContactId = cleanText(mapped.live_contact_id);
 
-          if (liveContactId && !contactosMap.has(liveContactId)) {
-            contactosMap.set(liveContactId, buildLiveContactFromConversationRow(mapped));
-          }
+    if (liveContactId && !contactosMap.has(liveContactId)) {
+      contactosMap.set(liveContactId, buildLiveContactFromConversationRow(mapped));
+    }
 
-          return toInsertRow(catalogType, mapped);
-        });
+    return toInsertRow(catalogType, mapped);
+  });
 
-        const contactos = Array.from(contactosMap.values());
+  const liveContactIds = Array.from(contactosMap.keys()).filter(Boolean);
 
-        if (contactos.length > 0) {
-          const { error: contactosError } = await supabase
-            .from("comunicaciones_live_contactos")
-            .upsert(contactos, {
-              onConflict: "live_contact_id",
-              ignoreDuplicates: false
-            });
+  let existingLiveContactIds = new Set<string>();
 
-          if (contactosError) {
-            set({
-              importing: false,
-              error: normalizeError(contactosError)
-            });
+  if (liveContactIds.length > 0) {
+    const { data: existingContacts, error: existingContactsError } = await supabase
+      .from("comunicaciones_live_contactos")
+      .select("live_contact_id")
+      .in("live_contact_id", liveContactIds);
 
-            return false;
-          }
-        }
+    if (existingContactsError) {
+      set({
+        importing: false,
+        error: normalizeError(existingContactsError)
+      });
 
-        if (conversaciones.length > 0) {
-          const { error: conversacionesError } = await supabase
-            .from("comunicaciones_live_conversaciones")
-            .upsert(conversaciones, {
-              onConflict: "live_conversation_id",
-              ignoreDuplicates: false
-            });
+      return false;
+    }
+
+    existingLiveContactIds = new Set(
+      (existingContacts || [])
+        .map((item) => cleanText(item.live_contact_id))
+        .filter(Boolean)
+    );
+  }
+
+  const contactos = Array.from(contactosMap.values()).filter((contacto) => {
+    const liveContactId = cleanText(contacto.live_contact_id);
+    return liveContactId && !existingLiveContactIds.has(liveContactId);
+  });
+
+  if (contactos.length > 0) {
+    const { error: contactosError } = await supabase
+      .from("comunicaciones_live_contactos")
+      .insert(contactos);
+
+    if (contactosError) {
+      set({
+        importing: false,
+        error: normalizeError(contactosError)
+      });
+
+      return false;
+    }
+  }
+
+  if (conversaciones.length > 0) {
+    const { error: conversacionesError } = await supabase
+      .from("comunicaciones_live_conversaciones")
+      .upsert(conversaciones, {
+        onConflict: "live_conversation_id",
+        ignoreDuplicates: false
+      });
 
           if (conversacionesError) {
             set({

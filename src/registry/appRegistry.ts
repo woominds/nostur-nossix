@@ -113,6 +113,25 @@ export const appRegistry: RegisteredApp[] = [
     color: "#10b981",
     category: "crm"
   },
+
+  {
+  id: "contactos-live",
+  name: "Contactos Live",
+  url: "internal://contactos-live",
+  homeUrl: "internal://contactos-live",
+  partition: "persist:internal",
+  color: "#10b981",
+  category: "crm"
+},
+{
+  id: "historiales-live",
+  name: "Historiales Live",
+  url: "internal://historiales-live",
+  homeUrl: "internal://historiales-live",
+  partition: "persist:internal",
+  color: "#10b981",
+  category: "crm"
+},
   {
     id: "oportunidades",
     name: "Oportunidades",
