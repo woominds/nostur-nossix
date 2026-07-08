@@ -4,14 +4,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   CheckCircle2,
+  ChevronsUpDown,
   Eye,
   EyeOff,
+  KeyRound,
   Loader2,
   Lock,
+  Plus,
   RefreshCcw,
   Save,
   ShieldCheck,
   ShoppingBag,
+  Trash2,
   UserRound
 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
@@ -43,7 +47,32 @@ type VentaHistorica = {
   created_at: string | null;
 };
 
-type TabKey = "perfil" | "seguridad" | "ventas";
+type UserCredential = {
+  id: string;
+  user_id: string;
+  service_key: string;
+  username: string | null;
+  password_encrypted: string | null;
+  autofill_enabled: boolean;
+  auto_submit_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type CredentialForm = {
+  service_key: string;
+  username: string;
+  password_encrypted: string;
+  autofill_enabled: boolean;
+  auto_submit_enabled: boolean;
+};
+
+type SelectOption = {
+  value: string;
+  label: string;
+};
+
+type TabKey = "perfil" | "seguridad" | "credenciales" | "ventas";
 
 function cleanText(value: unknown): string {
   return String(value || "").trim();
@@ -93,6 +122,31 @@ function formatImporte(moneda?: string | null, value?: string | number | null): 
   return `$ ${formatMoneyAR(amount)}`;
 }
 
+const CREDENTIAL_SERVICES = [
+  { key: "abaco", label: "Ábaco" },
+  { key: "experts", label: "Experts" },
+  { key: "krooze", label: "Krooze" },
+  { key: "aivo", label: "Aivo" },
+  { key: "liveconnect", label: "LiveConnect" },
+  { key: "almundo", label: "Almundo" },
+  { key: "otro", label: "Otro" }
+];
+
+function getCredentialServiceLabel(serviceKey?: string | null): string {
+  const clean = cleanText(serviceKey);
+  return CREDENTIAL_SERVICES.find((item) => item.key === clean)?.label || clean || "Servicio";
+}
+
+function getEmptyCredentialForm(): CredentialForm {
+  return {
+    service_key: "abaco",
+    username: "",
+    password_encrypted: "",
+    autofill_enabled: true,
+    auto_submit_enabled: false
+  };
+}
+
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
     <label className="mb-1 block text-[11px] font-medium uppercase tracking-[0.08em] text-[#64748b]">
@@ -123,6 +177,70 @@ function SoftInput({
       placeholder={placeholder}
       className="h-10 w-full rounded-xl border border-black/10 bg-white px-3 text-[13px] font-normal text-[#172033] outline-none placeholder:text-[#94a3b8] transition focus:border-[#4f7c90] focus:ring-3 focus:ring-[#4f7c90]/10 disabled:cursor-not-allowed disabled:bg-[#f1f5f9] disabled:text-[#64748b]"
     />
+  );
+}
+
+
+function NosturSelect({
+  value,
+  onChange,
+  options,
+  placeholder = "Seleccionar",
+  disabled = false
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        className="flex h-10 w-full items-center justify-between gap-2 rounded-xl border border-black/10 bg-white px-3 text-left text-[13px] font-normal text-[#172033] outline-none transition hover:bg-[#f8fafc] focus:border-[#4f7c90] focus:ring-3 focus:ring-[#4f7c90]/10 disabled:cursor-not-allowed disabled:bg-[#f1f5f9] disabled:text-[#64748b]"
+      >
+        <span className={selected ? "truncate" : "truncate text-[#94a3b8]"}>
+          {selected?.label || placeholder}
+        </span>
+
+        <ChevronsUpDown size={14} className="shrink-0 text-[#64748b]" />
+      </button>
+
+      {open ? (
+        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-64 overflow-auto rounded-xl border border-black/10 bg-white p-1 shadow-xl">
+          {options.map((option) => {
+            const active = option.value === value;
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={[
+                  "flex w-full items-center rounded-lg px-3 py-2 text-left text-[13px] transition",
+                  active
+                    ? "bg-[#172033] font-medium text-white"
+                    : "text-[#334155] hover:bg-[#f1f5f9]"
+                ].join(" ")}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -181,6 +299,13 @@ export function MiPerfilPanel() {
   const [showPassword, setShowPassword] = useState(false);
 
   const [ventas, setVentas] = useState<VentaHistorica[]>([]);
+  const [credentials, setCredentials] = useState<UserCredential[]>([]);
+const [credentialsLoading, setCredentialsLoading] = useState(false);
+const [savingCredential, setSavingCredential] = useState(false);
+const [credentialFormOpen, setCredentialFormOpen] = useState(false);
+const [editingCredentialId, setEditingCredentialId] = useState<string | null>(null);
+const [credentialForm, setCredentialForm] = useState<CredentialForm>(() => getEmptyCredentialForm());
+const [showCredentialPassword, setShowCredentialPassword] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -410,10 +535,165 @@ export function MiPerfilPanel() {
     setSavingPassword(false);
   }
 
-  useEffect(() => {
-    void loadProfile();
-    void loadVentas();
-  }, []);
+
+  async function loadCredentials() {
+  setCredentialsLoading(true);
+  setError(null);
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+
+  if (userError || !userData.user) {
+    setError(userError?.message || "No se pudo obtener el usuario actual.");
+    setCredentialsLoading(false);
+    return;
+  }
+
+  const { data, error: credentialsError } = await supabase
+    .from("user_credentials")
+    .select(
+      "id,user_id,service_key,username,password_encrypted,autofill_enabled,auto_submit_enabled,created_at,updated_at"
+    )
+    .eq("user_id", userData.user.id)
+    .order("service_key", { ascending: true });
+
+  if (credentialsError) {
+    setError(credentialsError.message || "No se pudieron cargar las credenciales.");
+    setCredentialsLoading(false);
+    return;
+  }
+
+  setCredentials((data || []) as unknown as UserCredential[]);
+  setCredentialsLoading(false);
+}
+
+function startNewCredential() {
+  setEditingCredentialId(null);
+  setCredentialForm(getEmptyCredentialForm());
+  setShowCredentialPassword(false);
+  setCredentialFormOpen(true);
+  setError(null);
+  setStatus(null);
+}
+
+function startEditCredential(credential: UserCredential) {
+  setEditingCredentialId(credential.id);
+  setCredentialForm({
+    service_key: credential.service_key || "otro",
+    username: credential.username || "",
+    password_encrypted: credential.password_encrypted || "",
+    autofill_enabled: credential.autofill_enabled,
+    auto_submit_enabled: credential.auto_submit_enabled
+  });
+  setShowCredentialPassword(false);
+  setCredentialFormOpen(true);
+  setError(null);
+  setStatus(null);
+}
+
+function cancelCredentialForm() {
+  setEditingCredentialId(null);
+  setCredentialForm(getEmptyCredentialForm());
+  setShowCredentialPassword(false);
+  setCredentialFormOpen(false);
+}
+
+async function saveCredential() {
+  setError(null);
+  setStatus(null);
+
+  const serviceKey = cleanText(credentialForm.service_key);
+  const usernameValue = cleanText(credentialForm.username);
+  const passwordValue = credentialForm.password_encrypted;
+
+  if (!serviceKey) {
+    setError("Seleccioná el servicio.");
+    return;
+  }
+
+  if (!usernameValue && !passwordValue) {
+    setError("Cargá al menos un usuario o una contraseña.");
+    return;
+  }
+
+  setSavingCredential(true);
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+
+  if (userError || !userData.user) {
+    setError(userError?.message || "No se pudo obtener el usuario actual.");
+    setSavingCredential(false);
+    return;
+  }
+
+  const payload = {
+    user_id: userData.user.id,
+    service_key: serviceKey,
+    username: usernameValue || null,
+    password_encrypted: passwordValue || null,
+    autofill_enabled: credentialForm.autofill_enabled,
+    auto_submit_enabled: credentialForm.auto_submit_enabled,
+    updated_at: new Date().toISOString()
+  };
+
+  const request = editingCredentialId
+    ? supabase
+        .from("user_credentials")
+        .update(payload)
+        .eq("id", editingCredentialId)
+        .eq("user_id", userData.user.id)
+    : supabase.from("user_credentials").insert(payload);
+
+  const { error: saveError } = await request;
+
+  if (saveError) {
+    setError(saveError.message || "No se pudo guardar la credencial.");
+    setSavingCredential(false);
+    return;
+  }
+
+  setStatus(editingCredentialId ? "Credencial actualizada correctamente." : "Credencial creada correctamente.");
+  cancelCredentialForm();
+  await loadCredentials();
+  setSavingCredential(false);
+}
+
+async function deleteCredential(credential: UserCredential) {
+  const confirmed = window.confirm(
+    `¿Eliminar la credencial de ${getCredentialServiceLabel(credential.service_key)}?`
+  );
+
+  if (!confirmed) return;
+
+  setError(null);
+  setStatus(null);
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+
+  if (userError || !userData.user) {
+    setError(userError?.message || "No se pudo obtener el usuario actual.");
+    return;
+  }
+
+  const { error: deleteError } = await supabase
+    .from("user_credentials")
+    .delete()
+    .eq("id", credential.id)
+    .eq("user_id", userData.user.id);
+
+  if (deleteError) {
+    setError(deleteError.message || "No se pudo eliminar la credencial.");
+    return;
+  }
+
+  setStatus("Credencial eliminada correctamente.");
+  await loadCredentials();
+}
+
+useEffect(() => {
+  void loadProfile();
+  void loadVentas();
+  void loadCredentials();
+}, []);
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
@@ -446,14 +726,18 @@ export function MiPerfilPanel() {
 
           <button
             type="button"
-            onClick={() => {
-              void loadProfile();
-              void loadVentas();
-            }}
-            disabled={loading || ventasLoading}
+       onClick={() => {
+  void loadProfile();
+  void loadVentas();
+  void loadCredentials();
+}}
+disabled={loading || ventasLoading || credentialsLoading}
             className="inline-flex h-9 items-center gap-2 rounded-xl bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
           >
-            <RefreshCcw size={14} className={loading || ventasLoading ? "animate-spin" : ""} />
+          <RefreshCcw
+  size={14}
+  className={loading || ventasLoading || credentialsLoading ? "animate-spin" : ""}
+/>
             Actualizar
           </button>
         </div>
@@ -466,6 +750,10 @@ export function MiPerfilPanel() {
           <TabButton active={activeTab === "seguridad"} onClick={() => setActiveTab("seguridad")}>
             Seguridad
           </TabButton>
+
+          <TabButton active={activeTab === "credenciales"} onClick={() => setActiveTab("credenciales")}>
+  Mis credenciales
+</TabButton>
 
           <TabButton active={activeTab === "ventas"} onClick={() => setActiveTab("ventas")}>
             Histórico de ventas
@@ -690,6 +978,240 @@ export function MiPerfilPanel() {
             </div>
           </section>
         ) : null}
+
+
+        {!loading && activeTab === "credenciales" ? (
+  <section className="rounded-[24px] border border-black/10 bg-white/72 p-5 shadow-sm backdrop-blur-xl">
+    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+      <div className="flex items-center gap-2">
+        <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">
+          <KeyRound size={18} />
+        </div>
+
+        <div>
+          <h2 className="text-[15px] font-semibold text-[#172033]">Mis credenciales</h2>
+          <p className="text-[12px] font-normal text-[#64748b]">
+            Guardá tus accesos personales para autocompletar portales y herramientas.
+          </p>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={credentialFormOpen ? cancelCredentialForm : startNewCredential}
+        className="inline-flex h-9 items-center gap-2 rounded-xl bg-[#172033] px-4 text-[12px] font-medium text-white shadow-sm transition hover:bg-[#263247]"
+      >
+        <Plus size={14} />
+        {credentialFormOpen ? "Cancelar" : "Nueva credencial"}
+      </button>
+    </div>
+
+    {credentialFormOpen ? (
+      <div className="mb-5 rounded-[20px] border border-black/10 bg-[#f8fafc] p-4">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[13px] font-semibold text-[#172033]">
+              {editingCredentialId ? "Editar credencial" : "Nueva credencial"}
+            </h3>
+            <p className="text-[12px] font-normal text-[#64748b]">
+              Esta información solo queda asociada a tu usuario.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <FieldLabel>Servicio</FieldLabel>
+          <NosturSelect
+  value={credentialForm.service_key}
+  onChange={(value) =>
+    setCredentialForm((current) => ({
+      ...current,
+      service_key: value
+    }))
+  }
+  options={CREDENTIAL_SERVICES.map((service) => ({
+    value: service.key,
+    label: service.label
+  }))}
+  placeholder="Seleccioná servicio"
+/>
+          </div>
+
+          <div>
+            <FieldLabel>Usuario / Email</FieldLabel>
+            <SoftInput
+              value={credentialForm.username}
+              onChange={(value) =>
+                setCredentialForm((current) => ({
+                  ...current,
+                  username: value
+                }))
+              }
+              placeholder="Usuario, email o código"
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <FieldLabel>Contraseña / Clave</FieldLabel>
+            <div className="relative">
+              <SoftInput
+                value={credentialForm.password_encrypted}
+                onChange={(value) =>
+                  setCredentialForm((current) => ({
+                    ...current,
+                    password_encrypted: value
+                  }))
+                }
+                type={showCredentialPassword ? "text" : "password"}
+                placeholder="Clave de acceso"
+              />
+
+              <button
+                type="button"
+                onClick={() => setShowCredentialPassword((current) => !current)}
+                className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-[#64748b] transition hover:bg-[#f1f5f9] hover:text-[#172033]"
+              >
+                {showCredentialPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-[12px] font-medium text-[#334155] ring-1 ring-black/10">
+            <input
+              type="checkbox"
+              checked={credentialForm.autofill_enabled}
+              onChange={(event) =>
+                setCredentialForm((current) => ({
+                  ...current,
+                  autofill_enabled: event.target.checked
+                }))
+              }
+              className="h-4 w-4 rounded border-black/20"
+            />
+            Autocompletar
+          </label>
+
+          <label className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-[12px] font-medium text-[#334155] ring-1 ring-black/10">
+            <input
+              type="checkbox"
+              checked={credentialForm.auto_submit_enabled}
+              onChange={(event) =>
+                setCredentialForm((current) => ({
+                  ...current,
+                  auto_submit_enabled: event.target.checked
+                }))
+              }
+              className="h-4 w-4 rounded border-black/20"
+            />
+            Ingresar automáticamente
+          </label>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={cancelCredentialForm}
+            disabled={savingCredential}
+            className="inline-flex h-9 items-center gap-2 rounded-xl bg-white px-4 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            onClick={saveCredential}
+            disabled={savingCredential}
+            className="inline-flex h-9 items-center gap-2 rounded-xl bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm transition hover:bg-[#406b7d] disabled:opacity-50"
+          >
+            {savingCredential ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Guardar credencial
+          </button>
+        </div>
+      </div>
+    ) : null}
+
+    {credentialsLoading ? (
+      <div className="flex h-[220px] items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-[#4f7c90]" />
+      </div>
+    ) : credentials.length === 0 ? (
+      <EmptyState text="Todavía no cargaste credenciales personales." />
+    ) : (
+      <div className="overflow-hidden rounded-2xl border border-black/10 bg-white">
+        <div className="grid grid-cols-[160px_1fr_130px_130px_110px] border-b border-black/10 bg-[#f8fafc] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#64748b]">
+          <div>Servicio</div>
+          <div>Usuario</div>
+          <div>Autofill</div>
+          <div>Auto ingresar</div>
+          <div className="text-right">Acciones</div>
+        </div>
+
+        <div className="max-h-[520px] overflow-auto">
+          {credentials.map((credential) => (
+            <div
+              key={credential.id}
+              className="grid grid-cols-[160px_1fr_130px_130px_110px] items-center border-b border-black/5 px-3 py-2.5 text-[12px] last:border-b-0 hover:bg-[#f8fafc]"
+            >
+              <div className="font-semibold text-[#172033]">
+                {getCredentialServiceLabel(credential.service_key)}
+              </div>
+
+              <div className="truncate text-[#475569]">
+                {credential.username || "Sin usuario"}
+              </div>
+
+              <div>
+                <span
+                  className={[
+                    "rounded-lg px-2 py-1 text-[10px] font-semibold",
+                    credential.autofill_enabled
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-slate-100 text-slate-500"
+                  ].join(" ")}
+                >
+                  {credential.autofill_enabled ? "Activo" : "Inactivo"}
+                </span>
+              </div>
+
+              <div>
+                <span
+                  className={[
+                    "rounded-lg px-2 py-1 text-[10px] font-semibold",
+                    credential.auto_submit_enabled
+                      ? "bg-blue-50 text-blue-700"
+                      : "bg-slate-100 text-slate-500"
+                  ].join(" ")}
+                >
+                  {credential.auto_submit_enabled ? "Activo" : "Inactivo"}
+                </span>
+              </div>
+
+              <div className="flex justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => startEditCredential(credential)}
+                  className="inline-flex h-8 items-center rounded-lg px-2 text-[11px] font-medium text-[#334155] ring-1 ring-black/10 transition hover:bg-[#f1f5f9]"
+                >
+                  Editar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void deleteCredential(credential)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-red-600 ring-1 ring-red-100 transition hover:bg-red-50"
+                  title="Eliminar"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+  </section>
+) : null}
 
         {!loading && activeTab === "ventas" ? (
           <section className="rounded-[24px] border border-black/10 bg-white/72 p-5 shadow-sm backdrop-blur-xl">
