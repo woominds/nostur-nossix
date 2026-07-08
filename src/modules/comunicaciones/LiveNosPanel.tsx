@@ -1,4 +1,4 @@
-// src/components/comunicaciones/LiveNosPanel.tsx
+// src/modules/components/LiveNosPanel.tsx
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OportunidadDetalleModal } from "./OportunidadDetalleModal";
@@ -134,6 +134,27 @@ function getScoreTextColor(score: number): string {
   if (score >= 75) return "text-red-700";
   if (score >= 45) return "text-amber-700";
   return "text-slate-600";
+}
+
+function getMergedOpportunityData(
+  oportunidad: LeadOportunidad | null | undefined
+): Record<string, unknown> {
+  const datos =
+    oportunidad?.datos && typeof oportunidad.datos === "object" && !Array.isArray(oportunidad.datos)
+      ? oportunidad.datos
+      : {};
+
+  const manualData =
+    (oportunidad as unknown as { manual_data?: Record<string, unknown> | null })?.manual_data &&
+    typeof (oportunidad as unknown as { manual_data?: Record<string, unknown> | null }).manual_data === "object" &&
+    !Array.isArray((oportunidad as unknown as { manual_data?: Record<string, unknown> | null }).manual_data)
+      ? (oportunidad as unknown as { manual_data?: Record<string, unknown> | null }).manual_data || {}
+      : {};
+
+  return {
+    ...datos,
+    ...manualData
+  };
 }
 
 function getProfileFullName(profile?: ProfileLite | null): string {
@@ -313,6 +334,7 @@ export function LiveNosPanel() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [automationsOpen, setAutomationsOpen] = useState(false);
+  const [candeGlobalEnabled, setCandeGlobalEnabled] = useState(false);
 
   const [activeInbox, setActiveInbox] = useState<InboxKey>("sin_atender");
   const [sellerFilterId, setSellerFilterId] = useState<string | null>(null);
@@ -455,7 +477,7 @@ const filteredConversations = useMemo(() => {
         currentProfile
       })
     )
-    .filter((conv) => filterByInbox(conv, activeInbox))
+    .filter((conv) => filterByInbox(conv, activeInbox, candeGlobalEnabled))
     .filter((conv) => {
       if (!canSeeAllConversations) return true;
       if (!sellerFilterId) return true;
@@ -500,7 +522,8 @@ const filteredConversations = useMemo(() => {
   sellerFilterId,
   currentUserId,
   currentProfile,
-  canSeeAllConversations
+  canSeeAllConversations,
+  candeGlobalEnabled
 ]);
 
 const inboxCounts = useMemo(() => {
@@ -522,12 +545,12 @@ const inboxCounts = useMemo(() => {
     "eliminadas"
   ].reduce<Record<InboxKey, number>>((acc, inbox) => {
     acc[inbox as InboxKey] = visibleConversations.filter((conv) =>
-      filterByInbox(conv, inbox as InboxKey)
+      filterByInbox(conv, inbox as InboxKey, candeGlobalEnabled)
     ).length;
 
     return acc;
   }, {} as Record<InboxKey, number>);
-}, [conversaciones, currentUserId, currentProfile]);
+}, [conversaciones, currentUserId, currentProfile, candeGlobalEnabled]);
 
 const sellerConversationCounts = useMemo(() => {
   const counts: Record<string, number> = {};
@@ -550,7 +573,7 @@ const sellerConversationCounts = useMemo(() => {
   });
 
   return counts;
-}, [conversaciones, currentUserId, currentProfile]);
+}, [conversaciones, currentUserId, currentProfile, candeGlobalEnabled]);
 
   const reaccionesByMensaje = useMemo(() => {
     return reacciones.reduce<Record<string, MensajeReaccion[]>>((acc, reaccion) => {
@@ -660,7 +683,7 @@ const sellerConversationCounts = useMemo(() => {
 
   setCurrentUserId(userId);
 
-  const [convRes, contactosRes, profilesRes, oppRes, pipelineRes, colaboradoresRes] =
+  const [convRes, contactosRes, profilesRes, oppRes, pipelineRes, colaboradoresRes, candeConfigRes] =
     await Promise.all([
       supabase
         .from("conversaciones")
@@ -688,7 +711,13 @@ const sellerConversationCounts = useMemo(() => {
       supabase
         .from("conversacion_colaboradores")
         .select("id,conversacion_id,profile_id,added_by,created_at")
-        .order("created_at", { ascending: true })
+        .order("created_at", { ascending: true }),
+
+      supabase
+        .from("cande_config")
+        .select("enabled")
+        .limit(1)
+        .maybeSingle()
     ]);
 
   console.log("[LiveNos loadData debug]", {
@@ -709,7 +738,10 @@ const sellerConversationCounts = useMemo(() => {
     pipelineCount: pipelineRes.data?.length || 0,
 
     colaboradoresError: colaboradoresRes.error,
-    colaboradoresCount: colaboradoresRes.data?.length || 0
+    colaboradoresCount: colaboradoresRes.data?.length || 0,
+
+    candeConfigError: candeConfigRes.error,
+    candeGlobalEnabled: Boolean(candeConfigRes.data?.enabled)
   });
 
   const firstError =
@@ -718,12 +750,15 @@ const sellerConversationCounts = useMemo(() => {
     profilesRes.error ||
     oppRes.error ||
     pipelineRes.error ||
-    colaboradoresRes.error;
+    colaboradoresRes.error ||
+    candeConfigRes.error;
 
   if (firstError) {
     setError(firstError.message || "No se pudo cargar LiveNos.");
     return;
   }
+
+  setCandeGlobalEnabled(Boolean(candeConfigRes.data?.enabled));
 
   const nextProfiles = (profilesRes.data || []) as ProfileLite[];
   const nextCurrentProfile =
@@ -1002,6 +1037,17 @@ if (
           event: "*",
           schema: "public",
           table: "lead_oportunidades"
+        },
+        () => {
+          refreshListSoft();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "cande_config"
         },
         () => {
           refreshListSoft();
@@ -2887,8 +2933,8 @@ function handleTemplateButton() {
       oportunidad_id: selectedOportunidad?.id || null,
       oportunidad_score: selectedOportunidad?.score || null,
       oportunidad_estado_id: selectedOportunidad?.estado_id || null,
-      oportunidad_datos: selectedOportunidad?.datos || null,
-      cande_activa: selectedOportunidad?.cande_activa || false,
+      oportunidad_datos: getMergedOpportunityData(selectedOportunidad),
+      cande_activa: Boolean(candeGlobalEnabled && selectedOportunidad?.cande_activa),
       cande_handoff_requested_at: selectedOportunidad?.cande_handoff_requested_at || null,
 
       created_at: new Date().toISOString()
@@ -2918,7 +2964,7 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
   function buildOpportunityActionDetail(action: string) {
     if (!selectedConversation) return null;
 
-    const datos = selectedOportunidad?.datos || {};
+    const datos = getMergedOpportunityData(selectedOportunidad);
 
     return {
       source: "livenos",
@@ -3058,10 +3104,7 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
     const message = candeFeedbackDraft.message;
     const tipo = candeFeedbackDraft.tipo;
 
-    const oportunidadDatos =
-      selectedOportunidad?.datos && typeof selectedOportunidad.datos === "object"
-        ? selectedOportunidad.datos
-        : {};
+    const oportunidadDatos = getMergedOpportunityData(selectedOportunidad);
 
     const contexto = {
       conversation_id: selectedConversation.id,
@@ -3133,10 +3176,7 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
     const message = candeFeedbackDraft.message;
     const tipo = candeFeedbackDraft.tipo;
 
-    const oportunidadDatos =
-      selectedOportunidad?.datos && typeof selectedOportunidad.datos === "object"
-        ? selectedOportunidad.datos
-        : {};
+    const oportunidadDatos = getMergedOpportunityData(selectedOportunidad);
 
     const destino = getDatoFromKeys(oportunidadDatos, ["destino", "destinos", "lugar"]);
     const origen = getDatoFromKeys(oportunidadDatos, ["origen", "ciudad_origen", "salida_desde"]);
@@ -4150,10 +4190,7 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
   function renderRightPanelContent() {
     if (!selectedConversation) return null;
 
-    const oportunidadDatos =
-      selectedOportunidad?.datos && typeof selectedOportunidad.datos === "object"
-        ? selectedOportunidad.datos
-        : {};
+    const oportunidadDatos = getMergedOpportunityData(selectedOportunidad);
 
     const score = Number(selectedOportunidad?.score || 0);
 
@@ -4283,7 +4320,7 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
                 <div className="flex justify-between gap-3">
                   <span>Cande</span>
                   <span className="font-medium text-[#142033]">
-                    {selectedOportunidad.cande_activa ? "Activa" : "Pausada"}
+                    {candeGlobalEnabled && selectedOportunidad.cande_activa ? "Activa" : "Pausada"}
                   </span>
                 </div>
 
@@ -4881,7 +4918,7 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
 
                       <HeaderButton onClick={toggleCande} disabled={actionLoading || !selectedOportunidad}>
                         <Bot size={14} />
-                        {selectedOportunidad?.cande_activa ? "Pausar Cande" : "Activar Cande"}
+                        {candeGlobalEnabled && selectedOportunidad?.cande_activa ? "Pausar Cande" : "Activar Cande"}
                       </HeaderButton>
 
                       {selectedConversation.archived_at ||

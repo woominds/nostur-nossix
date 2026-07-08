@@ -1,6 +1,6 @@
 // src/components/updates/NosturUpdateBanner.tsx
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DownloadCloud, Loader2, RefreshCcw, X } from "lucide-react";
 
 type UpdateEventPayload = {
@@ -59,6 +59,40 @@ export function NosturUpdateBanner() {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [installing, setInstalling] = useState(false);
+  const checkingTimeoutRef = useRef<number | null>(null);
+
+  function clearCheckingTimeout() {
+    if (checkingTimeoutRef.current) {
+      window.clearTimeout(checkingTimeoutRef.current);
+      checkingTimeoutRef.current = null;
+    }
+  }
+
+  function startCheckingTimeout() {
+    clearCheckingTimeout();
+
+    checkingTimeoutRef.current = window.setTimeout(() => {
+      setStatus((current) => {
+        if (current !== "checking") return current;
+
+        setVisible(true);
+        setMessage("No se pudo verificar ahora. Intentá nuevamente.");
+        return "error";
+      });
+
+      checkingTimeoutRef.current = null;
+    }, 15000);
+  }
+
+  function hideBanner() {
+    clearCheckingTimeout();
+    setVisible(false);
+
+    if (status === "checking") {
+      setStatus("idle");
+      setMessage("");
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -97,12 +131,14 @@ export function NosturUpdateBanner() {
       }
 
       if (event.type === "checking-for-update") {
-        setVisible(false);
+        setVisible(true);
         setStatus("checking");
         setMessage("Buscando actualizaciones...");
+        startCheckingTimeout();
       }
 
       if (event.type === "update-available") {
+        clearCheckingTimeout();
         setVisible(true);
         setStatus("available");
         setMessage(
@@ -113,6 +149,7 @@ export function NosturUpdateBanner() {
       }
 
       if (event.type === "download-progress") {
+        clearCheckingTimeout();
         const percent = Number(payload.percent || 0);
 
         setVisible(true);
@@ -122,6 +159,7 @@ export function NosturUpdateBanner() {
       }
 
       if (event.type === "update-downloaded") {
+        clearCheckingTimeout();
         setVisible(true);
         setStatus("downloaded");
         setProgress(100);
@@ -129,6 +167,7 @@ export function NosturUpdateBanner() {
       }
 
       if (event.type === "installing-update") {
+        clearCheckingTimeout();
         setVisible(true);
         setStatus("installing");
         setInstalling(true);
@@ -136,6 +175,7 @@ export function NosturUpdateBanner() {
       }
 
       if (event.type === "error") {
+        clearCheckingTimeout();
         setVisible(true);
         setStatus("error");
         setMessage(payload.message || "No se pudo completar la actualización.");
@@ -146,6 +186,7 @@ export function NosturUpdateBanner() {
 
     return () => {
       mounted = false;
+      clearCheckingTimeout();
       if (typeof unsubscribe === "function") unsubscribe();
     };
   }, []);
@@ -157,9 +198,11 @@ export function NosturUpdateBanner() {
       setVisible(true);
       setStatus("checking");
       setMessage("Buscando actualizaciones...");
+      startCheckingTimeout();
 
       await api?.checkForUpdates?.();
     } catch (error) {
+      clearCheckingTimeout();
       console.error("[NOSTUR UPDATE] Error buscando actualización:", error);
       setStatus("error");
       setMessage("No se pudo buscar actualización.");
@@ -195,10 +238,11 @@ export function NosturUpdateBanner() {
     }
   }
 
-  if (!visible && status !== "checking") {
+  if (!visible) {
     return null;
   }
 
+  const isChecking = status === "checking";
   const isDownloaded = status === "downloaded";
   const isDownloading = status === "downloading";
   const isInstalling = status === "installing";
@@ -217,7 +261,7 @@ export function NosturUpdateBanner() {
                 : "bg-[#fff1f7] text-[#c13b84] ring-[#ffd2e6]"
           ].join(" ")}
         >
-          {isDownloading || isInstalling ? (
+          {isChecking || isDownloading || isInstalling ? (
             <Loader2 size={18} className="animate-spin" />
           ) : isDownloaded ? (
             <RefreshCcw size={18} />
@@ -241,7 +285,7 @@ export function NosturUpdateBanner() {
             {!isInstalling ? (
               <button
                 type="button"
-                onClick={() => setVisible(false)}
+                onClick={hideBanner}
                 className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                 title="Ocultar"
               >
@@ -282,9 +326,10 @@ export function NosturUpdateBanner() {
               <button
                 type="button"
                 onClick={handleCheckUpdates}
-                className="rounded-[11px] border border-black/10 bg-white px-3 py-2 text-[11px] font-bold text-[#172033] shadow-sm transition hover:bg-slate-50"
+                disabled={isChecking}
+                className="rounded-[11px] border border-black/10 bg-white px-3 py-2 text-[11px] font-bold text-[#172033] shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Buscar update
+                {isChecking ? "Buscando..." : "Buscar update"}
               </button>
             ) : null}
 

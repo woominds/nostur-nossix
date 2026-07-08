@@ -11,7 +11,10 @@ import { supabase } from "../lib/supabase";
 
 const ALMUNDO_TAB_ICON = "brand/almundo-isotipo.png";
 
+const MAIL_MODULE_COLOR = "#2563eb";
+
 type TabGroupKey =
+  | "mail"
   | "chat"
   | "ventas"
   | "administracion"
@@ -27,6 +30,11 @@ type GroupConfig = {
 };
 
 const GROUP_CONFIG: Record<TabGroupKey, GroupConfig> = {
+  mail: {
+    label: "Mail",
+    color: MAIL_MODULE_COLOR,
+    order: 5
+  },
   chat: {
     label: "Chat",
     color: "#10b981",
@@ -65,11 +73,14 @@ const GROUP_CONFIG: Record<TabGroupKey, GroupConfig> = {
 };
 
 const APP_GROUP_ORDER: Record<string, number> = {
+  mail: 5,
   livenos: 10,
-  oportunidades: 11,
-  cande: 12,
-  nia: 13,
-  "control-ia": 14,
+  "contactos-live": 11,
+  "historiales-live": 12,
+  oportunidades: 13,
+  cande: 14,
+  nia: 15,
+  "control-ia": 16,
 
   clientes: 20,
   carritos: 21,
@@ -110,6 +121,8 @@ function normalizeAppKey(appId: string): string {
   if (appId === "contactos") return "oportunidades";
   if (appId === "config") return "configuracion";
   if (appId === "settings") return "configuracion";
+  if (appId === "email") return "mail";
+  if (appId === "correo") return "mail";
 
   return appId;
 }
@@ -144,6 +157,10 @@ function getTabApp(tab: BrowserTab) {
 function getTabColor(tab: BrowserTab): string {
   if (tab.url === "nostur://home") return "#64748b";
 
+  const appId = normalizeAppKey(tab.appId || "");
+
+  if (appId === "mail") return MAIL_MODULE_COLOR;
+
   const app = getTabApp(tab);
 
   return app.color || "#64748b";
@@ -155,9 +172,21 @@ function getTabGroup(tab: BrowserTab): TabGroupKey {
   const appId = normalizeAppKey(tab.appId || "");
   const isInternal = tab.url.startsWith("internal://");
 
+  if (appId === "mail") return "mail";
+
   if (!isInternal) return "web";
 
-  if (["livenos", "oportunidades", "cande", "nia", "control-ia"].includes(appId)) {
+  if (
+    [
+      "livenos",
+      "contactos-live",
+      "historiales-live",
+      "oportunidades",
+      "cande",
+      "nia",
+      "control-ia"
+    ].includes(appId)
+  ) {
     return "chat";
   }
 
@@ -214,6 +243,7 @@ function getTabOrder(tab: BrowserTab): number {
 
 function getClosedGroups(): Record<TabGroupKey, boolean> {
   return {
+    mail: false,
     chat: false,
     ventas: false,
     administracion: false,
@@ -253,7 +283,19 @@ function getTabIcon(tab: BrowserTab) {
   }
 
   const app = getTabApp(tab);
+  const appId = normalizeAppKey(tab.appId || "");
   const usesAlmundoIcon = ["experts", "abaco", "krooze"].includes(app.id);
+
+  if (appId === "mail") {
+    return (
+      <span
+        className="flex h-5 w-5 items-center justify-center rounded-md text-[9px] font-semibold text-white"
+        style={{ backgroundColor: MAIL_MODULE_COLOR }}
+      >
+        M
+      </span>
+    );
+  }
 
   if (usesAlmundoIcon) {
     return (
@@ -633,36 +675,34 @@ const label = profileDisplayName || (email ? email.split("@")[0] : "Usuario");
           toggleGroup(groupKey);
         }}
         className={[
-          "group/tab nostur-no-drag relative flex h-[32px] min-w-[96px] max-w-[150px] items-center gap-2 overflow-visible rounded-t-[9px] px-3 text-left transition",
-          active
+          "group/tab nostur-no-drag relative flex h-[32px] w-[42px] items-center justify-center overflow-visible rounded-t-[9px] transition",
+          active || open
             ? "z-20 bg-[#f8fafc] text-[#111827]"
             : "z-10 bg-white/22 text-[#526174] hover:bg-white/48 hover:text-[#172033]"
         ].join(" ")}
+        aria-label={`${config.label}: ${items.length} pestañas`}
+        title={`${config.label}: ${items.length} pestañas`}
       >
         <span
           className="absolute left-2 right-2 top-0 h-[2px] rounded-full"
           style={{
             backgroundColor: config.color,
-            opacity: active ? 1 : 0.45
+            opacity: active || open ? 1 : 0.45
           }}
         />
 
-        {active ? <span className="absolute bottom-0 left-0 right-0 h-px bg-[#f8fafc]" /> : null}
+        {active || open ? (
+          <span className="absolute bottom-0 left-0 right-0 h-px bg-[#f8fafc]" />
+        ) : null}
 
         <span
-          className="relative z-10 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[9px] font-semibold text-white"
+          className="relative z-10 flex h-7 min-w-7 items-center justify-center rounded-lg px-1.5 text-[12px] font-semibold text-white"
           style={{ backgroundColor: config.color }}
         >
           {items.length}
         </span>
 
-        <span className="relative z-10 min-w-0 flex-1 truncate text-[12px] font-medium leading-none">
-          {config.label}
-        </span>
-
-        <span className="relative z-10 text-[13px] font-normal leading-none text-[#64748b]">
-          {open ? "−" : "+"}
-        </span>
+        <SoftTooltip text={`${config.label}: ${items.length} pestañas`} />
       </button>
     );
   }

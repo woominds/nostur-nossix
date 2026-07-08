@@ -361,6 +361,213 @@ function buildManualDataFromForm(form: EditForm) {
   };
 }
 
+
+function hasManualValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+
+  if (Array.isArray(value)) {
+    return value.some((item) => hasManualValue(item));
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0;
+  }
+
+  if (typeof value === "boolean") {
+    return value === true;
+  }
+
+  return cleanText(value).length > 0;
+}
+
+function getFirstManualValue(datos: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = datos[key];
+
+    if (hasManualValue(value)) return value;
+  }
+
+  return null;
+}
+
+function calculateManualOpportunityScore(datos: Record<string, unknown>): number {
+  let score = 0;
+
+  const destino = getFirstManualValue(datos, ["destino", "destinos", "lugar", "ciudad_destino", "pais", "país"]);
+  const origen = getFirstManualValue(datos, ["origen", "ciudad_origen", "salida_desde", "origen_confirmado"]);
+  const fechas = getFirstManualValue(datos, [
+    "fechas_tentativas",
+    "fecha_tentativa",
+    "fecha",
+    "fechas",
+    "cuando",
+    "cuándo",
+    "fecha_viaje",
+    "mes"
+  ]);
+  const pasajeros = getFirstManualValue(datos, [
+    "cantidad_pasajeros",
+    "pax",
+    "pasajeros",
+    "personas",
+    "cantidad_pax"
+  ]);
+  const presupuesto = getFirstManualValue(datos, [
+    "presupuesto_aproximado",
+    "presupuesto",
+    "budget",
+    "monto_estimado"
+  ]);
+  const tipoViaje = getFirstManualValue(datos, ["tipo_viaje", "tipo_de_viaje", "categoria_viaje"]);
+  const servicios = getFirstManualValue(datos, [
+    "servicios",
+    "servicio",
+    "productos_interes",
+    "intereses"
+  ]);
+  const hoteleria = getFirstManualValue(datos, ["hoteleria", "hotel", "hotel_preferido", "categoria_hotel"]);
+  const ultimoMensaje = getFirstManualValue(datos, ["ultimo_mensaje", "last_message", "mensaje"]);
+
+  if (destino) score += 18;
+  if (origen) score += 12;
+  if (fechas) score += 18;
+  if (pasajeros) score += 12;
+  if (presupuesto) score += 12;
+  if (tipoViaje) score += 8;
+  if (servicios) score += 8;
+  if (hoteleria) score += 5;
+  if (ultimoMensaje) score += 7;
+
+  return Math.max(0, Math.min(100, score));
+}
+
+function buildManualAnalysisFallback(params: {
+  datos: Record<string, unknown>;
+  score: number;
+  lastMessage?: string | null;
+}) {
+  const { datos, score, lastMessage } = params;
+
+  const destino = getTextFromDatos(datos, ["destino", "destinos", "lugar", "ciudad_destino", "pais", "país"], "");
+  const origen = getTextFromDatos(datos, ["origen", "ciudad_origen", "salida_desde"], "");
+  const fechas = getTextFromDatos(datos, [
+    "fechas_tentativas",
+    "fecha_tentativa",
+    "fecha",
+    "fechas",
+    "cuando",
+    "cuándo",
+    "fecha_viaje",
+    "mes"
+  ], "");
+  const pasajeros = getTextFromDatos(datos, ["cantidad_pasajeros", "pax", "pasajeros", "personas", "cantidad_pax"], "");
+  const presupuesto = getTextFromDatos(datos, ["presupuesto_aproximado", "presupuesto", "budget", "monto_estimado"], "");
+  const tipoViaje = getTextFromDatos(datos, ["tipo_viaje", "tipo_de_viaje", "categoria_viaje"], "");
+  const servicios = getTextFromDatos(datos, ["servicios", "servicio", "productos_interes", "intereses"], "");
+
+  const missing: string[] = [];
+
+  if (!destino) missing.push("Destino");
+  if (!origen) missing.push("Origen");
+  if (!fechas) missing.push("Fechas");
+  if (!pasajeros) missing.push("Cantidad de pasajeros");
+  if (!presupuesto) missing.push("Presupuesto aproximado");
+
+  const existingMissing = getListFromDatos(datos, [
+    "datos_faltantes",
+    "faltantes",
+    "missing_info",
+    "customer_ai_missing_info",
+    "pendientes",
+    "datos_pendientes"
+  ]);
+
+  const resumenParts = [
+    destino ? `Destino: ${destino}` : "",
+    origen ? `origen: ${origen}` : "",
+    fechas ? `fechas: ${fechas}` : "",
+    pasajeros ? `pasajeros: ${pasajeros}` : "",
+    presupuesto ? `presupuesto: ${presupuesto}` : "",
+    tipoViaje ? `tipo de viaje: ${tipoViaje}` : "",
+    servicios ? `servicios/interés: ${servicios}` : ""
+  ].filter(Boolean);
+
+  const currentResumen = getTextFromDatos(datos, [
+    "resumen_ia",
+    "resumen",
+    "summary",
+    "analisis",
+    "analisis_cliente",
+    "customer_summary"
+  ], "");
+
+  const currentIntencion = getTextFromDatos(datos, [
+    "intencion_compra",
+    "intencion",
+    "nivel_interes",
+    "momento_compra",
+    "purchase_intent"
+  ], "");
+
+  const currentUrgencia = getTextFromDatos(datos, [
+    "urgencia",
+    "prioridad",
+    "urgency",
+    "deadline",
+    "fecha_limite"
+  ], "");
+
+  const currentProximaAccion = getTextFromDatos(datos, [
+    "proxima_accion",
+    "next_action",
+    "accion_sugerida",
+    "siguiente_paso"
+  ], "");
+
+  const currentSuggestedReply = getTextFromDatos(datos, [
+    "proxima_respuesta_sugerida",
+    "respuesta_sugerida",
+    "mensaje_sugerido",
+    "next_reply_suggested",
+    "suggested_reply"
+  ], "");
+
+  const temperatura = temperaturaFromScore(score);
+
+  return {
+    temperatura,
+    datos_faltantes: existingMissing.length > 0 ? existingMissing : missing,
+    resumen_ia:
+      currentResumen ||
+      (resumenParts.length > 0
+        ? `Ficha actualizada manualmente por vendedor. ${resumenParts.join(", ")}.`
+        : "Ficha actualizada manualmente por vendedor."),
+    intencion_compra:
+      currentIntencion ||
+      (destino && fechas
+        ? "Interés concreto detectado por datos cargados manualmente."
+        : "Interés inicial detectado, requiere completar datos."),
+    urgencia:
+      currentUrgencia ||
+      (fechas
+        ? "Tiene fechas de viaje informadas."
+        : "Sin urgencia clara detectada todavía."),
+    proxima_accion:
+      currentProximaAccion ||
+      (missing.length > 0
+        ? `Completar datos faltantes: ${missing.join(", ")}.`
+        : "Preparar propuesta o presupuesto para enviar al cliente."),
+    proxima_respuesta_sugerida:
+      currentSuggestedReply ||
+      (missing.length > 0
+        ? `Perfecto, gracias. Para poder avanzar bien con la propuesta me faltaría confirmar: ${missing.join(", ")}.`
+        : "Perfecto, gracias. Con estos datos ya puedo avanzar con una propuesta y te la comparto apenas la tenga lista."),
+    ultimo_mensaje: cleanText(datos.ultimo_mensaje) || cleanText(lastMessage) || null,
+    analisis_generado_desde: "manual_opportunity_edit",
+    analisis_manual_at: new Date().toISOString()
+  };
+}
+
 function getNombre(params: OportunidadDetalleModalProps) {
   const datos = mergeDatos(params.oportunidad);
 
@@ -641,14 +848,41 @@ export function OportunidadDetalleModal({
     try {
       const previousManualData = getManualData(effectiveOportunidad);
       const manualWithScore = buildManualDataFromForm(editForm);
-      const nextScoreRaw = Number(manualWithScore.score);
-      const cleanScore = Number.isFinite(nextScoreRaw)
-        ? Math.max(0, Math.min(100, nextScoreRaw))
-        : Number(effectiveOportunidad.score || 0);
+
+      const mergedForScoring: Record<string, unknown> = {
+        ...mergeDatos(effectiveOportunidad),
+        ...manualWithScore,
+        ultimo_mensaje:
+          cleanText(conversacion?.last_message_preview) ||
+          cleanText(mergeDatos(effectiveOportunidad).ultimo_mensaje)
+      };
+
+      const manualScoreRaw = Number(manualWithScore.score);
+      const autoScore = calculateManualOpportunityScore(mergedForScoring);
+
+      /*
+        Si el vendedor carga un score mayor a 0, se respeta.
+        Si lo deja vacío o en 0, calculamos uno razonable según datos completos.
+      */
+      const cleanScore =
+        Number.isFinite(manualScoreRaw) && manualScoreRaw > 0
+          ? Math.max(0, Math.min(100, manualScoreRaw))
+          : autoScore;
+
+      const fallbackAnalysis = buildManualAnalysisFallback({
+        datos: {
+          ...mergedForScoring,
+          score: cleanScore
+        },
+        score: cleanScore,
+        lastMessage: conversacion?.last_message_preview || null
+      });
 
       const nextManualData: Record<string, unknown> = {
         ...previousManualData,
-        ...manualWithScore
+        ...manualWithScore,
+        ...fallbackAnalysis,
+        score_calculado_manual: cleanScore
       };
 
       delete nextManualData.score;
@@ -665,7 +899,7 @@ export function OportunidadDetalleModal({
           score: cleanScore
         })
         .eq("id", effectiveOportunidad.id)
-        .select("id, manual_data, score")
+        .select("id, manual_data, score, conversacion_id")
         .single();
 
       if (updateRes.error) {
@@ -701,6 +935,33 @@ export function OportunidadDetalleModal({
           console.warn("[OportunidadDetalleModal] No se pudo guardar historial:", historyRes.error);
         }
       }
+
+      /*
+        Disparamos análisis IA en segundo plano.
+        El fallback local ya dejó score/resumen/acción coherentes aunque la IA tarde o falle.
+      */
+      void supabase.functions
+        .invoke("analyze-conversation-ai", {
+          body: {
+            conversacion_id: effectiveOportunidad.conversacion_id,
+            conversation_id: effectiveOportunidad.conversacion_id,
+            oportunidad_id: effectiveOportunidad.id,
+            opportunity_id: effectiveOportunidad.id,
+            force: true,
+            source: "manual_opportunity_edit",
+            manual_data: nextManualData
+          }
+        })
+        .then(({ data, error }) => {
+          if (error || !data?.ok) {
+            console.warn("[OportunidadDetalleModal] analyze-conversation-ai no actualizó la ficha:", {
+              error,
+              data
+            });
+          }
+
+          onUpdated?.();
+        });
 
       setLocalManualData(nextManualData);
       setLocalScore(cleanScore);

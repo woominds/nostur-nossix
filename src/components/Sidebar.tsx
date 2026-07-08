@@ -62,6 +62,8 @@ const SECTION_COLORS: Record<SidebarSectionKey, string> = {
   apps: "#ff2f76"
 };
 
+const MAIL_MODULE_COLOR = "#2563eb";
+
 const CHAT_APP_IDS = [
   "livenos",
   "contactos-live",
@@ -320,6 +322,8 @@ export function Sidebar() {
     if (appId === "config") return "configuracion";
     if (appId === "settings") return "configuracion";
     if (appId === "importador-catalogos") return "configuracion";
+    if (appId === "email") return "mail";
+    if (appId === "correo") return "mail";
 
     return appId;
   }
@@ -395,6 +399,27 @@ export function Sidebar() {
     });
   }
 
+  function openMail() {
+    const mailApp = getAppById("mail");
+    const existingTab = tabs.find(
+      (tab) =>
+        normalizeAppKey(tab.appId || "") === "mail" ||
+        tab.url === mailApp.url
+    );
+
+    if (existingTab) {
+      activateTab(existingTab.id);
+      return;
+    }
+
+    createTab({
+      appId: "mail",
+      url: mailApp.url,
+      title: mailApp.name,
+      activate: true
+    });
+  }
+
   function openApp(appId: string) {
     const app = getAppById(appId);
 
@@ -443,6 +468,8 @@ export function Sidebar() {
     !activeUrl.startsWith("internal://");
 
   const isChatGptActive = activeAppId === "chatgpt" || activeUrl.includes("chatgpt.com");
+
+  const isMailActive = activeAppId === "mail" || activeUrl === "internal://mail";
 
   function renderSection(section: SidebarSectionKey) {
     const apps = sectionApps[section];
@@ -504,6 +531,16 @@ export function Sidebar() {
 
                   {section === "apps" ? (
                     <AppMiniIcon appId={app.id} fallback={app.name} color={app.color || color} />
+                  ) : app.id === "mail" ? (
+                    <span
+                      className={[
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded-md text-[8px] font-semibold text-white transition",
+                        isAppActive(app.id, app.url) ? "opacity-100" : "opacity-80"
+                      ].join(" ")}
+                      style={{ backgroundColor: MAIL_MODULE_COLOR }}
+                    >
+                      M
+                    </span>
                   ) : (
                     <span
                       className={[
@@ -526,32 +563,165 @@ export function Sidebar() {
     );
   }
 
+  function renderCollapsedRail() {
+    const railItems = [
+      {
+        key: "home",
+        label: "Inicio",
+        active: isHomeActive,
+        icon: <HomeIcon size={18} strokeWidth={1.9} />,
+        onClick: openHome
+      },
+      {
+        key: "web",
+        label: "Web",
+        active: isWebActive,
+        icon: <Globe2 size={18} strokeWidth={1.9} />,
+        onClick: openWeb
+      },
+      {
+        key: "chatgpt",
+        label: "ChatGPT",
+        active: isChatGptActive,
+        icon: <MessageSquare size={18} strokeWidth={1.9} />,
+        onClick: openChatGpt
+      },
+      {
+        key: "mail",
+        label: "Mail",
+        active: isMailActive,
+        icon: (
+          <span
+            className="flex h-6 w-6 items-center justify-center rounded-lg text-[11px] font-semibold text-white"
+            style={{ backgroundColor: MAIL_MODULE_COLOR }}
+          >
+            M
+          </span>
+        ),
+        onClick: openMail
+      }
+    ];
+
+    const sectionItems: SidebarSectionKey[] = [
+      "chat",
+      "ventas",
+      "administracion",
+      "operaciones",
+      "apps"
+    ];
+
+    return (
+      <div
+        className={[
+          "absolute bottom-0 right-0 top-0 z-20 flex w-[58px] flex-col items-center border-r border-black/10 bg-[#f8fafc] px-2 pb-4 pt-[52px] transition-opacity duration-200",
+          dockOpen ? "pointer-events-none opacity-0" : "opacity-100"
+        ].join(" ")}
+      >
+        <button
+          type="button"
+          onClick={openHome}
+          title={brandText.appName}
+          className="mb-4 flex h-10 w-10 items-center justify-center rounded-2xl bg-white shadow-sm ring-1 ring-black/10 transition hover:scale-[1.03]"
+        >
+          <BrandIso size={32} />
+        </button>
+
+        <div className="flex flex-1 flex-col items-center gap-2">
+          {railItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={item.onClick}
+              title={item.label}
+              className={[
+                "flex h-10 w-10 items-center justify-center rounded-2xl transition",
+                item.active
+                  ? "bg-white text-[#172033] shadow-sm ring-1 ring-black/10"
+                  : "text-[#64748b] hover:bg-white/80 hover:text-[#172033]"
+              ].join(" ")}
+            >
+              {item.icon}
+            </button>
+          ))}
+
+          <div className="my-1 h-px w-8 bg-black/10" />
+
+          {sectionItems.map((section) => {
+            if (section === "administracion" && !canSeeAdministrationSection) return null;
+            if (sectionApps[section].length === 0) return null;
+
+            const active = isSectionActive(section);
+            const color = SECTION_COLORS[section];
+
+            return (
+              <button
+                key={section}
+                type="button"
+                title={SECTION_LABELS[section]}
+                onClick={() => setDockOpen(true)}
+                className={[
+                  "flex h-10 w-10 items-center justify-center rounded-2xl transition",
+                  active
+                    ? "bg-white shadow-sm ring-1 ring-black/10"
+                    : "hover:bg-white/80"
+                ].join(" ")}
+              >
+                <span
+                  className="flex h-8 w-8 items-center justify-center rounded-xl text-white shadow-sm"
+                  style={{ backgroundColor: color }}
+                >
+                  <SectionIcon section={section} />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex flex-col items-center gap-2">
+          {canOpenAdminPanels ? (
+            <button
+              type="button"
+              onClick={openSettings}
+              title="Configuración"
+              className={[
+                "flex h-10 w-10 items-center justify-center rounded-2xl transition",
+                isSettingsActive
+                  ? "bg-white text-[#172033] shadow-sm ring-1 ring-black/10"
+                  : "text-[#64748b] hover:bg-white/80 hover:text-[#172033]"
+              ].join(" ")}
+            >
+              <Settings size={18} strokeWidth={1.9} />
+            </button>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={signOut}
+            title="Cerrar sesión"
+            className="flex h-10 w-10 items-center justify-center rounded-2xl text-[#64748b] transition hover:bg-red-50 hover:text-red-600"
+          >
+            <LogOut size={18} strokeWidth={1.9} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <aside
       onMouseEnter={() => setDockOpen(true)}
       onMouseLeave={() => setDockOpen(false)}
-      className="nostur-no-drag relative z-[90] h-full w-[12px] shrink-0"
+      className="nostur-no-drag relative z-[90] h-full w-[58px] shrink-0"
     >
       <div
         className={[
           "fixed bottom-0 left-0 top-0 z-[120] flex w-[260px] flex-col border-r border-black/10 bg-[#f8fafc] px-2 pb-4 pt-[52px] shadow-2xl transition-all duration-300 ease-out",
           dockOpen
             ? "translate-x-0 opacity-100"
-            : "-translate-x-[248px] opacity-95"
+            : "-translate-x-[202px] opacity-100"
         ].join(" ")}
       >
-        <div
-          className={[
-            "pointer-events-none absolute bottom-0 right-0 top-0 w-[12px] transition",
-            dockOpen
-              ? "bg-transparent"
-              : "bg-gradient-to-b from-[#ff7a1a]/75 via-[#4f7c90]/50 to-[#7c3aed]/65"
-          ].join(" ")}
-        />
-
-        {!dockOpen ? (
-          <div className="pointer-events-none absolute right-[2px] top-1/2 h-16 w-[3px] -translate-y-1/2 rounded-full bg-white/90 shadow" />
-        ) : null}
+        {renderCollapsedRail()}
 
         <div
           className={[
@@ -604,6 +774,20 @@ export function Sidebar() {
             active={isChatGptActive}
             onClick={openChatGpt}
             icon={<MessageSquare size={17} strokeWidth={1.8} />}
+          />
+
+          <SidebarButton
+            label="Mail"
+            active={isMailActive}
+            onClick={openMail}
+            icon={
+              <span
+                className="flex h-7 w-7 items-center justify-center rounded-xl text-[11px] font-semibold text-white"
+                style={{ backgroundColor: MAIL_MODULE_COLOR }}
+              >
+                M
+              </span>
+            }
           />
 
           <div className="my-1 h-px w-full bg-black/10" />

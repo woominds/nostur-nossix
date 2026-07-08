@@ -146,38 +146,68 @@ export function getWindowRemainingLabel(conv?: Conversacion | null): string {
   return `Ventana 24h · vence en ${hours}h`;
 }
 
-export function filterByInbox(conv: ConversationVM, inbox: InboxKey): boolean {
-  if (inbox === "eliminadas") return Boolean(conv.deleted_at);
-  if (inbox === "archivadas") return Boolean(conv.archived_at) && !conv.deleted_at;
-  if (inbox === "cerradas") return Boolean(conv.closed_at) && !conv.deleted_at;
+export function filterByInbox(
+  conv: ConversationVM,
+  inbox: InboxKey,
+  candeGlobalEnabled = false
+): boolean {
+  const isClosed = Boolean(conv.closed_at);
+  const isArchived = Boolean(conv.archived_at);
+  const isDeleted = Boolean(conv.deleted_at);
 
-  if (conv.deleted_at || conv.archived_at || conv.closed_at) return false;
+  const isAssigned = Boolean(conv.assigned_to);
+  const hasCollaborators = Boolean(conv.colaboradores && conv.colaboradores.length > 0);
 
-  if (inbox === "sin_atender") {
-    return !conv.assigned_to || conv.estado_gestion === "sin_atender" || conv.inbox === "sin_atender";
+  /*
+    CANDE solo debe tener bandeja propia si está activa en la oportunidad.
+    Si CANDE está apagada, aunque exista oportunidad/score/datos, la conversación
+    sin asignar debe caer en Sin atender.
+  */
+  const isCandeActive = Boolean(candeGlobalEnabled && conv.oportunidad?.cande_activa === true);
+
+  if (inbox === "eliminadas") {
+    return isDeleted;
   }
 
-  if (inbox === "en_gestion") {
-    return (
-      Boolean(conv.assigned_to) ||
-      conv.estado_gestion === "en_gestion" ||
-      conv.inbox === "vendedor"
-    );
+  if (inbox === "archivadas") {
+    return !isDeleted && isArchived;
   }
 
-  if (inbox === "cande") {
-    return Boolean(conv.oportunidad?.cande_activa);
+  if (inbox === "cerradas") {
+    return !isDeleted && !isArchived && isClosed;
+  }
+
+  if (isDeleted || isArchived || isClosed) {
+    return false;
   }
 
   if (inbox === "colaboracion") {
+    return hasCollaborators;
+  }
+
+  if (inbox === "en_gestion") {
+    return isAssigned;
+  }
+
+  if (inbox === "cande") {
+    return !isAssigned && isCandeActive;
+  }
+
+  if (inbox === "sin_atender") {
     return (
-      conv.inbox === "colaboracion" ||
-      conv.estado_gestion === "colaboracion" ||
-      Boolean(conv.colaboradores && conv.colaboradores.length > 0)
+      !isAssigned &&
+      !isCandeActive &&
+      (
+        conv.estado_gestion === "sin_atender" ||
+        conv.estado_gestion === "espera_agente" ||
+        conv.estado_gestion === "colaboracion" ||
+        conv.estado_gestion === null ||
+        conv.estado_gestion === undefined
+      )
     );
   }
 
-  return true;
+  return false;
 }
 
 export function getMessageRole(message: Mensaje): MessageRole {
