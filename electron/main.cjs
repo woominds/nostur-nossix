@@ -9,6 +9,7 @@ const {
   screen,
   Notification,
   Menu,
+  Tray,
   clipboard
 } = require("electron");
 
@@ -18,6 +19,8 @@ const { execFile } = require("child_process");
 const tenantConfig = require("./tenantConfig.cjs");
 
 let mainWindow = null;
+let tray = null;
+let isQuitting = false;
 const activeNotifications = new Set();
 let dockNotificationCount = 0;
 
@@ -458,6 +461,112 @@ function getTitleByUrl(url) {
   return "Web";
 }
 
+
+/* =========================================================
+   SEGUNDO PLANO / TRAY
+========================================================= */
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+
+  if (process.platform === "darwin" && app.dock) {
+    try {
+      app.dock.show();
+    } catch {
+      // Ignorar.
+    }
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function hideMainWindowToBackground() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  mainWindow.hide();
+
+  if (process.platform === "darwin" && app.dock) {
+    try {
+      app.dock.hide();
+    } catch {
+      // Ignorar.
+    }
+  }
+
+  log("NOSTUR quedó activo en segundo plano.");
+}
+
+function getTrayIconPath() {
+  return firstExistingPath([
+    path.join(__dirname, "../build/tray.png"),
+    path.join(__dirname, "../build/icons/tray.png"),
+    path.join(process.resourcesPath || "", "build/tray.png"),
+    path.join(process.resourcesPath || "", "build/icons/tray.png"),
+    path.join(__dirname, "../build/icon.png"),
+    path.join(__dirname, "../build/icons/icon.png"),
+    path.join(process.resourcesPath || "", "build/icon.png"),
+    path.join(process.resourcesPath || "", "build/icons/icon.png"),
+    getNotificationIconPath(),
+    getAppIconPath()
+  ]);
+}
+
+function configureTray() {
+  if (tray) return;
+
+  try {
+    const trayIcon = getTrayIconPath();
+
+    tray = new Tray(trayIcon);
+    tray.setToolTip("NOSTUR");
+
+    const trayMenu = Menu.buildFromTemplate([
+      {
+        label: "Abrir NOSTUR",
+        click: () => {
+          showMainWindow();
+        }
+      },
+      {
+        label: "Ocultar NOSTUR",
+        click: () => {
+          hideMainWindowToBackground();
+        }
+      },
+      { type: "separator" },
+      {
+        label: "Salir de NOSTUR",
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        }
+      }
+    ]);
+
+    tray.setContextMenu(trayMenu);
+
+    tray.on("click", () => {
+      showMainWindow();
+    });
+
+    tray.on("double-click", () => {
+      showMainWindow();
+    });
+
+    log("Tray configurado:", trayIcon);
+  } catch (err) {
+    errorLog("No se pudo configurar tray:", err);
+  }
+}
+
 /* =========================================================
    MAIN → RENDERER
 ========================================================= */
@@ -475,12 +584,7 @@ function sendNewTab(url, options = {}) {
     return;
   }
 
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
-
-  mainWindow.show();
-  mainWindow.focus();
+  showMainWindow();
 
   mainWindow.webContents.send("nostur:new-tab-from-main", {
     url,
@@ -495,12 +599,7 @@ function sendOpenConversationFromNotification(conversationId) {
   if (!conversationId) return;
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
-
-  mainWindow.show();
-  mainWindow.focus();
+  showMainWindow();
 
   mainWindow.webContents.send("nostur:open-conversation-from-notification", {
     conversationId
@@ -1410,6 +1509,13 @@ function createWindow() {
     clearDockBadge();
   });
 
+  mainWindow.on("close", (event) => {
+    if (isQuitting) return;
+
+    event.preventDefault();
+    hideMainWindowToBackground();
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -1764,6 +1870,11 @@ function getUpdateStatus() {
   };
 }
 
+
+app.on("before-quit", () => {
+  isQuitting = true;
+});
+
 /* =========================================================
    APP READY
 ========================================================= */
@@ -1807,6 +1918,7 @@ app.whenReady().then(() => {
   configureWindowOpenHandling();
   configureSessions();
   createWindow();
+  configureTray();
   setupAutoUpdater();
 
   handleInitialDeepLinkFromArgs();
@@ -1818,19 +1930,15 @@ app.whenReady().then(() => {
   }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    showMainWindow();
   });
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  /*
+    NOSTUR queda activo en segundo plano para seguir notificando LiveNos.
+    Para cerrar realmente, usar "Salir de NOSTUR" desde menú/tray.
+  */
 });
 
 /* =========================================================

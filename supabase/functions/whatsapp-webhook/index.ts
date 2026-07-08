@@ -204,6 +204,514 @@ function getMetaConfig() {
   };
 }
 
+
+
+/* =========================================================
+   AUTO REPLY FUERA DE HORARIO — CANDE OFF
+========================================================= */
+
+const DEFAULT_BUSINESS_TIMEZONE = "America/Argentina/Cordoba";
+const DEFAULT_OUT_OF_HOURS_COOLDOWN_HOURS = 8;
+
+const DEFAULT_OUT_OF_HOURS_MESSAGE = `¡Hola! 👋 Gracias por escribirnos.
+
+En este momento estamos fuera de nuestro horario de atención.
+Dejanos tu consulta y apenas retomemos la atención te respondemos por este mismo medio.`;
+
+const DEFAULT_WEEKEND_MESSAGE = `¡Hola! 👋 Gracias por escribirnos.
+
+En este momento estamos fuera de horario de atención.
+Nuestro equipo retomará la atención el próximo día hábil.
+
+Dejanos tu consulta y apenas estemos nuevamente en línea te respondemos por este mismo medio.`;
+
+const WEEKDAY_TO_CONFIG_KEY: Record<string, string> = {
+  Mon: "mon",
+  Tue: "tue",
+  Wed: "wed",
+  Thu: "thu",
+  Fri: "fri",
+  Sat: "sat",
+  Sun: "sun"
+};
+
+function parseTimeToMinutes(value: unknown, fallback: string) {
+  const clean = cleanText(value) || fallback;
+  const [rawHour, rawMinute] = clean.slice(0, 5).split(":");
+
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    const [fallbackHour, fallbackMinute] = fallback.split(":").map(Number);
+    return fallbackHour * 60 + fallbackMinute;
+  }
+
+  return hour * 60 + minute;
+}
+
+function getDatePartsForTimezone(timezone: string, date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone || DEFAULT_BUSINESS_TIMEZONE,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+
+  const values: Record<string, string> = {};
+
+  for (const part of parts) {
+    values[part.type] = part.value;
+  }
+
+  const weekday = values.weekday || "";
+  const hour = Number(values.hour || 0);
+  const minute = Number(values.minute || 0);
+
+  return {
+    weekday,
+    dayKey: WEEKDAY_TO_CONFIG_KEY[weekday] || "",
+    hour,
+    minute,
+    minutesOfDay: hour * 60 + minute
+  };
+}
+
+function getHorarioAtencionConfig(config: any) {
+  const raw =
+    config?.horario_atencion_config &&
+    typeof config.horario_atencion_config === "object"
+      ? config.horario_atencion_config
+      : {};
+
+  const dias = raw.dias && typeof raw.dias === "object" ? raw.dias : {};
+
+  return {
+    timezone: cleanText(raw.timezone) || DEFAULT_BUSINESS_TIMEZONE,
+    cooldown_hours: Number.isFinite(Number(raw.cooldown_hours))
+      ? Number(raw.cooldown_hours)
+      : DEFAULT_OUT_OF_HOURS_COOLDOWN_HOURS,
+    dias: {
+      mon: {
+        enabled: dias.mon?.enabled !== false,
+        start: cleanText(dias.mon?.start) || "09:00",
+        end: cleanText(dias.mon?.end) || "20:30"
+      },
+      tue: {
+        enabled: dias.tue?.enabled !== false,
+        start: cleanText(dias.tue?.start) || "09:00",
+        end: cleanText(dias.tue?.end) || "20:30"
+      },
+      wed: {
+        enabled: dias.wed?.enabled !== false,
+        start: cleanText(dias.wed?.start) || "09:00",
+        end: cleanText(dias.wed?.end) || "20:30"
+      },
+      thu: {
+        enabled: dias.thu?.enabled !== false,
+        start: cleanText(dias.thu?.start) || "09:00",
+        end: cleanText(dias.thu?.end) || "20:30"
+      },
+      fri: {
+        enabled: dias.fri?.enabled !== false,
+        start: cleanText(dias.fri?.start) || "09:00",
+        end: cleanText(dias.fri?.end) || "20:30"
+      },
+      sat: {
+        enabled: dias.sat?.enabled === true,
+        start: cleanText(dias.sat?.start) || "09:00",
+        end: cleanText(dias.sat?.end) || "13:00"
+      },
+      sun: {
+        enabled: dias.sun?.enabled === true,
+        start: cleanText(dias.sun?.start) || "09:00",
+        end: cleanText(dias.sun?.end) || "13:00"
+      }
+    }
+  };
+}
+
+function getOutsideHoursInfoFromConfig(config: any) {
+  const horario = getHorarioAtencionConfig(config);
+  const now = getDatePartsForTimezone(horario.timezone);
+  const dayConfig = horario.dias[now.dayKey as keyof typeof horario.dias];
+
+  if (!dayConfig) {
+    return {
+      outside: true,
+      reason: "day_not_configured",
+      message:
+        cleanText(config?.mensaje_fin_semana) ||
+        cleanText(config?.mensaje_fuera_horario) ||
+        DEFAULT_WEEKEND_MESSAGE,
+      debug: {
+        timezone: horario.timezone,
+        weekday: now.weekday,
+        dayKey: now.dayKey,
+        minutesOfDay: now.minutesOfDay,
+        dayConfig: null
+      }
+    };
+  }
+
+  if (dayConfig.enabled !== true) {
+    return {
+      outside: true,
+      reason: "day_disabled",
+      message:
+        cleanText(config?.mensaje_fin_semana) ||
+        cleanText(config?.mensaje_fuera_horario) ||
+        DEFAULT_WEEKEND_MESSAGE,
+      debug: {
+        timezone: horario.timezone,
+        weekday: now.weekday,
+        dayKey: now.dayKey,
+        minutesOfDay: now.minutesOfDay,
+        dayConfig
+      }
+    };
+  }
+
+  const startMinutes = parseTimeToMinutes(dayConfig.start, "09:00");
+  const endMinutes = parseTimeToMinutes(dayConfig.end, "20:30");
+
+  const outside =
+    now.minutesOfDay < startMinutes ||
+    now.minutesOfDay > endMinutes;
+
+  return {
+    outside,
+    reason: outside ? "outside_business_hours" : "inside_business_hours",
+    message:
+      cleanText(config?.mensaje_fuera_horario) ||
+      DEFAULT_OUT_OF_HOURS_MESSAGE,
+    debug: {
+      timezone: horario.timezone,
+      weekday: now.weekday,
+      dayKey: now.dayKey,
+      hour: now.hour,
+      minute: now.minute,
+      minutesOfDay: now.minutesOfDay,
+      startMinutes,
+      endMinutes,
+      dayConfig
+    }
+  };
+}
+
+function isCandeOffFromConfigConversationAndLead(params: {
+  config: any;
+  conversation: any;
+  oportunidad: any;
+}) {
+  const config = params.config || {};
+  const oportunidad = params.oportunidad || {};
+
+  const configEnabled = config.enabled;
+  const configModo = cleanText(config.modo).toLowerCase();
+
+  if (configEnabled === false) return true;
+  if (["apagada", "off", "disabled", "manual"].includes(configModo)) return true;
+
+  const candeActiva = oportunidad?.cande_activa;
+
+  if (candeActiva === false) return true;
+
+  return false;
+}
+
+async function sendWhatsAppText(params: {
+  token: string;
+  apiVersion: string;
+  phoneNumberId: string;
+  to: string;
+  text: string;
+}) {
+  const url = `https://graph.facebook.com/${params.apiVersion}/${params.phoneNumberId}/messages`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: params.to,
+      type: "text",
+      text: {
+        preview_url: false,
+        body: params.text
+      }
+    })
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || data?.error) {
+    throw new Error(
+      data?.error?.message ||
+        `No se pudo enviar auto-respuesta de WhatsApp. HTTP ${response.status}`
+    );
+  }
+
+  return data;
+}
+
+async function wasOutsideHoursAutoReplySentRecently(params: {
+  supabase: any;
+  conversationId: string;
+  cooldownHours: number;
+}) {
+  const since = new Date();
+  since.setHours(since.getHours() - Number(params.cooldownHours || DEFAULT_OUT_OF_HOURS_COOLDOWN_HOURS));
+
+  try {
+    const res = await params.supabase
+      .from("mensajes")
+      .select("id")
+      .eq("conversacion_id", params.conversationId)
+      .eq("direction", "out")
+      .eq("sender_kind", "sistema")
+      .gte("created_at", since.toISOString())
+      .limit(1)
+      .maybeSingle();
+
+    if (res.error) {
+      console.warn("[whatsapp-webhook] No se pudo revisar cooldown auto-reply.", res.error);
+      return false;
+    }
+
+    return Boolean(res.data?.id);
+  } catch (error) {
+    console.warn(
+      "[whatsapp-webhook] Error revisando cooldown auto-reply.",
+      error?.message || error
+    );
+
+    return false;
+  }
+}
+
+async function insertOutgoingSystemMessage(params: {
+  supabase: any;
+  conversationId: string;
+  text: string;
+  waMessageId: string | null;
+}) {
+  const insertRes = await params.supabase.from("mensajes").insert({
+    conversacion_id: params.conversationId,
+    direction: "out",
+    type: "text",
+    text: params.text,
+    media: null,
+    reply_to_id: null,
+    forwarded: false,
+    status: params.waMessageId ? "sent" : "delivered",
+    error: null,
+    wa_message_id: params.waMessageId,
+    sender_profile_id: null,
+    deleted_at: null,
+    delivered_at: getNowIso(),
+    read_at: null,
+    wa_timestamp: getNowIso(),
+    sender_kind: "sistema"
+  });
+
+  if (insertRes.error) {
+    console.warn(
+      "[whatsapp-webhook] No se pudo insertar mensaje automático saliente.",
+      insertRes.error
+    );
+  }
+}
+
+async function maybeSendOutsideHoursAutoReply(params: {
+  supabase: any;
+  token: string;
+  apiVersion: string;
+  conversationId: string;
+  oportunidadId: string | null;
+  toPhone: string;
+  phoneNumberId: string | null;
+}) {
+  const phoneNumberId =
+    cleanText(params.phoneNumberId) ||
+    cleanText(Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"));
+
+  if (!phoneNumberId) {
+    return {
+      sent: false,
+      candeOff: false,
+      reason: "missing_phone_number_id"
+    };
+  }
+
+const conversationRes = await params.supabase
+  .from("conversaciones")
+  .select("id")
+  .eq("id", params.conversationId)
+  .maybeSingle();
+
+if (conversationRes.error) {
+  return {
+    sent: false,
+    candeOff: true,
+    reason: "conversation_read_error",
+    error: conversationRes.error.message
+  };
+}
+
+  let oportunidad: any = null;
+
+  if (params.oportunidadId) {
+    const oportunidadRes = await params.supabase
+      .from("lead_oportunidades")
+      .select("id, cande_activa")
+      .eq("id", params.oportunidadId)
+      .maybeSingle();
+
+    if (!oportunidadRes.error) {
+      oportunidad = oportunidadRes.data;
+    }
+  }
+
+  const configRes = await params.supabase
+    .from("cande_config")
+    .select(
+      "id, enabled, modo, mensaje_fuera_horario, mensaje_fin_semana, auto_reply_fuera_horario_enabled, horario_atencion_config"
+    )
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
+
+  const candeConfig = configRes.error ? null : configRes.data;
+
+  const candeOff = isCandeOffFromConfigConversationAndLead({
+    config: candeConfig,
+    conversation: conversationRes.data,
+    oportunidad
+  });
+
+  if (!candeOff) {
+    return {
+      sent: false,
+      candeOff: false,
+      reason: "cande_on",
+      config: {
+        id: candeConfig?.id || null,
+        enabled: candeConfig?.enabled,
+        modo: candeConfig?.modo
+      }
+    };
+  }
+
+  if (candeConfig?.auto_reply_fuera_horario_enabled === false) {
+    return {
+      sent: false,
+      candeOff: true,
+      reason: "auto_reply_disabled",
+      config: {
+        id: candeConfig?.id || null,
+        enabled: candeConfig?.enabled,
+        modo: candeConfig?.modo
+      }
+    };
+  }
+
+  const outsideInfo = getOutsideHoursInfoFromConfig(candeConfig);
+
+  if (!outsideInfo.outside) {
+    return {
+      sent: false,
+      candeOff: true,
+      reason: "inside_business_hours",
+      outsideInfo
+    };
+  }
+
+  const horario = getHorarioAtencionConfig(candeConfig);
+
+  const recentlySent = await wasOutsideHoursAutoReplySentRecently({
+    supabase: params.supabase,
+    conversationId: params.conversationId,
+    cooldownHours: horario.cooldown_hours
+  });
+
+  if (recentlySent) {
+    return {
+      sent: false,
+      candeOff: true,
+      reason: "cooldown",
+      outsideInfo
+    };
+  }
+
+  const finalOutsideHoursMessage =
+    cleanText(outsideInfo.message) ||
+    cleanText(candeConfig?.mensaje_fuera_horario) ||
+    DEFAULT_OUT_OF_HOURS_MESSAGE;
+
+  const sendResult = await sendWhatsAppText({
+    token: params.token,
+    apiVersion: params.apiVersion,
+    phoneNumberId,
+    to: params.toPhone,
+    text: finalOutsideHoursMessage
+  });
+
+  const waMessageId = sendResult?.messages?.[0]?.id || null;
+
+  await insertOutgoingSystemMessage({
+    supabase: params.supabase,
+    conversationId: params.conversationId,
+    text: finalOutsideHoursMessage,
+    waMessageId
+  });
+
+  await params.supabase
+    .from("conversaciones")
+    .update({
+      last_outbound_message_at: getNowIso(),
+      last_message_at: getNowIso(),
+      last_message_preview: finalOutsideHoursMessage,
+      updated_at: getNowIso()
+    })
+    .eq("id", params.conversationId);
+
+  await saveWebhookDebug({
+    supabase: params.supabase,
+    eventType: "outside_hours_auto_reply_sent",
+    field: "messages",
+    whatsappMessageId: waMessageId,
+    fromPhone: params.toPhone,
+    rawPayload: {
+      conversation_id: params.conversationId,
+      oportunidad_id: params.oportunidadId,
+      reason: outsideInfo.reason,
+      outsideInfo,
+      config: {
+        id: candeConfig?.id || null,
+        enabled: candeConfig?.enabled,
+        modo: candeConfig?.modo,
+        auto_reply_fuera_horario_enabled: candeConfig?.auto_reply_fuera_horario_enabled
+      },
+      message: finalOutsideHoursMessage,
+      sendResult
+    }
+  });
+
+  return {
+    sent: true,
+    candeOff: true,
+    reason: outsideInfo.reason,
+    waMessageId,
+    outsideInfo
+  };
+}
+
 /* =========================================================
    HELPERS
 ========================================================= */
@@ -1039,7 +1547,7 @@ serve(async (req) => {
               contactName,
               phoneNumberId
             });
-         if (result?.conversationId || result?.conversation_id || result?.conversacion_id) {
+if (result?.conversationId || result?.conversation_id || result?.conversacion_id) {
   const conversationId =
     result.conversationId ||
     result.conversation_id ||
@@ -1057,12 +1565,43 @@ serve(async (req) => {
     result.oportunidad_id ||
     null;
 
-  fireAndForgetCandeReply({
+  const autoReplyResult = await maybeSendOutsideHoursAutoReply({
+    supabase,
+    token: meta.token,
+    apiVersion: meta.apiVersion,
     conversationId,
-    inboundMessageId,
     oportunidadId,
-    source: "whatsapp-webhook"
+    toPhone: fromPhone,
+    phoneNumberId
   });
+  await saveWebhookDebug({
+  supabase,
+  eventType: autoReplyResult?.sent
+    ? "outside_hours_auto_reply_result_sent"
+    : "outside_hours_auto_reply_result_skipped",
+  field: "messages",
+  fromPhone,
+  rawPayload: {
+    conversation_id: conversationId,
+    oportunidad_id: oportunidadId,
+    auto_reply_result: autoReplyResult
+  }
+});
+
+  if (!autoReplyResult.candeOff) {
+    fireAndForgetCandeReply({
+      conversationId,
+      inboundMessageId,
+      oportunidadId,
+      source: "whatsapp-webhook"
+    });
+  } else {
+    console.log("[whatsapp-webhook] CANDE no se dispara porque está apagada.", {
+      conversationId,
+      oportunidadId,
+      autoReplyResult
+    });
+  }
 }
 
             results.push({

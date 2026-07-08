@@ -10,6 +10,7 @@ import { useBrowserStore, type BrowserTab } from "../store/browserStore";
 import { getAppById } from "../registry/appRegistry";
 import { DownloadToast } from "./DownloadToast";
 import { NosturUpdateBanner } from "./updates/NosturUpdateBanner";
+import GlobalWhatsappNotifications from "./GlobalWhatsappNotifications";
 
 import { ContactosPanel } from "./contactos/ContactosPanel";
 import { ClientesPanel } from "./clientes/ClientesPanel";
@@ -32,6 +33,7 @@ import { CalendarioPaxPanel } from "./calendario-pax/CalendarioPaxPanel";
 import { HorariosPanel } from "./horarios/HorariosPanel";
 import { DocumentosPanel } from "./documentos/DocumentosPanel";
 import { ColaborativoPanel } from "./colaborativo/ColaborativoPanel";
+import MailPanel from "./mail/MailPanel";
 
 import { ConfigPanel } from "./config/ConfigPanel";
 import { ImportadorCatalogosPanel } from "./config/ImportadorCatalogosPanel";
@@ -66,14 +68,18 @@ function normalizeInternalAppId(moduleId: string): string {
   if (moduleId === "settings") return "configuracion";
   if (moduleId === "configuracion") return "configuracion";
 
- if (moduleId === "livenos") return "livenos";
-if (moduleId === "contactos-live") return "contactos-live";
-if (moduleId === "historiales-live") return "historiales-live";
-if (moduleId === "oportunidades") return "oportunidades";
-if (moduleId === "cande") return "cande";
-if (moduleId === "nia") return "nia";
-if (moduleId === "control-ia") return "control-ia";
-if (moduleId === "mi-perfil") return "mi-perfil";
+  if (moduleId === "livenos") return "livenos";
+  if (moduleId === "contactos-live") return "contactos-live";
+  if (moduleId === "historiales-live") return "historiales-live";
+  if (moduleId === "oportunidades") return "oportunidades";
+  if (moduleId === "cande") return "cande";
+  if (moduleId === "nia") return "nia";
+  if (moduleId === "control-ia") return "control-ia";
+  if (moduleId === "mi-perfil") return "mi-perfil";
+
+  if (moduleId === "mail") return "mail";
+  if (moduleId === "email") return "mail";
+  if (moduleId === "correo") return "mail";
 
   return moduleId;
 }
@@ -146,18 +152,24 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
 
   const isLiveNos = activeUrl === "internal://livenos";
   const isContactosLive = activeUrl === "internal://contactos-live";
-const isHistorialesLive = activeUrl === "internal://historiales-live";
+  const isHistorialesLive = activeUrl === "internal://historiales-live";
   const isOportunidades = activeUrl === "internal://oportunidades";
   const isCande = activeUrl === "internal://cande";
   const isNia = activeUrl === "internal://nia";
   const isControlIa = activeUrl === "internal://control-ia";
+
+  const isMail =
+    activeUrl === "internal://mail" ||
+    activeUrl === "internal://email" ||
+    activeUrl === "internal://correo";
+
   const isMiPerfil = activeUrl === "internal://mi-perfil";
 
   if (isHome) return <Home />;
 
   if (isLiveNos) return <LiveNosPanel />;
   if (isContactosLive) return <ContactosLivePanel />;
-if (isHistorialesLive) return <HistorialesLivePanel />;
+  if (isHistorialesLive) return <HistorialesLivePanel />;
   if (isOportunidades) return <OportunidadesPanel />;
   if (isCande) return <CandePanel />;
   if (isNia) return <NiaPanel />;
@@ -187,6 +199,8 @@ if (isHistorialesLive) return <HistorialesLivePanel />;
   if (isHorarios) return <HorariosPanel />;
   if (isDocumentos) return <DocumentosPanel />;
   if (isColaborativo) return <ColaborativoPanel />;
+
+  if (isMail) return <MailPanel />;
 
   if (isConfiguracion) return <ConfigPanel />;
   if (isImportadorCatalogos) return <ImportadorCatalogosPanel />;
@@ -527,6 +541,7 @@ export function Shell() {
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#e9edf4] text-[#1f2937]">
+      <GlobalWhatsappNotifications />
       <DownloadToast />
       <NosturUpdateBanner />
 

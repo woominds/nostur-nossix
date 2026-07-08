@@ -223,9 +223,11 @@ function playTone(params: {
   volume: number;
   repeat?: number;
   gapMs?: number;
+  type?: OscillatorType;
 }) {
   const repeat = params.repeat || 1;
   const gapMs = params.gapMs || 120;
+  const oscillatorType = params.type || "square";
 
   for (let index = 0; index < repeat; index += 1) {
     window.setTimeout(() => {
@@ -240,11 +242,17 @@ function playTone(params: {
         const oscillator = audioContext.createOscillator();
         const gain = audioContext.createGain();
 
-        oscillator.type = "sine";
+        oscillator.type = oscillatorType;
         oscillator.frequency.value = params.frequency;
 
+        /*
+          Volumen fuerte pero con envelope corto para que no distorsione feo.
+          square/sawtooth atraviesan mejor el ruido de oficina que sine.
+        */
+        const safeVolume = Math.min(Math.max(params.volume, 0.01), 0.95);
+
         gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-        gain.gain.exponentialRampToValueAtTime(params.volume, audioContext.currentTime + 0.015);
+        gain.gain.exponentialRampToValueAtTime(safeVolume, audioContext.currentTime + 0.012);
         gain.gain.exponentialRampToValueAtTime(
           0.0001,
           audioContext.currentTime + params.durationMs / 1000
@@ -254,7 +262,7 @@ function playTone(params: {
         gain.connect(audioContext.destination);
 
         oscillator.start();
-        oscillator.stop(audioContext.currentTime + params.durationMs / 1000 + 0.03);
+        oscillator.stop(audioContext.currentTime + params.durationMs / 1000 + 0.04);
 
         oscillator.onended = () => {
           void audioContext.close();
@@ -267,36 +275,105 @@ function playTone(params: {
 }
 
 function playRendererTone(kind: NotificationKind) {
+  console.log("[GlobalWhatsappNotifications] Intento reproducir sonido renderer", { kind });
+
   if (kind === "cande_transfer") {
+    /*
+      CANDE: alarma distinta, tipo ascendente + cierre grave.
+    */
     playTone({
-      frequency: 980,
+      frequency: 740,
       durationMs: 180,
-      volume: 0.24,
-      repeat: 3,
-      gapMs: 80
+      volume: 0.72,
+      repeat: 1,
+      gapMs: 70,
+      type: "sawtooth"
     });
+
+    window.setTimeout(() => {
+      playTone({
+        frequency: 1040,
+        durationMs: 190,
+        volume: 0.82,
+        repeat: 2,
+        gapMs: 85,
+        type: "square"
+      });
+    }, 230);
+
+    window.setTimeout(() => {
+      playTone({
+        frequency: 620,
+        durationMs: 260,
+        volume: 0.76,
+        repeat: 1,
+        type: "triangle"
+      });
+    }, 720);
 
     return;
   }
 
   if (kind === "nuevo") {
+    /*
+      NUEVO / SIN ATENDER: fuerte, urgente y reconocible.
+      Secuencia estilo doble alerta: alta-baja-alta, repetida.
+    */
     playTone({
-      frequency: 760,
-      durationMs: 220,
-      volume: 0.22,
+      frequency: 1180,
+      durationMs: 190,
+      volume: 0.88,
       repeat: 2,
-      gapMs: 110
+      gapMs: 75,
+      type: "square"
     });
+
+    window.setTimeout(() => {
+      playTone({
+        frequency: 860,
+        durationMs: 180,
+        volume: 0.82,
+        repeat: 2,
+        gapMs: 80,
+        type: "square"
+      });
+    }, 470);
+
+    window.setTimeout(() => {
+      playTone({
+        frequency: 1320,
+        durationMs: 240,
+        volume: 0.92,
+        repeat: 2,
+        gapMs: 90,
+        type: "sawtooth"
+      });
+    }, 930);
 
     return;
   }
 
+  /*
+    GESTIÓN / ya tomada: audible y distinto al sin atender, pero no tan alarma.
+  */
   playTone({
-    frequency: 520,
-    durationMs: 150,
-    volume: 0.13,
-    repeat: 1
+    frequency: 760,
+    durationMs: 180,
+    volume: 0.58,
+    repeat: 2,
+    gapMs: 80,
+    type: "square"
   });
+
+  window.setTimeout(() => {
+    playTone({
+      frequency: 940,
+      durationMs: 170,
+      volume: 0.52,
+      repeat: 1,
+      type: "triangle"
+    });
+  }, 430);
 }
 
 async function playNotificationSound(kind: NotificationKind) {
@@ -403,23 +480,31 @@ async function notifySystem(params: {
   }
 }
 
-function openConversationFromToast(conversationId?: string) {
-  if (!conversationId) return;
+function openConversationFromToast(conversationId?: string, messageId?: string) {
+  if (!conversationId || conversationId === "test") return;
+
+  window.localStorage.setItem("nostur_open_livenos_conversation_id", conversationId);
+
+  if (messageId) {
+    window.localStorage.setItem("nostur_open_livenos_message_id", messageId);
+  }
 
   window.dispatchEvent(
-    new CustomEvent("nostur:open-conversation-request", {
+    new CustomEvent("nostur:open-internal", {
       detail: {
-        conversation_id: conversationId,
-        conversationId
+        appId: "livenos",
+        moduleId: "livenos",
+        url: "internal://livenos",
+        title: "LiveNos"
       }
     })
   );
 
   window.dispatchEvent(
-    new CustomEvent("nostur:global-whatsapp-message-click", {
+    new CustomEvent("nostur:open-livenos-conversation", {
       detail: {
-        conversation_id: conversationId,
-        conversationId
+        conversationId,
+        messageId
       }
     })
   );
@@ -462,10 +547,18 @@ function InternalNotificationToast({
         color: "#172033"
       }}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => {
-          openConversationFromToast(toast.conversationId);
+          openConversationFromToast(toast.conversationId, toast.messageId);
+          onClose();
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+
+          event.preventDefault();
+          openConversationFromToast(toast.conversationId, toast.messageId);
           onClose();
         }}
         style={{
@@ -491,7 +584,12 @@ function InternalNotificationToast({
               width: 38,
               height: 38,
               borderRadius: 14,
-              background: "linear-gradient(135deg, #4f7c90, #172033)",
+              background:
+                toast.title?.toLowerCase().includes("nuevo pasajero") ||
+                toast.title?.toLowerCase().includes("whatsapp") ||
+                toast.title?.toLowerCase().includes("cande")
+                  ? "linear-gradient(135deg, #ef4444, #991b1b)"
+                  : "linear-gradient(135deg, #4f7c90, #172033)",
               color: "white",
               display: "flex",
               alignItems: "center",
@@ -565,15 +663,42 @@ function InternalNotificationToast({
             ×
           </button>
         </div>
-      </button>
+      </div>
     </div>
   );
 }
+
 
 export function GlobalWhatsappNotifications() {
   const processedMessagesRef = useRef<Set<string>>(new Set());
   const lastHandoffByOpportunityRef = useRef<Record<string, string>>({});
   const [internalToast, setInternalToast] = useState<VisibleToast | null>(null);
+
+  function fireVisibleNotification(params: {
+    title: string;
+    body: string;
+    conversationId?: string;
+    messageId?: string;
+    createdAt?: string | null;
+  }) {
+    console.log("[GlobalWhatsappNotifications] Muestro toast interno", params);
+
+    setInternalToast({
+      id: params.messageId || `toast:${Date.now()}`,
+      title: params.title,
+      subtitle: "LiveNos",
+      body: params.body,
+      conversationId: params.conversationId,
+      messageId: params.messageId,
+      appFocused: true,
+      createdAt: params.createdAt || new Date().toISOString()
+    });
+  }
+
+  useEffect(() => {
+    console.log("[GlobalWhatsappNotifications] Componente montado correctamente");
+  }, []);
+
 
   useEffect(() => {
     const bridge = getNosturBridge();
@@ -621,6 +746,8 @@ export function GlobalWhatsappNotifications() {
 
   useEffect(() => {
     let mounted = true;
+    let pollingTimer: number | null = null;
+    const pollingStartedAt = new Date(Date.now() - 5000).toISOString();
 
     async function handleIncomingMessage(message: IncomingMessagePayload) {
       if (!mounted) return;
@@ -697,6 +824,19 @@ export function GlobalWhatsappNotifications() {
         message
       });
 
+      const passengerName = getConversationName(conversation);
+      const preview = getMessagePreview(message);
+      const title = getNotificationTitle(kind, passengerName);
+      const body = getNotificationBody(kind, preview);
+
+      fireVisibleNotification({
+        title,
+        body,
+        conversationId,
+        messageId: message.id,
+        createdAt: message.created_at || new Date().toISOString()
+      });
+
       window.dispatchEvent(
         new CustomEvent("nostur:global-whatsapp-message", {
           detail: {
@@ -763,6 +903,51 @@ export function GlobalWhatsappNotifications() {
       );
     }
 
+    async function pollRecentInboundMessages() {
+      if (!mounted) return;
+
+      try {
+        const { data, error } = await supabase
+          .from("mensajes")
+          .select("id,conversacion_id,direction,sender_kind,type,text,created_at,wa_timestamp")
+          .eq("direction", "in")
+          .gte("created_at", pollingStartedAt)
+          .order("created_at", { ascending: true })
+          .limit(25);
+
+        if (error) {
+          logWarn("Polling mensajes falló", error.message);
+          return;
+        }
+
+        const messages = (data || []) as IncomingMessagePayload[];
+
+        if (messages.length > 0) {
+          logInfo("Polling detectó mensajes inbound recientes", {
+            count: messages.length,
+            ids: messages.map((message) => message.id)
+          });
+        }
+
+        for (const message of messages) {
+          if (!mounted) return;
+          if (processedMessagesRef.current.has(message.id)) continue;
+
+          await handleIncomingMessage(message);
+        }
+      } catch (error) {
+        logWarn("Polling mensajes lanzó excepción", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    pollingTimer = window.setInterval(() => {
+      void pollRecentInboundMessages();
+    }, 6000);
+
+    void pollRecentInboundMessages();
+
     const channel = supabase
       .channel(`global-whatsapp-notifications-${Date.now()}`)
       .on(
@@ -793,15 +978,23 @@ export function GlobalWhatsappNotifications() {
 
     return () => {
       mounted = false;
+
+      if (pollingTimer) {
+        window.clearInterval(pollingTimer);
+      }
+
       supabase.removeChannel(channel);
     };
   }, []);
 
+
   return (
-    <InternalNotificationToast
-      toast={internalToast}
-      onClose={() => setInternalToast(null)}
-    />
+    <>
+      <InternalNotificationToast
+        toast={internalToast}
+        onClose={() => setInternalToast(null)}
+      />
+    </>
   );
 }
 

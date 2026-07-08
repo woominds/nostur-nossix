@@ -21,6 +21,20 @@ import { EmptyState } from "./comunicacionesShared";
 
 type TabKey = "general" | "identidad" | "campos" | "faqs" | "scoring" | "pipeline";
 
+type HorarioDayKey = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+type HorarioDayConfig = {
+  enabled: boolean;
+  start: string;
+  end: string;
+};
+
+type HorarioAtencionConfig = {
+  timezone: string;
+  cooldown_hours: number;
+  dias: Record<HorarioDayKey, HorarioDayConfig>;
+};
+
 type CandeConfig = {
   id: string;
   enabled: boolean;
@@ -42,9 +56,13 @@ type CandeConfig = {
   mensaje_inicial?: string | null;
   mensaje_falta_info?: string | null;
   mensaje_fuera_horario?: string | null;
+  mensaje_fin_semana?: string | null;
   mensaje_no_entiende?: string | null;
   datos_a_relevar?: string[] | null;
   cosas_prohibidas?: string[] | null;
+
+  auto_reply_fuera_horario_enabled?: boolean | null;
+  horario_atencion_config?: HorarioAtencionConfig | null;
 
   max_mensajes_antes_derivar?: number | null;
   derivar_si_pide_humano?: boolean | null;
@@ -155,15 +173,34 @@ const MODE_OPTIONS = [
   }
 ];
 
-const DAY_OPTIONS = [
-  { value: 1, label: "Lun" },
-  { value: 2, label: "Mar" },
-  { value: 3, label: "Mié" },
-  { value: 4, label: "Jue" },
-  { value: 5, label: "Vie" },
-  { value: 6, label: "Sáb" },
-  { value: 7, label: "Dom" }
+
+
+const HORARIO_DAY_OPTIONS: { key: HorarioDayKey; value: number; label: string }[] = [
+  { key: "mon", value: 1, label: "Lunes" },
+  { key: "tue", value: 2, label: "Martes" },
+  { key: "wed", value: 3, label: "Miércoles" },
+  { key: "thu", value: 4, label: "Jueves" },
+  { key: "fri", value: 5, label: "Viernes" },
+  { key: "sat", value: 6, label: "Sábado" },
+  { key: "sun", value: 7, label: "Domingo" }
 ];
+
+const DEFAULT_HORARIO_ATENCION_CONFIG: HorarioAtencionConfig = {
+  timezone: "America/Argentina/Cordoba",
+  cooldown_hours: 8,
+  dias: {
+    mon: { enabled: true, start: "09:00", end: "20:30" },
+    tue: { enabled: true, start: "09:00", end: "20:30" },
+    wed: { enabled: true, start: "09:00", end: "20:30" },
+    thu: { enabled: true, start: "09:00", end: "20:30" },
+    fri: { enabled: true, start: "09:00", end: "20:30" },
+    sat: { enabled: false, start: "09:00", end: "13:00" },
+    sun: { enabled: false, start: "09:00", end: "13:00" }
+  }
+};
+
+const DEFAULT_MENSAJE_FIN_SEMANA =
+  "¡Hola! 👋 Gracias por escribirnos.\n\nEn este momento estamos fuera de horario de atención. Nuestro equipo retomará la atención el próximo día hábil.\n\nDejanos tu consulta y apenas estemos nuevamente en línea te respondemos por este mismo medio.";
 
 const MODEL_OPTIONS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"];
 
@@ -179,6 +216,46 @@ function normalizeTime(value?: string | null): string {
 
 function cleanText(value: unknown): string {
   return String(value || "").trim();
+}
+
+function ensureHorarioAtencionConfig(
+  value?: HorarioAtencionConfig | null,
+  legacyConfig?: Partial<CandeConfig> | null
+): HorarioAtencionConfig {
+  const raw = value && typeof value === "object" ? value : null;
+
+  const legacyStart = normalizeTime(legacyConfig?.horario_inicio || "09:00");
+  const legacyEnd = normalizeTime(legacyConfig?.horario_fin || "20:30");
+  const legacyDays = Array.isArray(legacyConfig?.dias_laborales)
+    ? legacyConfig?.dias_laborales || []
+    : [1, 2, 3, 4, 5];
+
+  const base: HorarioAtencionConfig = {
+    timezone: cleanText(raw?.timezone) || DEFAULT_HORARIO_ATENCION_CONFIG.timezone,
+    cooldown_hours: toNumber(raw?.cooldown_hours, DEFAULT_HORARIO_ATENCION_CONFIG.cooldown_hours),
+    dias: { ...DEFAULT_HORARIO_ATENCION_CONFIG.dias }
+  };
+
+  for (const day of HORARIO_DAY_OPTIONS) {
+    const existing = raw?.dias?.[day.key];
+
+    base.dias[day.key] = {
+      enabled:
+        typeof existing?.enabled === "boolean"
+          ? existing.enabled
+          : legacyDays.includes(day.value),
+      start: normalizeTime(existing?.start || legacyStart),
+      end: normalizeTime(existing?.end || legacyEnd)
+    };
+  }
+
+  return base;
+}
+
+function getDiasLaboralesFromHorarioConfig(config: HorarioAtencionConfig): number[] {
+  return HORARIO_DAY_OPTIONS
+    .filter((day) => config.dias[day.key]?.enabled)
+    .map((day) => day.value);
 }
 
 function textToArray(value: unknown): string[] {
@@ -199,21 +276,7 @@ function arrayToText(value: unknown): string {
   return textToArray(value).join("\n");
 }
 
-function formatDays(days?: number[] | null) {
-  if (!days || days.length === 0) return "—";
 
-  const labels: Record<number, string> = {
-    1: "Lun",
-    2: "Mar",
-    3: "Mié",
-    4: "Jue",
-    5: "Vie",
-    6: "Sáb",
-    7: "Dom"
-  };
-
-  return days.map((day) => labels[day] || String(day)).join(", ");
-}
 
 function emptyCampoDraft(): CampoDraft {
   return {
@@ -317,15 +380,18 @@ function TextInput({
   value,
   onChange,
   placeholder,
-  disabled = false
+  disabled = false,
+  type = "text"
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  type?: "text" | "time" | "number";
 }) {
   return (
     <input
+      type={type}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
@@ -350,12 +416,12 @@ function TextArea({
 }) {
   return (
     <textarea
-      value={value}
+      value={value || ""}
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       rows={rows}
       disabled={disabled}
-      className="w-full resize-none rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[12.5px] font-medium leading-relaxed text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#4f7c90] disabled:opacity-50"
+      className="w-full resize-none rounded-[14px] border border-black/10 bg-white px-3 py-2.5 text-[12.5px] font-medium text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#4f7c90]/50 focus:ring-2 focus:ring-[#4f7c90]/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
     />
   );
 }
@@ -466,15 +532,22 @@ export function CandePanel() {
         .from("cande_campos")
         .select("id,clave,etiqueta,pregunta_sugerida,requerido,peso,orden")
         .order("orden", { ascending: true }),
-      supabase.from("cande_faqs").select("id,pregunta,respuesta,orden").order("orden", { ascending: true }),
-      supabase.from("cande_palabras_clave").select("id,palabra,peso").order("peso", { ascending: false }),
+      supabase
+        .from("cande_faqs")
+        .select("id,pregunta,respuesta,orden")
+        .order("orden", { ascending: true }),
+      supabase
+        .from("cande_palabras_clave")
+        .select("id,palabra,peso")
+        .order("peso", { ascending: false }),
       supabase
         .from("pipeline_estados")
         .select("id,nombre,color,orden,es_final,resultado,es_sin_atender")
         .order("orden", { ascending: true })
     ]);
 
-    const firstError = configRes.error || camposRes.error || faqsRes.error || palabrasRes.error || pipelineRes.error;
+    const firstError =
+      configRes.error || camposRes.error || faqsRes.error || palabrasRes.error || pipelineRes.error;
 
     if (firstError) {
       setError(firstError.message || "Error cargando configuración de Cande.");
@@ -482,7 +555,20 @@ export function CandePanel() {
       return;
     }
 
-    const nextConfig = (configRes.data || null) as CandeConfig | null;
+    const rawConfig = (configRes.data || null) as CandeConfig | null;
+
+    const nextConfig = rawConfig
+      ? {
+          ...rawConfig,
+          auto_reply_fuera_horario_enabled:
+            rawConfig.auto_reply_fuera_horario_enabled ?? true,
+          horario_atencion_config: ensureHorarioAtencionConfig(
+            rawConfig.horario_atencion_config,
+            rawConfig
+          ),
+          mensaje_fin_semana: rawConfig.mensaje_fin_semana || DEFAULT_MENSAJE_FIN_SEMANA
+        }
+      : null;
 
     setConfig(nextConfig);
     setConfigDraft(nextConfig);
@@ -518,6 +604,11 @@ export function CandePanel() {
     return sortedCampos.reduce((acc, campo) => acc + Number(campo.peso || 0), 0);
   }, [sortedCampos]);
 
+  const horarioConfig = useMemo(
+    () => ensureHorarioAtencionConfig(configDraft?.horario_atencion_config, configDraft),
+    [configDraft]
+  );
+
   function updateDraft<K extends keyof CandeConfig>(key: K, value: CandeConfig[K]) {
     setConfigDraft((current) => {
       if (!current) return current;
@@ -525,15 +616,47 @@ export function CandePanel() {
     });
   }
 
-  function toggleDay(day: number) {
+  
+
+  function updateHorarioConfig(patch: Partial<HorarioAtencionConfig>) {
     setConfigDraft((current) => {
       if (!current) return current;
 
-      const currentDays = Array.isArray(current.dias_laborales) ? current.dias_laborales : [];
-      const exists = currentDays.includes(day);
-      const nextDays = exists ? currentDays.filter((item) => item !== day) : [...currentDays, day].sort((a, b) => a - b);
+      const base = ensureHorarioAtencionConfig(current.horario_atencion_config, current);
 
-      return { ...current, dias_laborales: nextDays };
+      return {
+        ...current,
+        horario_atencion_config: {
+          ...base,
+          ...patch,
+          dias: patch.dias || base.dias
+        }
+      };
+    });
+  }
+
+  function updateHorarioDay(key: HorarioDayKey, patch: Partial<HorarioDayConfig>) {
+    setConfigDraft((current) => {
+      if (!current) return current;
+
+      const base = ensureHorarioAtencionConfig(current.horario_atencion_config, current);
+
+      const nextConfig: HorarioAtencionConfig = {
+        ...base,
+        dias: {
+          ...base.dias,
+          [key]: {
+            ...base.dias[key],
+            ...patch
+          }
+        }
+      };
+
+      return {
+        ...current,
+        horario_atencion_config: nextConfig,
+        dias_laborales: getDiasLaboralesFromHorarioConfig(nextConfig)
+      };
     });
   }
 
@@ -551,13 +674,24 @@ export function CandePanel() {
 
     const userId = await getUserId();
 
+    const horarioAtencionConfig = ensureHorarioAtencionConfig(
+      configDraft.horario_atencion_config,
+      configDraft
+    );
+
+    const diasLaboralesFromHorario = getDiasLaboralesFromHorarioConfig(horarioAtencionConfig);
+
     const payload = {
       enabled: configDraft.enabled,
       modo: configDraft.modo,
-      horario_inicio: normalizeTime(configDraft.horario_inicio),
-      horario_fin: normalizeTime(configDraft.horario_fin),
-      dias_laborales: configDraft.dias_laborales,
+      horario_inicio: normalizeTime(horarioAtencionConfig.dias.mon.start),
+      horario_fin: normalizeTime(horarioAtencionConfig.dias.mon.end),
+      dias_laborales: diasLaboralesFromHorario,
       espera_minutos: toNumber(configDraft.espera_minutos, 5),
+
+      auto_reply_fuera_horario_enabled: Boolean(configDraft.auto_reply_fuera_horario_enabled),
+      horario_atencion_config: horarioAtencionConfig,
+      mensaje_fin_semana: cleanText(configDraft.mensaje_fin_semana),
 
       nombre_ia: cleanText(configDraft.nombre_ia) || "Cande",
       marca_visible: cleanText(configDraft.marca_visible) || "ALMUNDO Franquicia Córdoba",
@@ -594,7 +728,10 @@ export function CandePanel() {
       updated_at: new Date().toISOString()
     };
 
-    const { error: saveError } = await supabase.from("cande_config").update(payload).eq("id", configDraft.id);
+    const { error: saveError } = await supabase
+      .from("cande_config")
+      .update(payload)
+      .eq("id", configDraft.id);
 
     if (saveError) {
       setError(saveError.message || "No se pudo guardar Cande.");
@@ -804,7 +941,10 @@ export function CandePanel() {
     setError(null);
     setStatus(null);
 
-    const { error: deleteError } = await supabase.from("cande_palabras_clave").delete().eq("id", id);
+    const { error: deleteError } = await supabase
+      .from("cande_palabras_clave")
+      .delete()
+      .eq("id", id);
 
     if (deleteError) {
       setError(deleteError.message || "No se pudo eliminar la palabra clave.");
@@ -836,7 +976,7 @@ export function CandePanel() {
     setPipelineDraft(emptyPipelineDraft());
   }
 
-  async function savePipeline() {
+    async function savePipeline() {
     const nombre = pipelineDraft.nombre.trim();
 
     if (!nombre) {
@@ -881,7 +1021,10 @@ export function CandePanel() {
     const { error: deleteError } = await supabase.from("pipeline_estados").delete().eq("id", id);
 
     if (deleteError) {
-      setError(deleteError.message || "No se pudo eliminar el estado. Puede estar usado por oportunidades existentes.");
+      setError(
+        deleteError.message ||
+          "No se pudo eliminar el estado. Puede estar usado por oportunidades existentes."
+      );
       setSaving(false);
       return;
     }
@@ -906,7 +1049,9 @@ export function CandePanel() {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">Cande</h1>
+              <h1 className="text-[17px] font-semibold tracking-tight text-[#172033]">
+                Cande
+              </h1>
 
               <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-emerald-700 ring-1 ring-emerald-100">
                 IA pasajero
@@ -935,7 +1080,10 @@ export function CandePanel() {
           <MiniMetric label="Estado" value={configDraft?.enabled ? "Activa" : "Apagada"} />
           <MiniMetric label="Modo" value={configDraft?.modo || "—"} />
           <MiniMetric label="Campos" value={`${campos.length} · ${totalScoreCampos} pts`} />
-          <MiniMetric label="Deriva por score" value={configDraft?.derivar_si_score_supera_umbral ? "Sí" : "No"} />
+          <MiniMetric
+            label="Auto fuera horario"
+            value={configDraft?.auto_reply_fuera_horario_enabled ? "Sí" : "No"}
+          />
         </div>
 
         {error ? (
@@ -988,7 +1136,7 @@ export function CandePanel() {
         {!loading && configDraft ? (
           <div className="mt-3">
             {activeTab === "general" ? (
-              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="grid gap-3.5 xl:grid-cols-[minmax(0,1fr)_380px]">
                 <Card
                   title="Modo de operación"
                   subtitle="Definí cuándo Cande puede responder, indagar o derivar."
@@ -1000,7 +1148,7 @@ export function CandePanel() {
                         Cande está {configDraft.enabled ? "activa" : "apagada"}
                       </div>
                       <p className="mt-0.5 text-[11px] font-normal text-[#64748b]">
-                        Toggle maestro. Si está apagada, no responde en ninguna conversación.
+                        Toggle maestro. Si está apagada, no responde como IA en ninguna conversación.
                       </p>
                     </div>
 
@@ -1035,67 +1183,200 @@ export function CandePanel() {
                             : "border-black/10 bg-white hover:border-[#4f7c90]/35"
                         ].join(" ")}
                       >
-                        <div className="text-[12.5px] font-semibold text-[#172033]">{option.label}</div>
+                        <div className="text-[12.5px] font-semibold text-[#172033]">
+                          {option.label}
+                        </div>
                         <div className="mt-0.5 text-[11px] font-normal leading-snug text-[#64748b]">
                           {option.description}
                         </div>
                       </button>
                     ))}
                   </div>
+
+                  <div className="mt-4 rounded-[14px] border border-black/10 bg-white/70 p-3">
+                    <div className="mb-3">
+                      <h3 className="text-[13px] font-semibold text-[#172033]">
+                        Horario de atención por día
+                      </h3>
+                      <p className="mt-0.5 text-[11px] font-normal leading-relaxed text-[#64748b]">
+                        Estos horarios los usa LiveNos para saber cuándo responder automáticamente si Cande está apagada.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-2">
+                      {HORARIO_DAY_OPTIONS.map((day) => {
+                        const dayConfig = horarioConfig.dias[day.key];
+
+                        return (
+                          <div
+                            key={day.key}
+                            className="grid gap-2 rounded-[12px] border border-black/10 bg-white px-3 py-2.5 md:grid-cols-[120px_1fr_1fr]"
+                          >
+                            <div className="flex items-center justify-between gap-2 md:justify-start">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateHorarioDay(day.key, {
+                                    enabled: !dayConfig.enabled
+                                  })
+                                }
+                                className={[
+                                  "relative h-5 w-9 shrink-0 rounded-full transition",
+                                  dayConfig.enabled ? "bg-emerald-500" : "bg-slate-300"
+                                ].join(" ")}
+                                aria-label={`Activar ${day.label}`}
+                              >
+                                <span
+                                  className={[
+                                    "absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition",
+                                    dayConfig.enabled ? "left-4.5" : "left-0.5"
+                                  ].join(" ")}
+                                />
+                              </button>
+
+                              <span className="text-[12px] font-semibold text-[#172033]">
+                                {day.label}
+                              </span>
+                            </div>
+
+                            <div>
+                              <FieldLabel>Inicio</FieldLabel>
+                              <TextInput
+                                type="time"
+                                value={normalizeTime(dayConfig.start)}
+                                onChange={(value) =>
+                                  updateHorarioDay(day.key, {
+                                    start: normalizeTime(value)
+                                  })
+                                }
+                                disabled={!dayConfig.enabled}
+                              />
+                            </div>
+
+                            <div>
+                              <FieldLabel>Fin</FieldLabel>
+                              <TextInput
+                                type="time"
+                                value={normalizeTime(dayConfig.end)}
+                                onChange={(value) =>
+                                  updateHorarioDay(day.key, {
+                                    end: normalizeTime(value)
+                                  })
+                                }
+                                disabled={!dayConfig.enabled}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </Card>
 
                 <aside className="space-y-3.5">
-                  <Card title="Horario y demora" icon={<Clock3 size={15} />}>
+                  <Card title="Auto-respuesta fuera de horario" icon={<Clock3 size={15} />}>
                     <div className="grid gap-2.5">
+                      <div className="flex items-center justify-between gap-3 rounded-[12px] bg-white px-3 py-2.5 ring-1 ring-black/5">
+                        <div>
+                          <div className="text-[12.5px] font-semibold text-[#172033]">
+                            Responder cuando Cande está apagada
+                          </div>
+                          <p className="mt-0.5 text-[11px] font-normal leading-relaxed text-[#64748b]">
+                            Si entra un WhatsApp fuera de horario y Cande no está activa, LiveNos envía este mensaje automático.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateDraft(
+                              "auto_reply_fuera_horario_enabled",
+                              !configDraft.auto_reply_fuera_horario_enabled
+                            )
+                          }
+                          className={[
+                            "relative h-6 w-11 shrink-0 rounded-full transition",
+                            configDraft.auto_reply_fuera_horario_enabled
+                              ? "bg-emerald-500"
+                              : "bg-slate-300"
+                          ].join(" ")}
+                          aria-label="Activar auto-respuesta fuera de horario"
+                        >
+                          <span
+                            className={[
+                              "absolute top-1 h-4 w-4 rounded-full bg-white shadow transition",
+                              configDraft.auto_reply_fuera_horario_enabled ? "left-6" : "left-1"
+                            ].join(" ")}
+                          />
+                        </button>
+                      </div>
+
                       <div>
-                        <FieldLabel>Horario inicio</FieldLabel>
+                        <FieldLabel>Zona horaria</FieldLabel>
                         <TextInput
-                          value={normalizeTime(configDraft.horario_inicio)}
-                          onChange={(value) => updateDraft("horario_inicio", value)}
-                          placeholder="09:00"
+                          value={horarioConfig.timezone}
+                          onChange={(value) => updateHorarioConfig({ timezone: value })}
+                          placeholder="America/Argentina/Cordoba"
                         />
                       </div>
 
                       <div>
-                        <FieldLabel>Horario fin</FieldLabel>
+                        <FieldLabel>Cooldown en horas</FieldLabel>
                         <TextInput
-                          value={normalizeTime(configDraft.horario_fin)}
-                          onChange={(value) => updateDraft("horario_fin", value)}
-                          placeholder="22:00"
+                          type="number"
+                          value={String(horarioConfig.cooldown_hours)}
+                          onChange={(value) =>
+                            updateHorarioConfig({
+                              cooldown_hours: toNumber(value, 8)
+                            })
+                          }
+                          placeholder="8"
                         />
+                        <p className="mt-1 text-[10.5px] font-normal text-[#64748b]">
+                          Evita mandar varias respuestas automáticas seguidas en la misma conversación.
+                        </p>
                       </div>
 
                       <div>
-                        <FieldLabel>Espera antes de responder</FieldLabel>
+                        <FieldLabel>Espera antes de responder Cande</FieldLabel>
                         <TextInput
+                          type="number"
                           value={String(configDraft.espera_minutos)}
-                          onChange={(value) => updateDraft("espera_minutos", toNumber(value, 0))}
+                          onChange={(value) =>
+                            updateDraft("espera_minutos", toNumber(value, 0))
+                          }
                           placeholder="5"
                         />
                       </div>
                     </div>
                   </Card>
 
-                  <Card title="Días laborales">
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {DAY_OPTIONS.map((day) => (
-                        <ToggleButton
-                          key={day.value}
-                          active={(configDraft.dias_laborales || []).includes(day.value)}
-                          onClick={() => toggleDay(day.value)}
-                        >
-                          {day.label}
-                        </ToggleButton>
-                      ))}
-                    </div>
+                  <Card title="Mensajes automáticos">
+                    <div className="grid gap-2.5">
+                      <div>
+                        <FieldLabel>Mensaje fuera de horario</FieldLabel>
+                        <TextArea
+                          value={configDraft.mensaje_fuera_horario || ""}
+                          onChange={(value) => updateDraft("mensaje_fuera_horario", value)}
+                          rows={5}
+                          placeholder="Gracias por escribirnos. En este momento estamos fuera de nuestro horario de atención..."
+                        />
+                      </div>
 
-                    <p className="mt-2 text-[11px] font-normal text-[#64748b]">
-                      Activos: {formatDays(configDraft.dias_laborales)}
-                    </p>
+                      <div>
+                        <FieldLabel>Mensaje día no laborable / fin de semana</FieldLabel>
+                        <TextArea
+                          value={configDraft.mensaje_fin_semana || ""}
+                          onChange={(value) => updateDraft("mensaje_fin_semana", value)}
+                          rows={5}
+                          placeholder="Gracias por escribirnos. Nuestro equipo retomará la atención el próximo día hábil..."
+                        />
+                      </div>
+                    </div>
                   </Card>
                 </aside>
 
-                <div className="xl:col-span-2 flex justify-end">
+                <div className="flex justify-end xl:col-span-2">
                   <ActionButton onClick={saveConfig} disabled={saving}>
                     {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
                     Guardar configuración general
@@ -1114,7 +1395,11 @@ export function CandePanel() {
                   <div className="grid gap-2.5 md:grid-cols-2">
                     <div>
                       <FieldLabel>Nombre IA</FieldLabel>
-                      <TextInput value={configDraft.nombre_ia} onChange={(value) => updateDraft("nombre_ia", value)} placeholder="Cande" />
+                      <TextInput
+                        value={configDraft.nombre_ia}
+                        onChange={(value) => updateDraft("nombre_ia", value)}
+                        placeholder="Cande"
+                      />
                     </div>
 
                     <div>
@@ -1131,7 +1416,11 @@ export function CandePanel() {
                     <FieldLabel>Modelo</FieldLabel>
                     <div className="grid grid-cols-2 gap-1.5 md:grid-cols-4">
                       {MODEL_OPTIONS.map((model) => (
-                        <ToggleButton key={model} active={configDraft.modelo === model} onClick={() => updateDraft("modelo", model)}>
+                        <ToggleButton
+                          key={model}
+                          active={configDraft.modelo === model}
+                          onClick={() => updateDraft("modelo", model)}
+                        >
                           {model}
                         </ToggleButton>
                       ))}
@@ -1140,17 +1429,30 @@ export function CandePanel() {
 
                   <div className="mt-2.5">
                     <FieldLabel>Tono</FieldLabel>
-                    <TextArea value={configDraft.tono} onChange={(value) => updateDraft("tono", value)} rows={3} />
+                    <TextArea
+                      value={configDraft.tono}
+                      onChange={(value) => updateDraft("tono", value)}
+                      rows={3}
+                    />
                   </div>
 
-                  <div className="mt-2.5">
+
+                                    <div className="mt-2.5">
                     <FieldLabel>Prompt base</FieldLabel>
-                    <TextArea value={configDraft.prompt_base} onChange={(value) => updateDraft("prompt_base", value)} rows={7} />
+                    <TextArea
+                      value={configDraft.prompt_base}
+                      onChange={(value) => updateDraft("prompt_base", value)}
+                      rows={7}
+                    />
                   </div>
 
                   <div className="mt-2.5">
                     <FieldLabel>Reglas duras</FieldLabel>
-                    <TextArea value={configDraft.reglas_duras} onChange={(value) => updateDraft("reglas_duras", value)} rows={5} />
+                    <TextArea
+                      value={configDraft.reglas_duras}
+                      onChange={(value) => updateDraft("reglas_duras", value)}
+                      rows={5}
+                    />
                   </div>
                 </Card>
 
@@ -1187,7 +1489,7 @@ export function CandePanel() {
                       <div>
                         <FieldLabel>Fuera de horario</FieldLabel>
                         <TextArea
-                          value={cleanText(configDraft.mensaje_fuera_horario)}
+                         value={configDraft.mensaje_fuera_horario || ""}
                           onChange={(value) => updateDraft("mensaje_fuera_horario", value)}
                           rows={3}
                         />
@@ -1206,7 +1508,7 @@ export function CandePanel() {
                   </Card>
                 </aside>
 
-                <div className="xl:col-span-2 flex justify-end">
+                <div className="flex justify-end xl:col-span-2">
                   <ActionButton onClick={saveConfig} disabled={saving}>
                     {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
                     Guardar identidad y reglas
@@ -1245,7 +1547,9 @@ export function CandePanel() {
                       <FieldLabel>Pregunta sugerida</FieldLabel>
                       <TextArea
                         value={campoDraft.pregunta_sugerida}
-                        onChange={(value) => setCampoDraft((current) => ({ ...current, pregunta_sugerida: value }))}
+                        onChange={(value) =>
+                          setCampoDraft((current) => ({ ...current, pregunta_sugerida: value }))
+                        }
                         rows={3}
                         placeholder="¿A dónde te gustaría viajar?"
                       />
@@ -1299,7 +1603,9 @@ export function CandePanel() {
                   subtitle={`Alimentan oportunidad comercial y score. Total actual: ${totalScoreCampos}/100.`}
                 >
                   <div className="space-y-2">
-                    {sortedCampos.length === 0 ? <EmptyState title="Sin campos" subtitle="Agregá el primer campo a relevar." /> : null}
+                    {sortedCampos.length === 0 ? (
+                      <EmptyState title="Sin campos" subtitle="Agregá el primer campo a relevar." />
+                    ) : null}
 
                     {sortedCampos.map((campo) => (
                       <article key={campo.id} className="rounded-[12px] border border-black/10 bg-white p-3">
@@ -1347,7 +1653,11 @@ export function CandePanel() {
 
             {activeTab === "faqs" ? (
               <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                <Card title={editingFaqId ? "Editar FAQ" : "Nueva FAQ"} subtitle="Respuestas autorizadas que Cande puede usar." icon={<HelpCircle size={15} />}>
+                <Card
+                  title={editingFaqId ? "Editar FAQ" : "Nueva FAQ"}
+                  subtitle="Respuestas autorizadas que Cande puede usar."
+                  icon={<HelpCircle size={15} />}
+                >
                   <div className="grid gap-2.5">
                     <div>
                       <FieldLabel>Pregunta</FieldLabel>
@@ -1371,7 +1681,11 @@ export function CandePanel() {
 
                     <div>
                       <FieldLabel>Orden</FieldLabel>
-                      <TextInput value={faqDraft.orden} onChange={(value) => setFaqDraft((current) => ({ ...current, orden: value }))} placeholder="1" />
+                      <TextInput
+                        value={faqDraft.orden}
+                        onChange={(value) => setFaqDraft((current) => ({ ...current, orden: value }))}
+                        placeholder="1"
+                      />
                     </div>
 
                     <div className="flex gap-2">
@@ -1392,7 +1706,9 @@ export function CandePanel() {
 
                 <Card title="FAQs cargadas" subtitle="Base de respuestas comerciales permitidas.">
                   <div className="space-y-2">
-                    {sortedFaqs.length === 0 ? <EmptyState title="Sin FAQs" subtitle="Agregá la primera pregunta frecuente." /> : null}
+                    {sortedFaqs.length === 0 ? (
+                      <EmptyState title="Sin FAQs" subtitle="Agregá la primera pregunta frecuente." />
+                    ) : null}
 
                     {sortedFaqs.map((faq) => (
                       <article key={faq.id} className="rounded-[12px] border border-black/10 bg-white p-3">
@@ -1403,7 +1719,9 @@ export function CandePanel() {
                               <SmallPill>Orden {faq.orden}</SmallPill>
                             </div>
 
-                            <p className="mt-2 text-[11px] font-normal leading-relaxed text-[#64748b]">{faq.respuesta}</p>
+                            <p className="mt-2 text-[11px] font-normal leading-relaxed text-[#64748b]">
+                              {faq.respuesta}
+                            </p>
                           </div>
 
                           <div className="flex shrink-0 gap-1.5">
@@ -1436,7 +1754,11 @@ export function CandePanel() {
             {activeTab === "scoring" ? (
               <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
                 <div className="space-y-3.5">
-                  <Card title={editingPalabraId ? "Editar palabra" : "Nueva palabra"} subtitle="Estas palabras o frases suman score." icon={<Target size={15} />}>
+                  <Card
+                    title={editingPalabraId ? "Editar palabra" : "Nueva palabra"}
+                    subtitle="Estas palabras o frases suman score."
+                    icon={<Target size={15} />}
+                  >
                     <div className="grid gap-2.5">
                       <div>
                         <FieldLabel>Palabra o frase</FieldLabel>
@@ -1521,30 +1843,40 @@ export function CandePanel() {
 
                         <ToggleButton
                           active={Boolean(configDraft.derivar_si_score_supera_umbral)}
-                          onClick={() => updateDraft("derivar_si_score_supera_umbral", !configDraft.derivar_si_score_supera_umbral)}
+                          onClick={() =>
+                            updateDraft("derivar_si_score_supera_umbral", !configDraft.derivar_si_score_supera_umbral)
+                          }
                         >
                           {configDraft.derivar_si_score_supera_umbral ? "Deriva por score: Sí" : "Deriva por score: No"}
                         </ToggleButton>
 
                         <ToggleButton
                           active={Boolean(configDraft.pedir_presupuesto_antes_derivar)}
-                          onClick={() => updateDraft("pedir_presupuesto_antes_derivar", !configDraft.pedir_presupuesto_antes_derivar)}
+                          onClick={() =>
+                            updateDraft("pedir_presupuesto_antes_derivar", !configDraft.pedir_presupuesto_antes_derivar)
+                          }
                         >
                           {configDraft.pedir_presupuesto_antes_derivar ? "Pide presupuesto antes: Sí" : "Pide presupuesto antes: No"}
                         </ToggleButton>
 
                         <ToggleButton
                           active={Boolean(configDraft.confirmar_origen_sugerido)}
-                          onClick={() => updateDraft("confirmar_origen_sugerido", !configDraft.confirmar_origen_sugerido)}
+                          onClick={() =>
+                            updateDraft("confirmar_origen_sugerido", !configDraft.confirmar_origen_sugerido)
+                          }
                         >
                           {configDraft.confirmar_origen_sugerido ? "Confirma origen sugerido: Sí" : "Confirma origen sugerido: No"}
                         </ToggleButton>
 
                         <ToggleButton
                           active={Boolean(configDraft.origen_sugerido_suma_score)}
-                          onClick={() => updateDraft("origen_sugerido_suma_score", !configDraft.origen_sugerido_suma_score)}
+                          onClick={() =>
+                            updateDraft("origen_sugerido_suma_score", !configDraft.origen_sugerido_suma_score)
+                          }
                         >
-                          {configDraft.origen_sugerido_suma_score ? "Origen sugerido suma score: Sí" : "Origen sugerido suma score: No"}
+                          {configDraft.origen_sugerido_suma_score
+                            ? "Origen sugerido suma score: Sí"
+                            : "Origen sugerido suma score: No"}
                         </ToggleButton>
                       </div>
 
@@ -1600,7 +1932,9 @@ export function CandePanel() {
 
                   <Card title="Palabras clave" subtitle="Ajustan manualmente la temperatura del lead.">
                     <div className="grid gap-2 md:grid-cols-2">
-                      {palabras.length === 0 ? <EmptyState title="Sin palabras clave" subtitle="Agregá frases que indiquen intención comercial." /> : null}
+                      {palabras.length === 0 ? (
+                        <EmptyState title="Sin palabras clave" subtitle="Agregá frases que indiquen intención comercial." />
+                      ) : null}
 
                       {palabras.map((item) => (
                         <article key={item.id} className="rounded-[12px] border border-black/10 bg-white p-3">
@@ -1640,7 +1974,11 @@ export function CandePanel() {
 
             {activeTab === "pipeline" ? (
               <div className="grid gap-3.5 xl:grid-cols-[340px_minmax(0,1fr)]">
-                <Card title={editingPipelineId ? "Editar estado" : "Nuevo estado"} subtitle="Estados del pipeline comercial generado por Cande." icon={<SlidersHorizontal size={15} />}>
+                <Card
+                  title={editingPipelineId ? "Editar estado" : "Nuevo estado"}
+                  subtitle="Estados del pipeline comercial generado por Cande."
+                  icon={<SlidersHorizontal size={15} />}
+                >
                   <div className="grid gap-2.5">
                     <div>
                       <FieldLabel>Nombre</FieldLabel>
@@ -1700,7 +2038,12 @@ export function CandePanel() {
 
                       <ToggleButton
                         active={pipelineDraft.es_sin_atender}
-                        onClick={() => setPipelineDraft((current) => ({ ...current, es_sin_atender: !current.es_sin_atender }))}
+                        onClick={() =>
+                          setPipelineDraft((current) => ({
+                            ...current,
+                            es_sin_atender: !current.es_sin_atender
+                          }))
+                        }
                       >
                         {pipelineDraft.es_sin_atender ? "Sin atender" : "Normal"}
                       </ToggleButton>
@@ -1724,14 +2067,19 @@ export function CandePanel() {
 
                 <Card title="Pipeline de oportunidades" subtitle="Orden y comportamiento de cada columna.">
                   <div className="space-y-2">
-                    {sortedPipeline.length === 0 ? <EmptyState title="Sin pipeline" subtitle="Agregá los estados comerciales." /> : null}
+                    {sortedPipeline.length === 0 ? (
+                      <EmptyState title="Sin pipeline" subtitle="Agregá los estados comerciales." />
+                    ) : null}
 
                     {sortedPipeline.map((estado) => (
                       <article key={estado.id} className="rounded-[12px] border border-black/10 bg-white p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: estado.color || "#8b5cf6" }} />
+                              <span
+                                className="h-2.5 w-2.5 rounded-full"
+                                style={{ backgroundColor: estado.color || "#8b5cf6" }}
+                              />
                               <h3 className="text-[12.5px] font-semibold text-[#172033]">{estado.nombre}</h3>
                               <SmallPill>Orden {estado.orden}</SmallPill>
                               {estado.es_final ? <SmallPill>Final</SmallPill> : null}

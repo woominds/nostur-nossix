@@ -104,6 +104,17 @@ export const appRegistry: RegisteredApp[] = [
     category: "web"
   },
 
+    {
+    id: "mail",
+    name: "Mail",
+    url: "internal://mail",
+    homeUrl: "internal://mail",
+    partition: "persist:internal",
+    color: "#7c3aed",
+    category: "work"
+  },
+
+
   {
     id: "livenos",
     name: "LiveNos",
@@ -443,6 +454,14 @@ export function getAppById(appId: string): RegisteredApp {
     return getAppById("oportunidades");
   }
 
+
+
+  if (appId === "email" || appId === "correo") {
+
+    return getAppById("mail");
+
+  }
+
   return appRegistry.find((app) => app.id === appId) || getAppById("web");
 }
 
@@ -458,6 +477,14 @@ export function findAppByUrl(url: string): RegisteredApp {
 
     if (url === "internal://contactos") {
       return getAppById("oportunidades");
+    }
+
+
+
+    if (url === "internal://email" || url === "internal://correo") {
+
+      return getAppById("mail");
+
     }
 
     return appRegistry.find((app) => app.url === url || app.homeUrl === url) || getAppById("web");

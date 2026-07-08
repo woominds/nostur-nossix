@@ -42,3 +42,7 @@ builder-effective-config.yaml
 .cache/
 .temp/
 tmp/
+# Local mail server / pruebas
+mail-server/
+Logs
+whatsapp-webhook
