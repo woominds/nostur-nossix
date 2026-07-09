@@ -120,6 +120,30 @@ function normalizeMessageType(type?: string | null, mime?: string | null) {
   return cleanType || "text";
 }
 
+function cleanMimeType(mime?: string | null) {
+  return String(mime || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+}
+
+function getOutgoingFileMessageType(file: File) {
+  const mime = cleanMimeType(file.type);
+
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+
+  if (mime.startsWith("audio/")) {
+    // WhatsApp no acepta audio/webm como nota de voz/media audio.
+    // Lo mandamos como documento para que al menos llegue.
+    if (mime === "audio/webm") return "document";
+
+    return "audio";
+  }
+
+  return "document";
+}
+
 function safeJsonParse(value: unknown): any {
   if (!value) return null;
   if (typeof value === "object") return value;
@@ -184,11 +208,12 @@ async function uploadMobileChatFile(file: File, conversationId: string): Promise
   const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `${conversationId}/${Date.now()}-${safeName || `archivo.${ext}`}`;
+  const contentType = cleanMimeType(file.type) || "application/octet-stream";
 
   const uploadRes = await supabase.storage.from(MOBILE_CHAT_MEDIA_BUCKET).upload(path, file, {
     cacheControl: "3600",
     upsert: false,
-    contentType: file.type || undefined
+    contentType
   });
 
   if (uploadRes.error) {
@@ -206,8 +231,8 @@ async function uploadMobileChatFile(file: File, conversationId: string): Promise
     url: publicUrl,
     path,
     filename: file.name || path.split("/").pop() || "archivo",
-    mime_type: file.type || "application/octet-stream",
-    content_type: file.type || "application/octet-stream",
+    mime_type: contentType,
+    content_type: contentType,
     size_bytes: file.size
   };
 }
@@ -2232,7 +2257,7 @@ export function MobileChatsScreen() {
 
     try {
       const media = await uploadMobileChatFile(file, selectedConversation.id);
-      const type = normalizeMessageType(undefined, file.type);
+      const type = getOutgoingFileMessageType(file);
 
       setComposerText("");
       setReplyingTo(null);
@@ -2262,54 +2287,89 @@ export function MobileChatsScreen() {
     await sendFileMessage(file);
   }
 
-  async function toggleAudioRecording() {
-    if (recording) {
-      try {
-        mediaRecorderRef.current?.stop();
-      } catch {
-        setRecording(false);
-      }
-      return;
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("El navegador no permite grabar audio desde esta pantalla.");
-      return;
-    }
-
+async function toggleAudioRecording() {
+  if (recording) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstop = () => {
-        const mimeType = recorder.mimeType || "audio/webm";
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        stream.getTracks().forEach((track) => track.stop());
-        mediaRecorderRef.current = null;
-        setRecording(false);
-
-        if (blob.size > 0) {
-          const extension = mimeType.includes("mp4") || mimeType.includes("m4a") ? "m4a" : "webm";
-          const file = new File([blob], `audio-${Date.now()}.${extension}`, { type: mimeType });
-          setPendingAudio(file);
-        }
-      };
-
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setRecording(true);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "No se pudo acceder al micrófono.");
+      mediaRecorderRef.current?.stop();
+    } catch {
       setRecording(false);
     }
+    return;
   }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setError("El navegador no permite grabar audio desde esta pantalla.");
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+    const preferredAudioMimeTypes = [
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+      "audio/mp4",
+      "audio/webm;codecs=opus",
+      "audio/webm"
+    ];
+
+    const supportedAudioMimeType =
+      preferredAudioMimeTypes.find((mimeType) => {
+        try {
+          return typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(mimeType);
+        } catch {
+          return false;
+        }
+      }) || "";
+
+    const recorder = supportedAudioMimeType
+      ? new MediaRecorder(stream, { mimeType: supportedAudioMimeType })
+      : new MediaRecorder(stream);
+
+    audioChunksRef.current = [];
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data);
+      }
+    };
+
+    recorder.onstop = () => {
+      const recorderMimeType = recorder.mimeType || supportedAudioMimeType || "audio/webm";
+      const contentType = cleanMimeType(recorderMimeType) || "audio/webm";
+
+      const blob = new Blob(audioChunksRef.current, { type: recorderMimeType });
+
+      stream.getTracks().forEach((track) => track.stop());
+      mediaRecorderRef.current = null;
+      setRecording(false);
+
+      if (blob.size > 0) {
+        const extension =
+          contentType === "audio/ogg"
+            ? "ogg"
+            : contentType === "audio/mp4"
+              ? "m4a"
+              : contentType === "audio/mpeg"
+                ? "mp3"
+                : "webm";
+
+        const file = new File([blob], `audio-${Date.now()}.${extension}`, {
+          type: contentType
+        });
+
+        setPendingAudio(file);
+      }
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+    setRecording(true);
+  } catch (error) {
+    setError(error instanceof Error ? error.message : "No se pudo acceder al micrófono.");
+    setRecording(false);
+  }
+}
 
   function setReply(message: MobileMensaje) {
     setReplyingTo(message);
