@@ -110,12 +110,26 @@ type WhatsAppSendPayload = {
 
 function normalizeMessageType(type?: string | null, mime?: string | null) {
   const cleanType = String(type || "").toLowerCase();
-  const cleanMime = String(mime || "").toLowerCase();
+  const cleanMime = cleanMimeType(mime);
+
+  // Si el envío lo fuerza como documento, respetarlo.
+  // Esto es clave para audios m4a/mp4/webm grabados desde mobile,
+  // porque WhatsApp los rechaza como "audio" pero pueden entrar como documento.
+  if (cleanType === "document" || cleanType === "file") return "document";
 
   if (cleanType === "image" || cleanMime.startsWith("image/")) return "image";
-  if (cleanType === "audio" || cleanMime.startsWith("audio/")) return "audio";
   if (cleanType === "video" || cleanMime.startsWith("video/")) return "video";
-  if (cleanType === "document" || cleanType === "file" || cleanMime) return "document";
+
+  if (cleanType === "audio" || cleanMime.startsWith("audio/")) {
+    const isAcceptedWhatsappAudio =
+      cleanMime === "audio/mpeg" ||
+      cleanMime === "audio/mp3" ||
+      cleanMime === "audio/ogg";
+
+    return isAcceptedWhatsappAudio ? "audio" : "document";
+  }
+
+  if (cleanMime) return "document";
 
   return cleanType || "text";
 }
