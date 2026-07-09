@@ -129,16 +129,20 @@ function cleanMimeType(mime?: string | null) {
 
 function getOutgoingFileMessageType(file: File) {
   const mime = cleanMimeType(file.type);
+  const filename = String(file.name || "").toLowerCase();
 
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("video/")) return "video";
 
   if (mime.startsWith("audio/")) {
-    // WhatsApp no acepta audio/webm como nota de voz/media audio.
-    // Lo mandamos como documento para que al menos llegue.
-    if (mime === "audio/webm") return "document";
+    const isAcceptedWhatsappAudio =
+      mime === "audio/mpeg" ||
+      mime === "audio/mp3" ||
+      mime === "audio/ogg" ||
+      filename.endsWith(".mp3") ||
+      filename.endsWith(".ogg");
 
-    return "audio";
+    return isAcceptedWhatsappAudio ? "audio" : "document";
   }
 
   return "document";
@@ -2345,12 +2349,12 @@ async function toggleAudioRecording() {
       setRecording(false);
 
       if (blob.size > 0) {
-        const extension =
+    const extension =
   contentType === "audio/ogg"
     ? "ogg"
     : contentType === "audio/mp4"
-      ? "mp4"
-      : contentType === "audio/mpeg"
+      ? "m4a"
+      : contentType === "audio/mpeg" || contentType === "audio/mp3"
         ? "mp3"
         : "webm";
 
