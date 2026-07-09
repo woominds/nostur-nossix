@@ -108,8 +108,6 @@ type WhatsAppSendPayload = {
   forwarded?: boolean;
 };
 
-
-
 function normalizeMessageType(type?: string | null, mime?: string | null) {
   const cleanType = String(type || "").toLowerCase();
   const cleanMime = String(mime || "").toLowerCase();
@@ -759,6 +757,7 @@ function ConversationDetail({
   joining,
   uploading,
   recording,
+  pendingAudioPreviewUrl,
   canJoin,
   privateMode,
   text,
@@ -776,6 +775,8 @@ function ConversationDetail({
   onPickFile,
   onFileSelected,
   onToggleRecording,
+  onSendPendingAudio,
+  onDiscardPendingAudio,
   onSetReplyingTo,
   onCancelReply,
   onStartForward,
@@ -796,6 +797,7 @@ function ConversationDetail({
   joining: boolean;
   uploading: boolean;
   recording: boolean;
+  pendingAudioPreviewUrl: string | null;
   canJoin: boolean;
   privateMode: boolean;
   text: string;
@@ -804,7 +806,7 @@ function ConversationDetail({
   activeMessageId: string | null;
   emojiPickerOpen: boolean;
   reactionTargetId: string | null;
- fileInputRef: RefObject<HTMLInputElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
   onTextChange: (value: string) => void;
   onPrivateModeChange: (value: boolean) => void;
   onBack: () => void;
@@ -813,6 +815,8 @@ function ConversationDetail({
   onPickFile: () => void;
   onFileSelected: (file: File) => void;
   onToggleRecording: () => void;
+  onSendPendingAudio: () => void;
+  onDiscardPendingAudio: () => void;
   onSetReplyingTo: (message: MobileMensaje) => void;
   onCancelReply: () => void;
   onStartForward: (message: MobileMensaje) => void;
@@ -1096,6 +1100,37 @@ function ConversationDetail({
           </div>
         ) : null}
 
+        {pendingAudioPreviewUrl ? (
+          <div className="mb-2 rounded-2xl border border-[#172033]/10 bg-[#f8fafc] p-2 shadow-sm">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2 text-[11px] font-semibold text-[#172033]">
+                <Mic size={14} className="shrink-0" />
+                Audio grabado listo para enviar
+              </div>
+              <button
+                type="button"
+                onClick={onDiscardPendingAudio}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white text-[#64748b] shadow-sm"
+                title="Descartar audio"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <audio controls src={pendingAudioPreviewUrl} className="min-w-0 flex-1" />
+              <button
+                type="button"
+                onClick={onSendPendingAudio}
+                disabled={sending || uploading}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#172033] text-white shadow-sm disabled:opacity-50"
+                title="Enviar audio"
+              >
+                {sending || uploading ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         {emojiPickerOpen ? (
           <div className="mb-2 flex gap-1 rounded-2xl border border-black/10 bg-white p-1.5 shadow-sm">
             {QUICK_EMOJIS.map((emoji) => (
@@ -1173,7 +1208,7 @@ function ConversationDetail({
             ].join(" ")}
           />
 
-          {!text.trim() && !privateMode ? (
+          {!text.trim() && !pendingAudioPreviewUrl && !privateMode ? (
             <button
               type="button"
               onClick={onToggleRecording}
@@ -1190,13 +1225,13 @@ function ConversationDetail({
             <button
               type="button"
               onClick={onSend}
-              disabled={sending || uploading || !text.trim()}
+              disabled={sending || uploading || (!text.trim() && !pendingAudioPreviewUrl)}
               className={[
                 "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-sm disabled:opacity-50",
                 privateMode ? "bg-amber-600" : "bg-[#172033]"
               ].join(" ")}
             >
-              {sending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+              {sending || uploading ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
             </button>
           )}
         </div>
@@ -1212,6 +1247,8 @@ export function MobileChatsScreen() {
   const [joining, setJoining] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [pendingAudioFile, setPendingAudioFile] = useState<File | null>(null);
+  const [pendingAudioPreviewUrl, setPendingAudioPreviewUrl] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [currentProfile, setCurrentProfile] = useState<MobileProfile | null>(null);
@@ -1242,6 +1279,28 @@ export function MobileChatsScreen() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  function setPendingAudio(file: File) {
+    setPendingAudioFile(file);
+    setPendingAudioPreviewUrl((currentUrl) => {
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
+      }
+
+      return URL.createObjectURL(file);
+    });
+  }
+
+  function discardPendingAudio() {
+    setPendingAudioFile(null);
+    setPendingAudioPreviewUrl((currentUrl) => {
+      if (currentUrl) {
+        URL.revokeObjectURL(currentUrl);
+      }
+
+      return null;
+    });
+  }
+
   const selectedKindRef = useRef(selectedKind);
   const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
   const niaConversationIdRef = useRef<string | null>(niaConversation?.id || null);
@@ -1253,6 +1312,18 @@ export function MobileChatsScreen() {
     if (!selectedConversationId) return null;
     return conversations.find((conv) => conv.id === selectedConversationId) || null;
   }, [conversations, selectedConversationId]);
+
+  useEffect(() => {
+    return () => {
+      setPendingAudioPreviewUrl((currentUrl) => {
+        if (currentUrl) {
+          URL.revokeObjectURL(currentUrl);
+        }
+
+        return null;
+      });
+    };
+  }, [selectedConversationId]);
 
   const visibleMensajes = useMemo(() => {
     if (!selectedConversationId) return mensajes;
@@ -1886,7 +1957,14 @@ export function MobileChatsScreen() {
   }
 
   async function sendPrivateMessage() {
-    if (!selectedConversation || !composerText.trim()) return;
+    if (!selectedConversation) return;
+
+    if (!privateMode && pendingAudioFile && !composerText.trim()) {
+      await sendPendingAudioMessage();
+      return;
+    }
+
+    if (!composerText.trim()) return;
 
     setSending(true);
     setError(null);
@@ -2102,7 +2180,14 @@ export function MobileChatsScreen() {
       return;
     }
 
-    if (!selectedConversation || !composerText.trim()) return;
+    if (!selectedConversation) return;
+
+    if (!privateMode && pendingAudioFile && !composerText.trim()) {
+      await sendPendingAudioMessage();
+      return;
+    }
+
+    if (!composerText.trim()) return;
 
     setSending(true);
     setError(null);
@@ -2169,6 +2254,14 @@ export function MobileChatsScreen() {
     }
   }
 
+  async function sendPendingAudioMessage() {
+    if (!pendingAudioFile || !selectedConversation || privateMode) return;
+
+    const file = pendingAudioFile;
+    discardPendingAudio();
+    await sendFileMessage(file);
+  }
+
   async function toggleAudioRecording() {
     if (recording) {
       try {
@@ -2205,7 +2298,7 @@ export function MobileChatsScreen() {
         if (blob.size > 0) {
           const extension = mimeType.includes("mp4") || mimeType.includes("m4a") ? "m4a" : "webm";
           const file = new File([blob], `audio-${Date.now()}.${extension}`, { type: mimeType });
-          void sendFileMessage(file);
+          setPendingAudio(file);
         }
       };
 
@@ -2440,6 +2533,7 @@ export function MobileChatsScreen() {
         joining={joining}
         uploading={uploading}
         recording={recording}
+        pendingAudioPreviewUrl={pendingAudioPreviewUrl}
         canJoin={currentUserCanJoinSelectedConversation}
         privateMode={privateMode}
         text={composerText}
@@ -2457,6 +2551,8 @@ export function MobileChatsScreen() {
         onPickFile={pickFile}
         onFileSelected={(file) => void sendFileMessage(file)}
         onToggleRecording={() => void toggleAudioRecording()}
+        onSendPendingAudio={() => void sendPendingAudioMessage()}
+        onDiscardPendingAudio={discardPendingAudio}
         onSetReplyingTo={setReply}
         onCancelReply={() => setReplyingTo(null)}
         onStartForward={startForward}
