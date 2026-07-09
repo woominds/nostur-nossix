@@ -2346,13 +2346,13 @@ async function toggleAudioRecording() {
 
       if (blob.size > 0) {
         const extension =
-          contentType === "audio/ogg"
-            ? "ogg"
-            : contentType === "audio/mp4"
-              ? "m4a"
-              : contentType === "audio/mpeg"
-                ? "mp3"
-                : "webm";
+  contentType === "audio/ogg"
+    ? "ogg"
+    : contentType === "audio/mp4"
+      ? "mp4"
+      : contentType === "audio/mpeg"
+        ? "mp3"
+        : "webm";
 
         const file = new File([blob], `audio-${Date.now()}.${extension}`, {
           type: contentType
