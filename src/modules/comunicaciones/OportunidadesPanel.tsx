@@ -396,6 +396,8 @@ function getPresupuestoOportunidad(item: OportunidadVM) {
   );
 }
 
+
+
 function getOrigenComercialLabel(item: OportunidadVM) {
   const value =
     cleanText(item.origen) ||
@@ -1031,71 +1033,87 @@ const nextOportunidades = allOportunidades.filter((opp) => {
     }
   }, [canSeeAll, sellerFilter]);
 
-  useEffect(() => {
-    const channelName = `oportunidades-realtime-${Date.now()}`;
+useEffect(() => {
+  const channelName = `oportunidades-realtime-${Date.now()}`;
 
-    const refreshSilent = () => {
-      if (realtimeTimerRef.current) {
-        window.clearTimeout(realtimeTimerRef.current);
-      }
-
-      realtimeTimerRef.current = window.setTimeout(() => {
-        void loadData({ silent: true });
-      }, 300);
-    };
-
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "lead_oportunidades"
-        },
-        refreshSilent
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "conversaciones"
-        },
-        refreshSilent
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "contactos_wa"
-        },
-        refreshSilent
-      )
-      .subscribe((subscriptionStatus) => {
-        console.log("[Oportunidades realtime]", subscriptionStatus);
-      });
-
-    function handleNiaActionExecuted() {
-      refreshSilent();
+  const refreshSilent = () => {
+    if (realtimeTimerRef.current) {
+      window.clearTimeout(realtimeTimerRef.current);
     }
 
-    window.addEventListener("nostur:nia-action-executed", handleNiaActionExecuted);
+    realtimeTimerRef.current = window.setTimeout(() => {
+      void loadData({ silent: true });
+    }, 300);
+  };
 
-    return () => {
-      if (realtimeTimerRef.current) {
-        window.clearTimeout(realtimeTimerRef.current);
-      }
+  const refreshImmediate = () => {
+    if (realtimeTimerRef.current) {
+      window.clearTimeout(realtimeTimerRef.current);
+      realtimeTimerRef.current = null;
+    }
 
-      if (statusTimerRef.current) {
-        window.clearTimeout(statusTimerRef.current);
-      }
+    void loadData({ silent: true });
+  };
 
-      window.removeEventListener("nostur:nia-action-executed", handleNiaActionExecuted);
-      supabase.removeChannel(channel);
-    };
-  }, [loadData]);
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "lead_oportunidades"
+      },
+      refreshSilent
+    )
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "conversaciones"
+      },
+      refreshSilent
+    )
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "contactos_wa"
+      },
+      refreshSilent
+    )
+    .subscribe((subscriptionStatus) => {
+      console.log("[Oportunidades realtime]", subscriptionStatus);
+    });
+
+  function handleNiaActionExecuted() {
+    refreshImmediate();
+  }
+
+  function handleOportunidadesRefresh() {
+    refreshImmediate();
+  }
+
+  window.addEventListener("nostur:nia-action-executed", handleNiaActionExecuted);
+  window.addEventListener("nostur:oportunidades-refresh", handleOportunidadesRefresh);
+
+  return () => {
+    if (realtimeTimerRef.current) {
+      window.clearTimeout(realtimeTimerRef.current);
+    }
+
+    if (statusTimerRef.current) {
+      window.clearTimeout(statusTimerRef.current);
+    }
+
+    window.removeEventListener("nostur:nia-action-executed", handleNiaActionExecuted);
+    window.removeEventListener("nostur:oportunidades-refresh", handleOportunidadesRefresh);
+
+    supabase.removeChannel(channel);
+  };
+}, [loadData]);
 
   useEffect(() => {
     if (!status) return;
@@ -1858,21 +1876,23 @@ function canActOnOpportunity(item: OportunidadVM) {
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
       {renderManualOpportunityModal()}
-
-      <OportunidadDetalleModal
-        open={Boolean(selectedOpportunity)}
-        oportunidad={selectedOpportunityForModal}
-        estados={estados}
-        contacto={selectedOpportunity?.contacto || null}
-        conversacion={selectedOpportunity?.conversacion || null}
-        onClose={() => setSelectedOpportunity(null)}
-        onOpenConversation={() => {
-          if (selectedOpportunity) void openConversation(selectedOpportunity);
-        }}
-        onCreateBudget={createBudgetFromSelectedOpportunity}
-        onCreateCart={createCartFromSelectedOpportunity}
-        onCreateFile={createFileFromSelectedOpportunity}
-      />
+<OportunidadDetalleModal
+  open={Boolean(selectedOpportunity)}
+  oportunidad={selectedOpportunityForModal}
+  estados={estados}
+  contacto={selectedOpportunity?.contacto || null}
+  conversacion={selectedOpportunity?.conversacion || null}
+  onClose={() => {
+    setSelectedOpportunity(null);
+    void loadData({ silent: true });
+  }}
+  onOpenConversation={() => {
+    if (selectedOpportunity) void openConversation(selectedOpportunity);
+  }}
+  onCreateBudget={createBudgetFromSelectedOpportunity}
+  onCreateCart={createCartFromSelectedOpportunity}
+  onCreateFile={createFileFromSelectedOpportunity}
+/>
 
       <header className="relative z-[900] shrink-0 border-b border-black/10 bg-white/82 px-5 py-3 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-3">
@@ -2011,10 +2031,7 @@ function canActOnOpportunity(item: OportunidadVM) {
                         const score = item.score || 0;
                         const nombre = getNombreOportunidad(item);
                         const telefono = getTelefonoOportunidad(item);
-                        const destino = getDestinoOportunidad(item);
-                        const origen = getOrigenLabel(item);
-                        const fechas = getFechaOportunidad(item);
-                        const pax = getPaxOportunidad(item);
+                        
                         const origenComercial = getOrigenComercialLabel(item);
                         const isDragging = draggingId === item.id;
                         const hasConversation = Boolean(item.conversacion_id);
@@ -2023,90 +2040,84 @@ const seller = profiles.find((profile) => profile.id === effectiveSellerId);
 const sellerLabel = effectiveSellerId ? profileName(seller) : "Sin asignar";
 
                         return (
-                          <article
-                            key={item.id}
-                            draggable={canActOnOpportunity(item)}
-                            onDragStart={() => handleDragStart(item)}
-                            onDragEnd={() => {
-                              setDraggingId(null);
-                              setDragOverEstadoId(null);
-                            }}
-                            onClick={() => setSelectedOpportunity(item)}
-                            className={[
-                              "rounded-[16px] border border-black/10 bg-white px-3 py-3 shadow-sm transition",
-                              canActOnOpportunity(item) ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-                              isDragging ? "scale-[0.985] opacity-50" : "hover:-translate-y-0.5 hover:shadow-md",
-                              actionLoading ? "pointer-events-none opacity-70" : ""
-                            ].join(" ")}
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <h3 className="truncate text-[13px] font-semibold leading-tight text-[#172033]">
-                                  {nombre}
-                                </h3>
+                         <article
+  key={item.id}
+  draggable={canActOnOpportunity(item)}
+  onDragStart={() => handleDragStart(item)}
+  onDragEnd={() => {
+    setDraggingId(null);
+    setDragOverEstadoId(null);
+  }}
+  onClick={() => setSelectedOpportunity(item)}
+  className={[
+    "rounded-[16px] border border-black/10 bg-white px-3 py-3 shadow-sm transition",
+    canActOnOpportunity(item) ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+    isDragging ? "scale-[0.985] opacity-50" : "hover:-translate-y-0.5 hover:shadow-md",
+    actionLoading ? "pointer-events-none opacity-70" : ""
+  ].join(" ")}
+>
+  <div className="flex items-start justify-between gap-2">
+    <div className="min-w-0">
+      <h3 className="truncate text-[13px] font-semibold leading-tight text-[#172033]">
+        {nombre}
+      </h3>
 
-                                <p className="mt-0.5 truncate text-[11px] font-normal text-[#64748b]">
-                                  {telefono}
-                                </p>
-                              </div>
+      <p className="mt-0.5 truncate text-[11px] font-normal text-[#64748b]">
+        {telefono}
+      </p>
+    </div>
 
-                              <SoftStatus score={score}>{temperaturaFromScore(score)}</SoftStatus>
-                            </div>
+    <SoftStatus score={score}>{temperaturaFromScore(score)}</SoftStatus>
+  </div>
 
-                            <div className="mt-2 flex flex-wrap gap-1">
-                              <span className="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[9.5px] font-medium text-[#64748b]">
-                                {origenComercial}
-                              </span>
+  <div className="mt-2 flex flex-wrap gap-1">
+    <span className="rounded-full bg-[#f1f5f9] px-2 py-0.5 text-[9.5px] font-medium text-[#64748b]">
+      {origenComercial}
+    </span>
 
-                              {canSeeAll ? (
-                                <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[9.5px] font-medium text-blue-700">
-                                  {sellerLabel}
-                                </span>
-                              ) : null}
+    {canSeeAll ? (
+      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[9.5px] font-medium text-blue-700">
+        {sellerLabel}
+      </span>
+    ) : null}
 
-                              {hasConversation ? (
-                                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9.5px] font-medium text-emerald-700">
-                                  WhatsApp vinculado
-                                </span>
-                              ) : (
-                                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[9.5px] font-medium text-amber-700">
-                                  Sin chat
-                                </span>
-                              )}
-                            </div>
+    {hasConversation ? (
+      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9.5px] font-medium text-emerald-700">
+        WhatsApp
+      </span>
+    ) : (
+      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[9.5px] font-medium text-amber-700">
+        Sin chat
+      </span>
+    )}
+  </div>
 
-                            <div className="mt-2.5 space-y-1 text-[11.5px] font-normal leading-snug text-[#475569]">
-                              <p className="truncate">📍 {destino}</p>
-                              <p className="truncate">🛫 {origen}</p>
-                              <p className="truncate">🗓 {fechas}</p>
-                              <p className="truncate">👥 {pax}</p>
-                            </div>
 
-                            <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                              <div
-                                className={["h-full rounded-full", scoreBarClass(score)].join(" ")}
-                                style={{ width: `${Math.min(score, 100)}%` }}
-                              />
-                            </div>
+  <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+    <div
+      className={["h-full rounded-full", scoreBarClass(score)].join(" ")}
+      style={{ width: `${Math.min(score, 100)}%` }}
+    />
+  </div>
 
-                            <div className="mt-2 flex items-center justify-between gap-2">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void openConversation(item);
-                                }}
-                                className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-[#eef6f7] px-2 text-[10.5px] font-medium text-[#4f7c90] transition hover:bg-[#dff0f2]"
-                              >
-                                <MessageCircle size={12} />
-                                {hasConversation ? "Abrir chat" : "Hablar por WhatsApp"}
-                              </button>
+  <div className="mt-2 flex items-center justify-between gap-2">
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        void openConversation(item);
+      }}
+      className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-[#eef6f7] px-2 text-[10.5px] font-medium text-[#4f7c90] transition hover:bg-[#dff0f2]"
+    >
+      <MessageCircle size={12} />
+      {hasConversation ? "Abrir chat" : "WhatsApp"}
+    </button>
 
-                              <p className="text-right text-[10.5px] font-medium text-[#64748b]">
-                                {score}/100
-                              </p>
-                            </div>
-                          </article>
+    <p className="text-right text-[10.5px] font-medium text-[#64748b]">
+      {score}/100
+    </p>
+  </div>
+</article>
                         );
                       })
                     )}

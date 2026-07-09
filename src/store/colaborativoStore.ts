@@ -331,17 +331,11 @@ async function getCurrentUserId(): Promise<string | null> {
 }
 
 function canProfileAccess(profile: ProfileLite | null): boolean {
-  return Boolean(
-    profile?.activo &&
-      ["vendedor", "administracion", "gerencia", "admin_general"].includes(profile.rol)
-  );
+  return Boolean(profile?.activo);
 }
 
 function canProfileManage(profile: ProfileLite | null): boolean {
-  return Boolean(
-    profile?.activo &&
-      ["administracion", "gerencia", "admin_general"].includes(profile.rol)
-  );
+  return Boolean(profile?.activo);
 }
 
 function canProfileAdmin(profile: ProfileLite | null): boolean {

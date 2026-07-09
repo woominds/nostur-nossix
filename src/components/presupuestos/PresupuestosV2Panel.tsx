@@ -394,21 +394,87 @@ const PRESUPUESTOS_V2_RESPONSIVE_CSS = `
   max-height: calc(100vh - 390px);
 }
 
-.presupuestos-v2-ia-layout {
+/* =========================================================
+   MODALES PRESUPUESTOS
+   Importante: los modales salen por createPortal(document.body),
+   por eso usamos @media y no solo @container.
+========================================================= */
+
+.presupuestos-v2-ia-layout,
+.presupuestos-v2-manual-layout {
   grid-template-columns: minmax(0, 1fr);
+  align-items: start;
 }
 
 .presupuestos-v2-manual-steps {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.presupuestos-v2-manual-layout {
-  grid-template-columns: minmax(0, 1fr);
-}
-
 .presupuestos-v2-resource-grid {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* En modales, evitamos que columnas internas revienten el ancho */
+.presupuestos-v2-ia-layout > *,
+.presupuestos-v2-manual-layout > *,
+.presupuestos-v2-resource-grid > * {
+  min-width: 0;
+}
+
+/* Pantalla chica o pantalla dividida: todo en una sola columna clara */
+@media (max-width: 899px) {
+  .presupuestos-v2-ia-layout,
+  .presupuestos-v2-manual-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .presupuestos-v2-manual-steps {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .presupuestos-v2-resource-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+/* Modal IA: desde ancho medio, panel izquierdo + preview */
+@media (min-width: 900px) {
+  .presupuestos-v2-ia-layout {
+    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  }
+
+  .presupuestos-v2-manual-steps {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .presupuestos-v2-resource-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Modal manual: recién abrimos sidebar cuando hay espacio real */
+@media (min-width: 1180px) {
+  .presupuestos-v2-manual-layout {
+    grid-template-columns: minmax(0, 1fr) 330px;
+  }
+}
+
+/* En notebook/split view, el manual queda en una sola columna */
+@media (min-width: 900px) and (max-width: 1179px) {
+  .presupuestos-v2-manual-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .presupuestos-v2-manual-layout > aside {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+}
+
+/* =========================================================
+   PANEL PRINCIPAL — container queries
+========================================================= */
 
 @container (min-width: 620px) {
   .presupuestos-v2-filters-grid {
@@ -422,10 +488,6 @@ const PRESUPUESTOS_V2_RESPONSIVE_CSS = `
 
   .presupuestos-v2-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .presupuestos-v2-manual-steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -464,27 +526,11 @@ const PRESUPUESTOS_V2_RESPONSIVE_CSS = `
   .presupuestos-v2-table-scroll {
     max-height: calc(100vh - 360px);
   }
-
-  .presupuestos-v2-resource-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @container (min-width: 1180px) {
   .presupuestos-v2-metrics {
     grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-
-  .presupuestos-v2-ia-layout {
-    grid-template-columns: 400px minmax(0, 1fr);
-  }
-
-  .presupuestos-v2-manual-steps {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .presupuestos-v2-manual-layout {
-    grid-template-columns: minmax(0, 1fr) 340px;
   }
 }
 `;
@@ -1909,12 +1955,13 @@ function ModalShell({
 
   return createPortal(
     <div className="fixed inset-0 z-[260] flex items-start justify-center bg-black/35 px-2 pt-3 backdrop-blur-sm sm:px-4 sm:pt-6">
-      <div
-        className={[
-          "max-h-[calc(100vh-24px)] w-full overflow-auto rounded-[18px] border border-black/10 bg-white p-3 text-[#172033] shadow-2xl sm:max-h-[calc(100vh-44px)] sm:p-4",
-          maxWidth
-        ].join(" ")}
-      >
+     <div
+  className={[
+    "max-h-[calc(100vh-24px)] w-full overflow-auto rounded-[18px] border border-black/10 bg-white p-3 text-[#172033] shadow-2xl sm:max-h-[calc(100vh-44px)] sm:p-4",
+    "mx-auto",
+    maxWidth
+  ].join(" ")}
+>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-[17px] font-semibold text-[#172033]">{title}</h2>
@@ -6672,7 +6719,7 @@ async function handleOpenPdf(id: string) {
 
   const presupuestoPdf = withPdfExtraFields(state.presupuesto, state.vendedores || []);
 
-  const html = buildPresupuestoHtml({
+  const html = await buildPresupuestoHtml({
     presupuesto: presupuestoPdf,
     vuelos: state.vuelos,
     hoteles: state.hoteles,
@@ -6684,7 +6731,7 @@ async function handleOpenPdf(id: string) {
   setPdfPreviewHtml(html);
 }
 
-function handlePreviewCurrentPdf() {
+async function handlePreviewCurrentPdf() {
   const state = usePresupuestosV2Store.getState();
 
   if (!state.presupuesto) {
@@ -6694,7 +6741,7 @@ function handlePreviewCurrentPdf() {
 
   const presupuestoPdf = withPdfExtraFields(state.presupuesto, state.vendedores || []);
 
-  const html = buildPresupuestoHtml({
+  const html = await buildPresupuestoHtml({
     presupuesto: presupuestoPdf,
     vuelos: state.vuelos,
     hoteles: state.hoteles,
@@ -7346,7 +7393,9 @@ if (id) {
           onSaveServicio={handleSaveServicio}
           onSaveCombinacion={handleSaveCombinacion}
           onUploadImage={handleUploadVueloImage}
-          onPreviewPdf={handlePreviewCurrentPdf}
+          onPreviewPdf={() => {
+  void handlePreviewCurrentPdf();
+}}
         />
       ) : null}
 

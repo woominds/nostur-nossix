@@ -117,6 +117,45 @@ type TarifaPasajeroFlexible = {
 };
 
 const ALMUNDO_LOGO_URL = getAssetUrl("/brand/almundo-logo.png");
+
+async function imageUrlToDataUrl(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) return null;
+
+    const blob = await response.blob();
+
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+
+      reader.onloadend = () => {
+        resolve(typeof reader.result === "string" ? reader.result : null);
+      };
+
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function getAlmundoLogoForPdf(): Promise<string> {
+  const candidates = [
+    ALMUNDO_LOGO_URL,
+    `${window.location.origin}/brand/almundo-logo.png`,
+    "/brand/almundo-logo.png"
+  ];
+
+  for (const candidate of candidates) {
+    const dataUrl = await imageUrlToDataUrl(candidate);
+
+    if (dataUrl) return dataUrl;
+  }
+
+  return ALMUNDO_LOGO_URL;
+}
 /* =========================================================
    HELPERS GENERALES
 ========================================================= */
@@ -2727,7 +2766,7 @@ function getSucursalPresupuestoLabel(presupuesto: PresupuestoV2): string {
   );
 }
 
-function renderHero(presupuesto: PresupuestoV2): string {
+function renderHero(presupuesto: PresupuestoV2, almundoLogoSrc = ALMUNDO_LOGO_URL): string {
   const vendedor = getVendedorPresupuestoLabel(presupuesto);
   const destino = getDestinoPresupuestoLabel(presupuesto);
 
@@ -2735,7 +2774,7 @@ function renderHero(presupuesto: PresupuestoV2): string {
     <section class="hero">
       <div class="hero-left">
         <div class="brand-row">
-          <img src="${escapeHtml(ALMUNDO_LOGO_URL)}" alt="Almundo" />
+         <img src="${escapeHtml(almundoLogoSrc)}" alt="Almundo" />
           <span>Presupuesto de viaje</span>
         </div>
 
@@ -2875,7 +2914,7 @@ function renderFooter(presupuesto: PresupuestoV2): string {
    HTML FINAL
 ========================================================= */
 
-export function buildPresupuestoHtml(data: PresupuestoPdfData): string {
+export async function buildPresupuestoHtml(data: PresupuestoPdfData): Promise<string> {
   const presupuesto = data.presupuesto;
   const vuelos = dedupeVuelos(data.vuelos || []);
   const hoteles = dedupeHoteles(data.hoteles || []);
@@ -2884,7 +2923,8 @@ export function buildPresupuestoHtml(data: PresupuestoPdfData): string {
   const recommended = getRecommendedCombinacion(presupuesto, combinaciones);
   const recommendedId = recommended?.id || null;
 
- const hero = renderHero(presupuesto);
+ const almundoLogoSrc = await getAlmundoLogoForPdf();
+ const hero = renderHero(presupuesto, almundoLogoSrc);
 
   const resumenSection = renderResumenSection(presupuesto, combinaciones);
   const introSection = renderIntroSection(presupuesto);
@@ -2953,8 +2993,8 @@ export function buildPresupuestoHtml(data: PresupuestoPdfData): string {
   `;
 }
 
-export function openPresupuestoPreview(data: PresupuestoPdfData): boolean {
-  const html = buildPresupuestoHtml(data);
+export async function openPresupuestoPreview(data: PresupuestoPdfData): Promise<boolean> {
+  const html = await buildPresupuestoHtml(data);
 
   try {
     const blob = new Blob([html], {

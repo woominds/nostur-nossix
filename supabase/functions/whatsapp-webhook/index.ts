@@ -781,7 +781,10 @@ function getMessageContent(message: any): string | null {
   const type = message?.type;
 
   if (type === "text") return cleanText(message?.text?.body) || null;
-
+if (type === "reaction") {
+  const emoji = cleanText(message?.reaction?.emoji);
+  return emoji ? `${emoji} Reacción del pasajero` : "Reacción del pasajero";
+}
   if (type === "button") return cleanText(message?.button?.text) || null;
 
   if (type === "interactive") {
@@ -818,19 +821,20 @@ function getMessageContent(message: any): string | null {
 function mapMessageType(message: any): string {
   const type = cleanText(message?.type).toLowerCase();
 
-  const allowed = [
-    "text",
-    "image",
-    "audio",
-    "video",
-    "document",
-    "sticker",
-    "location",
-    "contacts",
-    "interactive",
-    "system",
-    "unsupported"
-  ];
+const allowed = [
+  "text",
+  "image",
+  "audio",
+  "video",
+  "document",
+  "sticker",
+  "location",
+  "contacts",
+  "interactive",
+  "reaction",
+  "system",
+  "unsupported"
+];
 
   if (allowed.includes(type)) return type;
   if (type === "button") return "interactive";
@@ -1034,7 +1038,7 @@ async function findOrCreateContactoWa(params: {
   const existingRes = await params.supabase
     .from("contactos_wa")
     .select("id, display_name, profile_name")
-    .eq("wa_phone", params.phone)
+    .eq("wa_phone_normalized", normalizePhoneDigits(params.phone))
     .limit(1)
     .maybeSingle();
 
@@ -1113,7 +1117,7 @@ async function findOrCreateConversacion(params: {
     .from("conversaciones")
     .select("id, unread_count, metadata, assigned_to")
     .eq("channel", "whatsapp")
-    .eq("wa_phone", params.phone)
+    .eq("wa_phone_normalized", normalizePhoneDigits(params.phone))
     .is("deleted_at", null)
     .order("updated_at", { ascending: false })
     .limit(1)
@@ -1319,6 +1323,143 @@ async function insertIncomingMessage(params: {
   return insertRes.data.id as string;
 }
 
+async function insertIncomingReaction(params: {
+  supabase: any;
+  conversationId: string;
+  message: any;
+}) {
+  const reaction = params.message?.reaction || null;
+
+  const emoji = cleanText(reaction?.emoji);
+  const targetWaMessageId = cleanText(reaction?.message_id);
+  const reactionWaMessageId = cleanText(params.message?.id);
+
+  if (!emoji || !targetWaMessageId) {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "reaction_ignored",
+      field: "messages",
+      whatsappMessageId: reactionWaMessageId || null,
+      rawPayload: {
+        reason: "missing_emoji_or_target_message_id",
+        message: params.message
+      }
+    });
+
+    return null;
+  }
+
+  const targetRes = await params.supabase
+    .from("mensajes")
+    .select("id, conversacion_id, wa_message_id")
+    .eq("wa_message_id", targetWaMessageId)
+    .limit(1)
+    .maybeSingle();
+
+  if (targetRes.error) {
+    throw targetRes.error;
+  }
+
+  if (!targetRes.data?.id) {
+    await saveWebhookDebug({
+      supabase: params.supabase,
+      eventType: "reaction_target_not_found",
+      field: "messages",
+      whatsappMessageId: reactionWaMessageId || null,
+      rawPayload: {
+        emoji,
+        target_wa_message_id: targetWaMessageId,
+        message: params.message
+      }
+    });
+
+    return null;
+  }
+
+  const existingRes = reactionWaMessageId
+    ? await params.supabase
+        .from("mensaje_reacciones")
+        .select("id")
+        .eq("wa_reaction_message_id", reactionWaMessageId)
+        .limit(1)
+        .maybeSingle()
+    : { data: null, error: null };
+
+  if (existingRes.error) {
+    throw existingRes.error;
+  }
+
+  if (existingRes.data?.id) {
+    const updateRes = await params.supabase
+      .from("mensaje_reacciones")
+      .update({
+        emoji,
+        wa_target_message_id: targetWaMessageId,
+        direction: "in",
+        metadata: {
+          source: "whatsapp_webhook",
+          raw_message: params.message,
+          updated_from_duplicate_webhook_at: getNowIso()
+        }
+      })
+      .eq("id", existingRes.data.id)
+      .select("id")
+      .single();
+
+    if (updateRes.error) throw updateRes.error;
+
+    return updateRes.data.id as string;
+  }
+
+  const insertRes = await params.supabase
+    .from("mensaje_reacciones")
+    .insert({
+      mensaje_id: targetRes.data.id,
+      autor_id: null,
+      emoji,
+      wa_reaction_message_id: reactionWaMessageId || null,
+      wa_target_message_id: targetWaMessageId,
+      direction: "in",
+      metadata: {
+        source: "whatsapp_webhook",
+        raw_message: params.message
+      }
+    })
+    .select("id")
+    .single();
+
+  if (insertRes.error) {
+    throw insertRes.error;
+  }
+
+  await params.supabase
+    .from("conversaciones")
+    .update({
+      last_message_at: getNowIso(),
+      last_inbound_message_at: getNowIso(),
+      last_message_preview: `${emoji} Reacción del pasajero`,
+      updated_at: getNowIso()
+    })
+    .eq("id", params.conversationId);
+
+  await saveWebhookDebug({
+    supabase: params.supabase,
+    eventType: "reaction_saved",
+    field: "messages",
+    whatsappMessageId: reactionWaMessageId || null,
+    rawPayload: {
+      reaction_id: insertRes.data.id,
+      conversation_id: params.conversationId,
+      target_message_id: targetRes.data.id,
+      target_wa_message_id: targetWaMessageId,
+      emoji,
+      message: params.message
+    }
+  });
+
+  return insertRes.data.id as string;
+}
+
 async function updateMessageStatus(params: {
   supabase: any;
   status: any;
@@ -1424,7 +1565,17 @@ async function processIncomingMessage(params: {
     phoneNumberId: params.phoneNumberId
   });
 
-  const messageId = await insertIncomingMessage({
+let messageId: string | null = null;
+const rawMessageType = cleanText(params.message?.type).toLowerCase();
+
+if (rawMessageType === "reaction") {
+  messageId = await insertIncomingReaction({
+    supabase: params.supabase,
+    conversationId,
+    message: params.message
+  });
+} else {
+  messageId = await insertIncomingMessage({
     supabase: params.supabase,
     token: params.token,
     apiVersion: params.apiVersion,
@@ -1433,12 +1584,13 @@ async function processIncomingMessage(params: {
     contactName: params.contactName,
     phone: fromPhone
   });
+}
 
-  const oportunidadId = await ensureLeadOportunidad({
-    supabase: params.supabase,
-    conversationId,
-    lastText: lastMessage
-  });
+const oportunidadId = await ensureLeadOportunidad({
+  supabase: params.supabase,
+  conversationId,
+  lastText: lastMessage
+});
 
   await saveWebhookDebug({
     supabase: params.supabase,
@@ -1547,6 +1699,7 @@ serve(async (req) => {
               contactName,
               phoneNumberId
             });
+            const isReactionMessage = cleanText(message?.type).toLowerCase() === "reaction";
 if (result?.conversationId || result?.conversation_id || result?.conversacion_id) {
   const conversationId =
     result.conversationId ||
@@ -1588,14 +1741,19 @@ if (result?.conversationId || result?.conversation_id || result?.conversacion_id
   }
 });
 
-  if (!autoReplyResult.candeOff) {
-    fireAndForgetCandeReply({
-      conversationId,
-      inboundMessageId,
-      oportunidadId,
-      source: "whatsapp-webhook"
-    });
-  } else {
+if (!autoReplyResult.candeOff && !isReactionMessage && inboundMessageId) {
+  fireAndForgetCandeReply({
+    conversationId,
+    inboundMessageId,
+    oportunidadId,
+    source: "whatsapp-webhook"
+  });
+} else if (isReactionMessage) {
+  console.log("[whatsapp-webhook] CANDE no se dispara porque el inbound es una reacción.", {
+    conversationId,
+    oportunidadId
+  });
+} else {
     console.log("[whatsapp-webhook] CANDE no se dispara porque está apagada.", {
       conversationId,
       oportunidadId,

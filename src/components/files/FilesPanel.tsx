@@ -1571,6 +1571,11 @@ function addVoucherServicio() {
     label: item.nombre
   }));
 
+  const metodoContactoOptions: SelectOption[] = catalogos.metodosContacto.map((item) => ({
+  value: item.nombre,
+  label: item.nombre
+}));
+
  const cajaOptions: SelectOption[] = catalogos.cajas.map((item) => ({
   value: item.id,
   label: item.nombre
@@ -1695,14 +1700,15 @@ function addVoucherServicio() {
                         />
                       </div>
 
-                      <div>
-                        <FieldLabel>Método de contacto</FieldLabel>
-                        <TextInput
-                          value={draft.cliente.origen}
-                          onChange={(value) => setCliente("origen", value)}
-                          placeholder="Retail, referido, web..."
-                        />
-                      </div>
+                     <div>
+  <FieldLabel>Método de contacto</FieldLabel>
+  <NosturSelect
+    value={draft.cliente.origen}
+    onChange={(value) => setCliente("origen", value)}
+    options={metodoContactoOptions}
+    placeholder="Seleccionar método"
+  />
+</div>
 
                       <div>
                         <FieldLabel>Vendedor</FieldLabel>

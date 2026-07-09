@@ -31,6 +31,7 @@ import {
   XCircle
 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import { transcodeAudioToMp3 } from "../../lib/audioTranscode";
 import { EmptyState, Pill } from "./comunicacionesShared";
 
 import { EMOJI_GROUPS, QUICK_EMOJIS } from "./liveNos/constants";
@@ -171,6 +172,18 @@ function canSeeAllLiveNosConversations(profile?: ProfileLite | null): boolean {
       role === "gerencia" ||
       role === "admin_general" ||
       role === "administracion" ||
+      role === "soporte"
+  );
+}
+
+function canForceTakeLiveNosConversation(profile?: ProfileLite | null): boolean {
+  const role = String(profile?.rol || "").toLowerCase();
+
+  return Boolean(
+    profile?.is_super_admin ||
+      profile?.is_support_user ||
+      role === "gerencia" ||
+      role === "admin_general" ||
       role === "soporte"
   );
 }
@@ -336,7 +349,7 @@ export function LiveNosPanel() {
   const [automationsOpen, setAutomationsOpen] = useState(false);
   const [candeGlobalEnabled, setCandeGlobalEnabled] = useState(false);
 
-  const [activeInbox, setActiveInbox] = useState<InboxKey>("sin_atender");
+ const [activeInbox, setActiveInbox] = useState<InboxKey>("en_gestion");
   const [sellerFilterId, setSellerFilterId] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
@@ -350,6 +363,7 @@ export function LiveNosPanel() {
   const [pipeline, setPipeline] = useState<PipelineEstado[]>([]);
 
   const [transferTargetId, setTransferTargetId] = useState("");
+  const [transferNote, setTransferNote] = useState("");
   const [collaborationTargetId, setCollaborationTargetId] = useState("");
 
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsappTemplate[]>([]);
@@ -400,7 +414,8 @@ export function LiveNosPanel() {
 
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  
+const [windowTicker, setWindowTicker] = useState(Date.now());
+
 const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -431,7 +446,25 @@ const canSeeAllConversations = useMemo(() => {
   return canSeeAllLiveNosConversations(currentProfile);
 }, [currentProfile]);
 
+const canForceTakeConversation = useMemo(() => {
+  return canForceTakeLiveNosConversation(currentProfile);
+}, [currentProfile]);
+
 const canFilterBySeller = canSeeAllConversations;
+
+const canTakeSelectedConversation = Boolean(
+  selectedConversation &&
+    currentUserId &&
+    !selectedConversation.closed_at &&
+    !selectedConversation.archived_at &&
+    !selectedConversation.deleted_at &&
+    (
+      !selectedConversation.assigned_to ||
+      selectedConversation.assigned_to === currentUserId ||
+      canForceTakeConversation
+    )
+);
+
 const canWriteToClient = canUserWriteToClient({
   conv: selectedConversation,
   userId: currentUserId
@@ -583,15 +616,21 @@ const sellerConversationCounts = useMemo(() => {
     }, {});
   }, [reacciones]);
 
-  const activeWhatsappTemplates = useMemo(() => {
-    return whatsappTemplates
-      .filter((template) => template.active && template.meta_status === "approved")
-      .sort((a, b) => {
-        const aName = a.display_name || a.name;
-        const bName = b.display_name || b.name;
-        return aName.localeCompare(bName);
-      });
-  }, [whatsappTemplates]);
+const activeWhatsappTemplates = useMemo(() => {
+  return whatsappTemplates
+    .filter((template) => {
+      const isActive = template.active === true;
+      const isApproved = String(template.meta_status || "").toLowerCase() === "approved";
+      const isSynced = Boolean(String(template.meta_id || "").trim());
+
+      return isActive && isApproved && isSynced;
+    })
+    .sort((a, b) => {
+      const aName = a.display_name || a.name;
+      const bName = b.display_name || b.name;
+      return aName.localeCompare(bName);
+    });
+}, [whatsappTemplates]);
 
   const selectedWhatsappTemplate = useMemo(() => {
     if (!selectedTemplateId) return null;
@@ -845,13 +884,13 @@ const sellerConversationCounts = useMemo(() => {
   }, []);
 
   const loadWhatsappTemplates = useCallback(async () => {
-    const { data, error: templatesError } = await supabase
-      .from("whatsapp_templates")
-      .select(
-        "id,name,display_name,language,category,body,variables,components,meta_id,meta_status,active,last_synced_at"
-      )
-      .eq("active", true)
-      .order("display_name", { ascending: true });
+ const { data, error: templatesError } = await supabase
+  .from("whatsapp_templates")
+  .select("*")
+  .eq("active", true)
+  .eq("meta_status", "approved")
+  .not("meta_id", "is", null)
+  .order("name", { ascending: true });
 
     if (templatesError) {
       setError(templatesError.message || "No se pudieron cargar las plantillas de WhatsApp.");
@@ -870,10 +909,17 @@ const sellerConversationCounts = useMemo(() => {
       } = {}
     ) => {
       if (conversationId === NIA_INTERNAL_ID) return;
-      const allowedConversation = conversaciones.find((conv) => conv.id === conversationId);
+let allowedConversation = conversaciones.find((conv) => conv.id === conversationId) || null;
+
+if (!allowedConversation) {
+  await loadData();
+
+  allowedConversation =
+    conversaciones.find((conv) => conv.id === conversationId) || null;
+}
 
 if (
-  !allowedConversation ||
+  allowedConversation &&
   !canUserSeeConversation({
     conv: allowedConversation,
     userId: currentUserId,
@@ -1174,100 +1220,211 @@ if (
     };
   }, [pendingAttachment]);
 
-  useEffect(() => {
-    if (!status) return;
+useEffect(() => {
+  const timer = window.setInterval(() => {
+    setWindowTicker(Date.now());
+  }, 30000);
 
-    const timer = window.setTimeout(() => {
-      setStatus(null);
-    }, 2500);
+  return () => window.clearInterval(timer);
+}, []);
 
-    return () => window.clearTimeout(timer);
-  }, [status]);
+useEffect(() => {
+  function openConversationFromNotification(event: Event) {
+const customEvent = event as CustomEvent<{
+  conversationId?: string | null;
+  conversation_id?: string | null;
+  conversacion_id?: string | null;
+  messageId?: string | null;
+  inbox?: InboxKey | null;
+  openTemplateModal?: boolean | null;
+  open_template_modal?: boolean | null;
+  openNewConversation?: boolean | null;
+  open_new_conversation?: boolean | null;
+  telefono?: string | null;
+  phone?: string | null;
+  nombre?: string | null;
+  name?: string | null;
+}>;
 
-  useEffect(() => {
-    function openConversationFromNotification(event: Event) {
-      const customEvent = event as CustomEvent<{
-        conversationId?: string | null;
-        messageId?: string | null;
-        inbox?: InboxKey | null;
-      }>;
+const conversationId =
+  customEvent.detail?.conversationId ||
+  customEvent.detail?.conversation_id ||
+  customEvent.detail?.conversacion_id ||
+  null;
 
-      const conversationId = customEvent.detail?.conversationId || null;
-      const messageId = customEvent.detail?.messageId || null;
-      const inbox = customEvent.detail?.inbox || null;
+const messageId = customEvent.detail?.messageId || null;
+const inbox = customEvent.detail?.inbox || "en_gestion";
 
-      if (inbox) {
-        setActiveInbox(inbox);
-      } else {
-        setActiveInbox("sin_atender");
-      }
+const shouldOpenTemplateModal = Boolean(
+  customEvent.detail?.openTemplateModal || customEvent.detail?.open_template_modal
+);
 
-      if (messageId) {
-        pendingScrollMessageIdRef.current = messageId;
-        window.localStorage.setItem("nostur_open_livenos_message_id", messageId);
-      }
+const shouldOpenNewConversation = Boolean(
+  customEvent.detail?.openNewConversation || customEvent.detail?.open_new_conversation
+);
 
-      if (conversationId) {
-        void selectConversation(conversationId);
-        window.localStorage.removeItem("nostur_open_livenos_conversation_id");
-      }
+const incomingPhone =
+  customEvent.detail?.telefono ||
+  customEvent.detail?.phone ||
+  "";
+
+const incomingName =
+  customEvent.detail?.nombre ||
+  customEvent.detail?.name ||
+  "";
+
+
+
+
+
+    setActiveInbox(inbox);
+
+    if (shouldOpenNewConversation) {
+  setError(null);
+  resetConversationUiState();
+
+  const firstTemplate = activeWhatsappTemplates[0] || null;
+
+  setNewConversationPhone(String(incomingPhone || ""));
+  setNewConversationName(String(incomingName || ""));
+  setNewConversationTemplateId(firstTemplate?.id || null);
+  setNewConversationVariables({});
+  setNewConversationOpen(true);
+
+  window.localStorage.removeItem("nostur_livenos_open_new_conversation");
+  window.localStorage.removeItem("nostur_livenos_new_conversation_phone");
+  window.localStorage.removeItem("nostur_livenos_new_conversation_name");
+
+  return;
+}
+
+    if (messageId) {
+      pendingScrollMessageIdRef.current = messageId;
+      window.localStorage.setItem("nostur_open_livenos_message_id", messageId);
     }
 
-    const pendingInbox = window.localStorage.getItem("nostur_livenos_open_inbox") as InboxKey | null;
-    const pendingConversationId = window.localStorage.getItem("nostur_open_livenos_conversation_id");
-    const pendingMessageId = window.localStorage.getItem("nostur_open_livenos_message_id");
+    if (!conversationId) return;
 
-    if (pendingInbox) {
-      setActiveInbox(pendingInbox);
+    setError(null);
+    resetConversationUiState();
+
+    void loadData().then(() => {
+      setSelectedId(conversationId);
+      selectedIdRef.current = conversationId;
+
+      if (shouldOpenTemplateModal) {
+        window.setTimeout(() => {
+          setTemplateModalOpen(true);
+        }, 700);
+      }
+
+      window.localStorage.removeItem("nostur_open_livenos_conversation_id");
       window.localStorage.removeItem("nostur_livenos_open_inbox");
-    }
+      window.localStorage.removeItem("nostur_livenos_open_template_modal");
+    });
+  }
 
-    if (pendingMessageId) {
-      pendingScrollMessageIdRef.current = pendingMessageId;
-    }
+  window.addEventListener("nostur:open-livenos-conversation", openConversationFromNotification);
 
-    if (pendingConversationId) {
-      window.setTimeout(() => {
-        void selectConversation(pendingConversationId);
+  const pendingInbox = window.localStorage.getItem("nostur_livenos_open_inbox") as InboxKey | null;
+  const pendingConversationId = window.localStorage.getItem("nostur_open_livenos_conversation_id");
+  const pendingMessageId = window.localStorage.getItem("nostur_open_livenos_message_id");
+  const shouldOpenTemplateModal =
+    window.localStorage.getItem("nostur_livenos_open_template_modal") === "1";
+    const shouldOpenNewConversationFromStorage =
+  window.localStorage.getItem("nostur_livenos_open_new_conversation") === "1";
+
+const pendingNewConversationPhone =
+  window.localStorage.getItem("nostur_livenos_new_conversation_phone") || "";
+
+const pendingNewConversationName =
+  window.localStorage.getItem("nostur_livenos_new_conversation_name") || "";
+
+  if (pendingInbox) {
+    setActiveInbox(pendingInbox);
+  } else if (pendingConversationId) {
+    setActiveInbox("en_gestion");
+  }
+
+  if (pendingMessageId) {
+    pendingScrollMessageIdRef.current = pendingMessageId;
+  }
+  if (shouldOpenNewConversationFromStorage) {
+  window.setTimeout(() => {
+    setError(null);
+    resetConversationUiState();
+
+    const firstTemplate = activeWhatsappTemplates[0] || null;
+
+    setNewConversationPhone(pendingNewConversationPhone);
+    setNewConversationName(pendingNewConversationName);
+    setNewConversationTemplateId(firstTemplate?.id || null);
+    setNewConversationVariables({});
+    setNewConversationOpen(true);
+
+    window.localStorage.removeItem("nostur_livenos_open_new_conversation");
+    window.localStorage.removeItem("nostur_livenos_new_conversation_phone");
+    window.localStorage.removeItem("nostur_livenos_new_conversation_name");
+  }, 500);
+
+  return;
+}
+
+  if (pendingConversationId) {
+    window.setTimeout(() => {
+      setError(null);
+      resetConversationUiState();
+
+      void loadData().then(() => {
+        setSelectedId(pendingConversationId);
+        selectedIdRef.current = pendingConversationId;
+
+        if (shouldOpenTemplateModal) {
+          window.setTimeout(() => {
+            setTemplateModalOpen(true);
+          }, 700);
+        }
+
         window.localStorage.removeItem("nostur_open_livenos_conversation_id");
-      }, 400);
-    }
+        window.localStorage.removeItem("nostur_livenos_open_inbox");
+        window.localStorage.removeItem("nostur_livenos_open_template_modal");
+      });
+    }, 400);
+  }
 
-    window.addEventListener("nostur:open-livenos-conversation", openConversationFromNotification);
+  return () => {
+    window.removeEventListener(
+      "nostur:open-livenos-conversation",
+      openConversationFromNotification
+    );
+  };
+}, [loadData, activeWhatsappTemplates]);
 
-    return () => {
-      window.removeEventListener(
-        "nostur:open-livenos-conversation",
-        openConversationFromNotification
-      );
-    };
-  }, []);
+useEffect(() => {
+  const messageId = pendingScrollMessageIdRef.current;
 
-  useEffect(() => {
-    const messageId = pendingScrollMessageIdRef.current;
+  if (!messageId || mensajes.length === 0) return;
 
-    if (!messageId || mensajes.length === 0) return;
+  window.setTimeout(() => {
+    const element = document.getElementById(`livenos-message-${messageId}`);
+
+    if (!element) return;
+
+    element.scrollIntoView({
+      behavior: "smooth",
+      block: "center"
+    });
+
+    element.classList.add("ring-4", "ring-red-300", "ring-offset-2");
 
     window.setTimeout(() => {
-      const element = document.getElementById(`livenos-message-${messageId}`);
+      element.classList.remove("ring-4", "ring-red-300", "ring-offset-2");
+    }, 2200);
 
-      if (!element) return;
-
-      element.scrollIntoView({
-        behavior: "smooth",
-        block: "center"
-      });
-
-      element.classList.add("ring-4", "ring-red-300", "ring-offset-2");
-
-      window.setTimeout(() => {
-        element.classList.remove("ring-4", "ring-red-300", "ring-offset-2");
-      }, 2200);
-
-      pendingScrollMessageIdRef.current = null;
-      window.localStorage.removeItem("nostur_open_livenos_message_id");
-    }, 450);
-  }, [mensajes]);
+    pendingScrollMessageIdRef.current = null;
+    window.localStorage.removeItem("nostur_open_livenos_message_id");
+  }, 450);
+}, [mensajes]);
 
   async function getUserId() {
     const { data } = await supabase.auth.getUser();
@@ -1281,8 +1438,9 @@ if (
     setReminderText("");
     setScheduledFor("");
     setReminderFor("");
-    setTransferTargetId("");
-    setCollaborationTargetId("");
+setTransferTargetId("");
+setTransferNote("");
+setCollaborationTargetId("");
     setReplyToMessage(null);
     setOpenMessageMenuId(null);
     setShowEmojiPanel(false);
@@ -1333,33 +1491,23 @@ if (
     return;
   }
 
-  const selected = conversaciones.find((conv) => conv.id === id);
+let selected = conversaciones.find((conv) => conv.id === id) || null;
 
-  if (!selected) {
-    setSelectedId(null);
-    selectedIdRef.current = null;
-    setMensajes([]);
-    setNotas([]);
-    setReacciones([]);
-    setError("No tenés permiso para abrir esa conversación o ya no está disponible.");
-    return;
-  }
+if (!selected) {
+  await loadData();
 
-  if (
-    !canUserSeeConversation({
-      conv: selected,
-      userId: currentUserId,
-      currentProfile
-    })
-  ) {
-    setSelectedId(null);
-    selectedIdRef.current = null;
-    setMensajes([]);
-    setNotas([]);
-    setReacciones([]);
-    setError("No tenés permiso para abrir esa conversación.");
-    return;
-  }
+  selected = conversaciones.find((conv) => conv.id === id) || null;
+}
+
+if (!selected) {
+  setSelectedId(id);
+  selectedIdRef.current = id;
+  setMensajes([]);
+  setNotas([]);
+  setReacciones([]);
+  setError(null);
+  return;
+}
 
   setSelectedId(id);
   selectedIdRef.current = id;
@@ -1389,7 +1537,15 @@ if (
       setActionLoading(false);
       return;
     }
-
+if (
+  selectedConversation.assigned_to &&
+  selectedConversation.assigned_to !== userId &&
+  !canForceTakeLiveNosConversation(currentProfile)
+) {
+  setError("No tenés permiso para tomar una conversación asignada a otro vendedor.");
+  setActionLoading(false);
+  return;
+}
     const { error: updateError } = await supabase
       .from("conversaciones")
       .update({
@@ -1619,30 +1775,37 @@ if (
     });
   }
 
-  async function transferConversationToSeller() {
-    if (!selectedConversation || !transferTargetId) return;
+async function transferConversationToSeller() {
+  if (!selectedConversation || !transferTargetId) return;
 
-    setActionLoading(true);
-    setError(null);
-    setStatus(null);
+  const userId = await getUserId();
 
-    const userId = await getUserId();
+  if (!userId) {
+    setError("No se pudo identificar el usuario actual.");
+    return;
+  }
 
-    if (!userId) {
-      setError("No se pudo identificar el usuario actual.");
-      setActionLoading(false);
-      return;
-    }
+  setActionLoading(true);
+  setError(null);
 
-    const targetProfile = profiles.find((profile) => profile.id === transferTargetId) || null;
-    const targetName = getProfileFullName(targetProfile);
+  const targetProfile = profiles.find((profile) => profile.id === transferTargetId) || null;
 
+  const targetName =
+    targetProfile
+      ? `${targetProfile.nombre || ""} ${targetProfile.apellido || ""}`.trim() ||
+        targetProfile.email ||
+        "vendedor"
+      : "vendedor";
+
+  const cleanTransferNote = transferNote.trim();
+
+  try {
     const { error: updateError } = await supabase
       .from("conversaciones")
       .update({
         assigned_to: transferTargetId,
-        estado_gestion: "en_gestion",
         inbox: "vendedor",
+        estado_gestion: "en_gestion",
         tomada_by: transferTargetId,
         tomada_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -1655,7 +1818,7 @@ if (
       return;
     }
 
-    if (selectedOportunidad) {
+    if (selectedOportunidad?.id) {
       await supabase
         .from("lead_oportunidades")
         .update({
@@ -1668,14 +1831,29 @@ if (
 
     await addInternalSystemNote(`Conversación transferida a ${targetName}.`);
 
+    if (cleanTransferNote) {
+      await addInternalSystemNote(
+        `📌 Aviso de transferencia para ${targetName}:\n${cleanTransferNote}`
+      );
+    }
+
+    setStatus(
+      cleanTransferNote
+        ? `Conversación transferida a ${targetName} con aviso interno.`
+        : `Conversación transferida a ${targetName}.`
+    );
+
     setTransferTargetId("");
-    setStatus(`Conversación transferida a ${targetName}.`);
+    setTransferNote("");
 
-    await loadData();
-    await loadConversationDetail(selectedConversation.id, { preserveScroll: true });
-
+ await loadData();
+await loadConversationDetail(selectedConversation.id, { preserveScroll: true });
+  } catch (error) {
+    setError(error instanceof Error ? error.message : "No se pudo transferir la conversación.");
+  } finally {
     setActionLoading(false);
   }
+}
 
   async function addConversationCollaborator() {
     if (!selectedConversation || !collaborationTargetId) return;
@@ -2077,14 +2255,14 @@ async function sendLocalMessage() {
             text: captionText,
             message_type: whatsappMessageType,
             media_url: mediaPayload?.media_url || null,
-            media_mime_type:
-              localMessageType === "audio"
-                ? getCleanAudioMimeForMeta(String(mediaPayload?.media_mime_type || "audio/ogg"))
-                : mediaPayload?.media_mime_type || null,
-            media_filename:
-              localMessageType === "audio"
-                ? mediaPayload?.media_filename || "audio.ogg"
-                : mediaPayload?.media_filename || null,
+          media_mime_type:
+  localMessageType === "audio"
+    ? getCleanAudioMimeForMeta(String(mediaPayload?.media_mime_type || "audio/mpeg"))
+    : mediaPayload?.media_mime_type || null,
+media_filename:
+  localMessageType === "audio"
+    ? mediaPayload?.media_filename || "audio.mp3"
+    : mediaPayload?.media_filename || null,
             reply_to_whatsapp_message_id: replyToMessage?.wa_message_id || null,
             sender_profile_id: userId,
             show_agent_name: showAgentName
@@ -2247,7 +2425,7 @@ async function sendLocalMessage() {
       };
 
       recorder.onstop = () => {
-        const recordedMimeType = recorder.mimeType || preferredMimeType || "audio/webm";
+const recordedMimeType = recorder.mimeType || preferredMimeType || "audio/webm";
         const extension = getAudioExtension(recordedMimeType);
         const finalMimeType =
           getCleanAudioMimeForMeta(recordedMimeType) || recordedMimeType || "audio/webm";
@@ -2260,7 +2438,7 @@ async function sendLocalMessage() {
           type: finalMimeType
         });
 
-        setAttachmentFromFile(file);
+      void setAttachmentFromFile(file);
 
         stream.getTracks().forEach((track) => track.stop());
         setAudioRecording(false);
@@ -2720,25 +2898,48 @@ function handleTemplateButton() {
     return "document";
   }
 
-  function setAttachmentFromFile(file: File | null) {
-    if (!file) return;
+async function setAttachmentFromFile(file: File | null) {
+  if (!file) return;
 
-    if (pendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(pendingAttachment.previewUrl);
+  let finalFile = file;
+
+  try {
+    if (file.type.startsWith("audio/")) {
+      setStatus("Preparando audio para WhatsApp...");
+
+      const result = await transcodeAudioToMp3(file);
+
+      finalFile = result.file;
     }
+  } catch (err) {
+    console.error("[LiveNos audio transcode error]", err);
 
-    const kind = getAttachmentKind(file);
-    const previewUrl = kind === "image" || kind === "audio" ? URL.createObjectURL(file) : null;
+    setError(
+      err instanceof Error
+        ? err.message
+        : "No se pudo convertir el audio para WhatsApp."
+    );
 
-    setPendingAttachment({
-      file,
-      previewUrl,
-      kind
-    });
-
-    setStatus(null);
-    setError(null);
+    return;
   }
+
+  if (pendingAttachment?.previewUrl) {
+    URL.revokeObjectURL(pendingAttachment.previewUrl);
+  }
+
+  const kind = getAttachmentKind(finalFile);
+  const previewUrl =
+    kind === "image" || kind === "audio" ? URL.createObjectURL(finalFile) : null;
+
+  setPendingAttachment({
+    file: finalFile,
+    previewUrl,
+    kind
+  });
+
+  setStatus(kind === "audio" ? "Audio listo para enviar." : null);
+  setError(null);
+}
 
   function clearPendingAttachment() {
     if (pendingAttachment?.previewUrl) {
@@ -2796,17 +2997,17 @@ function handleTemplateButton() {
     };
   }
 
-  function handleSelectedFile(file: File | null, source: "file" | "image" = "file") {
-    setAttachmentFromFile(file);
+function handleSelectedFile(file: File | null, source: "file" | "image" = "file") {
+  void setAttachmentFromFile(file);
 
-    if (source === "image" && imageInputRef.current) {
-      imageInputRef.current.value = "";
-    }
-
-    if (source === "file" && fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+  if (source === "image" && imageInputRef.current) {
+    imageInputRef.current.value = "";
   }
+
+  if (source === "file" && fileInputRef.current) {
+    fileInputRef.current.value = "";
+  }
+}
 
   function getFileFromDataTransfer(dataTransfer: DataTransfer): File | null {
     const files = Array.from(dataTransfer.files || []);
@@ -2849,7 +3050,7 @@ function handleTemplateButton() {
       return;
     }
 
-    setAttachmentFromFile(file);
+    void setAttachmentFromFile(file);
   }
 
   function handleComposerPaste(event: React.ClipboardEvent<HTMLInputElement>) {
@@ -2860,7 +3061,7 @@ function handleTemplateButton() {
     if (!file) return;
 
     event.preventDefault();
-    setAttachmentFromFile(file);
+   void setAttachmentFromFile(file);
   }
 
   function openMediaPreview(message: Mensaje) {
@@ -3169,6 +3370,133 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
 
     setCandeFeedbackSaving(false);
   }
+
+  function getWhatsappWindowCountdown(conv?: ConversationVM | null) {
+  const expiresAt = conv?.whatsapp_24h_expires_at || conv?.window_expires_at || null;
+
+  if (!expiresAt) {
+    return {
+      open: false,
+      label: "Ventana cerrada",
+      detail: "Para escribir necesitás plantilla aprobada",
+      percent: 0,
+      tone: "closed"
+    };
+  }
+
+  const expiresTime = new Date(expiresAt).getTime();
+  const now = windowTicker;
+  const diffMs = expiresTime - now;
+
+  if (!Number.isFinite(expiresTime) || diffMs <= 0) {
+    return {
+      open: false,
+      label: "Ventana cerrada",
+      detail: "Para escribir necesitás plantilla aprobada",
+      percent: 0,
+      tone: "closed"
+    };
+  }
+
+  const totalMs = 24 * 60 * 60 * 1000;
+  const remainingMs = Math.min(diffMs, totalMs);
+
+  const hours = Math.floor(remainingMs / 3600000);
+  const minutes = Math.floor((remainingMs % 3600000) / 60000);
+
+  const percent = Math.max(0, Math.min(100, (remainingMs / totalMs) * 100));
+
+  const label =
+    hours > 0
+      ? `${hours}h ${String(minutes).padStart(2, "0")}m`
+      : `${minutes}m`;
+
+  const tone =
+    remainingMs <= 60 * 60 * 1000
+      ? "danger"
+      : remainingMs <= 3 * 60 * 60 * 1000
+        ? "warning"
+        : "open";
+
+  return {
+    open: true,
+    label,
+    detail: `Cierra ${formatDateTime(expiresAt)}`,
+    percent,
+    tone
+  };
+}
+
+function renderWhatsappWindowCountdown() {
+  if (!selectedConversation) return null;
+
+  const countdown = getWhatsappWindowCountdown(selectedConversation);
+
+  const toneClasses =
+    countdown.tone === "danger"
+      ? {
+          card: "border-red-200 bg-red-50 text-red-800",
+          bar: "bg-red-500",
+          chip: "bg-white/80 text-red-700 ring-red-200"
+        }
+      : countdown.tone === "warning"
+        ? {
+            card: "border-amber-200 bg-amber-50 text-amber-800",
+            bar: "bg-amber-500",
+            chip: "bg-white/80 text-amber-700 ring-amber-200"
+          }
+        : countdown.tone === "open"
+          ? {
+              card: "border-emerald-200 bg-emerald-50 text-emerald-800",
+              bar: "bg-emerald-500",
+              chip: "bg-white/80 text-emerald-700 ring-emerald-200"
+            }
+          : {
+              card: "border-slate-200 bg-slate-50 text-slate-600",
+              bar: "bg-slate-300",
+              chip: "bg-white/80 text-slate-600 ring-slate-200"
+            };
+
+  return (
+    <div
+      className={[
+        "mt-2 w-full rounded-2xl border px-3 py-2 shadow-sm",
+        toneClasses.card
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em]">
+            Ventana Meta 24h
+          </div>
+
+          <div className="mt-0.5 truncate text-[12px] font-normal opacity-80">
+            {countdown.detail}
+          </div>
+        </div>
+
+        <div
+          className={[
+            "shrink-0 rounded-full px-3 py-1 text-[12px] font-semibold shadow-sm ring-1",
+            toneClasses.chip
+          ].join(" ")}
+        >
+          {countdown.open ? countdown.label : "Cerrada"}
+        </div>
+      </div>
+
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/80">
+        <div
+          className={[
+            "h-full rounded-full transition-all duration-500",
+            toneClasses.bar
+          ].join(" ")}
+          style={{ width: `${countdown.percent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
   function renderCandeFeedbackModal() {
     if (!candeFeedbackDraft || !selectedConversation) return null;
@@ -4447,7 +4775,18 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
                 disabledIds={selectedConversation.assigned_to ? [selectedConversation.assigned_to] : []}
                 onChange={setTransferTargetId}
               />
+<div className="mt-3">
+  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+    Aviso para el vendedor
+  </label>
 
+  <textarea
+    value={transferNote}
+    onChange={(event) => setTransferNote(event.target.value)}
+    placeholder="Ej: Cliente está esperando presupuesto de Brasil, pidió opciones con financiación..."
+    className="min-h-[88px] w-full resize-none rounded-[12px] border border-black/10 bg-white px-3 py-2 text-[12px] font-normal leading-relaxed text-[#172033] outline-none transition placeholder:text-slate-400 focus:border-[#4f7c90]"
+  />
+</div>
               <button
                 type="button"
                 onClick={transferConversationToSeller}
@@ -4909,12 +5248,13 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
                     </div>
 
                     <div className="flex flex-wrap items-start justify-start gap-2 xl:max-w-[560px] xl:justify-end">
-                      {!selectedConversation.assigned_to ? (
-                        <HeaderButton onClick={takeConversation} disabled={actionLoading} variant="primary">
-                          <UserCheck size={14} />
-                          Tomar
-                        </HeaderButton>
-                      ) : null}
+                     
+                       {canTakeSelectedConversation && selectedConversation.assigned_to !== currentUserId ? (
+  <HeaderButton onClick={takeConversation} disabled={actionLoading} variant="primary">
+    <UserCheck size={14} />
+    {selectedConversation.assigned_to ? "Tomar de otro vendedor" : "Tomar"}
+  </HeaderButton>
+) : null}
 
                       <HeaderButton onClick={toggleCande} disabled={actionLoading || !selectedOportunidad}>
                         <Bot size={14} />
@@ -4956,6 +5296,9 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
                       )}
                     </div>
                   </div>
+                  <div className="xl:col-start-2">
+  {renderWhatsappWindowCountdown()}
+</div>
                 </div>
 
                 <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_330px] overflow-hidden">

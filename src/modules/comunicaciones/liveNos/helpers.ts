@@ -297,46 +297,54 @@ export function isAudioMessage(message: Mensaje): boolean {
 export function getRecorderMimeType(): string {
   if (typeof MediaRecorder === "undefined") return "";
 
-  const candidates = ["audio/ogg;codecs=opus", "audio/ogg"];
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+    "audio/mp4"
+  ];
 
   return candidates.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
 }
 
 export function getAudioExtension(mimeType: string): string {
-  const clean = mimeType.toLowerCase();
+  const clean = String(mimeType || "").toLowerCase().split(";")[0].trim();
 
-  if (clean.includes("ogg")) return "ogg";
   if (clean.includes("mpeg") || clean.includes("mp3")) return "mp3";
-  if (clean.includes("mp4") || clean.includes("m4a") || clean.includes("aac")) return "m4a";
+  if (clean.includes("ogg") || clean.includes("opus")) return "ogg";
+  if (clean.includes("webm")) return "webm";
+  if (clean.includes("mp4") || clean.includes("m4a")) return "m4a";
+  if (clean.includes("aac")) return "aac";
   if (clean.includes("amr")) return "amr";
 
-  return "ogg";
+  return "webm";
 }
 
 export function getCleanAudioMimeForMeta(mimeType: string): string {
-  const clean = mimeType.toLowerCase();
+  const clean = String(mimeType || "").toLowerCase().split(";")[0].trim();
 
-  if (clean.includes("ogg")) return "audio/ogg";
   if (clean.includes("mpeg") || clean.includes("mp3")) return "audio/mpeg";
+  if (clean.includes("ogg") || clean.includes("opus")) return "audio/ogg";
   if (clean.includes("mp4") || clean.includes("m4a")) return "audio/mp4";
   if (clean.includes("aac")) return "audio/aac";
   if (clean.includes("amr")) return "audio/amr";
 
-  return "audio/ogg";
+  return clean || "audio/webm";
 }
 
 export function canSendAsWhatsappAudio(mimeType: string): boolean {
-  const clean = mimeType.toLowerCase();
+  const clean = String(mimeType || "").toLowerCase().split(";")[0].trim();
 
   return (
-    clean.includes("ogg") ||
-    clean.includes("mpeg") ||
-    clean.includes("mp3") ||
-    clean.includes("mp4") ||
-    clean.includes("m4a") ||
-    clean.includes("aac") ||
-    clean.includes("amr")
-  ) && !clean.includes("webm");
+    clean === "audio/mpeg" ||
+    clean === "audio/mp3" ||
+    clean === "audio/mp4" ||
+    clean === "audio/aac" ||
+    clean === "audio/amr" ||
+    clean === "audio/ogg" ||
+    clean === "audio/opus"
+  );
 }
 
 export function getScoreLabel(score: number): string {

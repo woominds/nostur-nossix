@@ -48,6 +48,10 @@ function getNosturUpdateApi(): NosturUpdateApi | null {
   return api || null;
 }
 
+function getUpdateDismissKey(version?: string | null) {
+  return `nostur:update-banner-dismissed:${version || "unknown"}`;
+}
+
 export function NosturUpdateBanner() {
   const [visible, setVisible] = useState(false);
   const [status, setStatus] = useState<
@@ -59,6 +63,9 @@ export function NosturUpdateBanner() {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [installing, setInstalling] = useState(false);
+  const [sessionHidden, setSessionHidden] = useState(false);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+
   const checkingTimeoutRef = useRef<number | null>(null);
 
   function clearCheckingTimeout() {
@@ -66,6 +73,31 @@ export function NosturUpdateBanner() {
       window.clearTimeout(checkingTimeoutRef.current);
       checkingTimeoutRef.current = null;
     }
+  }
+
+  function getEffectiveNextVersion(value?: string | null) {
+    return value || nextVersion || currentVersion || "unknown";
+  }
+
+  function wasVersionDismissed(version?: string | null) {
+    return localStorage.getItem(getUpdateDismissKey(getEffectiveNextVersion(version))) === "1";
+  }
+
+  function showUpdateBanner(nextStatus?: typeof status, version?: string | null) {
+    const effectiveStatus = nextStatus || status;
+    const effectiveVersion = getEffectiveNextVersion(version);
+
+    if (
+      effectiveStatus === "available" &&
+      localStorage.getItem(getUpdateDismissKey(effectiveVersion)) === "1"
+    ) {
+      setVisible(false);
+      setDismissedVersion(effectiveVersion);
+      return;
+    }
+
+    setSessionHidden(false);
+    setVisible(true);
   }
 
   function startCheckingTimeout() {
@@ -76,6 +108,7 @@ export function NosturUpdateBanner() {
         if (current !== "checking") return current;
 
         setVisible(true);
+        setSessionHidden(false);
         setMessage("No se pudo verificar ahora. Intentá nuevamente.");
         return "error";
       });
@@ -87,11 +120,20 @@ export function NosturUpdateBanner() {
   function hideBanner() {
     clearCheckingTimeout();
     setVisible(false);
+    setSessionHidden(true);
 
     if (status === "checking") {
       setStatus("idle");
       setMessage("");
     }
+  }
+
+  function dismissCurrentVersion() {
+    const version = getEffectiveNextVersion();
+    localStorage.setItem(getUpdateDismissKey(version), "1");
+    setDismissedVersion(version);
+    setVisible(false);
+    setSessionHidden(true);
   }
 
   useEffect(() => {
@@ -106,13 +148,27 @@ export function NosturUpdateBanner() {
 
         if (!mounted || !updateStatus?.ok) return;
 
-        setCurrentVersion(updateStatus.currentVersion || "");
+        const initialCurrentVersion = updateStatus.currentVersion || "";
+        const initialNextVersion = updateStatus.updateInfo?.version || null;
+
+        setCurrentVersion(initialCurrentVersion);
+        setNextVersion(initialNextVersion);
 
         if (updateStatus.updateDownloaded) {
           setVisible(true);
+          setSessionHidden(false);
           setStatus("downloaded");
-          setNextVersion(updateStatus.updateInfo?.version || null);
           setMessage("La actualización ya está descargada. Reiniciá NOSTUR para instalarla.");
+          return;
+        }
+
+        if (updateStatus.updateCheckInProgress) {
+          setVisible(true);
+          setSessionHidden(false);
+          setStatus("checking");
+          setMessage("Buscando actualizaciones...");
+          startCheckingTimeout();
+          return;
         }
       } catch (error) {
         console.error("[NOSTUR UPDATE] No se pudo leer estado inicial:", error);
@@ -126,49 +182,75 @@ export function NosturUpdateBanner() {
         setCurrentVersion(String(payload.currentVersion));
       }
 
-      if (payload.nextVersion) {
-        setNextVersion(String(payload.nextVersion));
+      const payloadNextVersion =
+        payload.nextVersion ||
+        payload.info?.version ||
+        null;
+
+      if (payloadNextVersion) {
+        setNextVersion(String(payloadNextVersion));
       }
 
       if (event.type === "checking-for-update") {
-        setVisible(true);
         setStatus("checking");
         setMessage("Buscando actualizaciones...");
+
+        if (!sessionHidden) {
+          setVisible(true);
+        }
+
         startCheckingTimeout();
       }
 
       if (event.type === "update-available") {
         clearCheckingTimeout();
-        setVisible(true);
+
+        const version = payloadNextVersion || nextVersion || null;
+
+        setNextVersion(version);
         setStatus("available");
         setMessage(
-          payload.nextVersion
-            ? `Hay una nueva versión disponible: ${payload.nextVersion}.`
+          version
+            ? `Hay una nueva versión disponible: ${version}.`
             : "Hay una nueva versión disponible."
         );
+
+        if (wasVersionDismissed(version)) {
+          setVisible(false);
+          setDismissedVersion(getEffectiveNextVersion(version));
+        } else {
+          showUpdateBanner("available", version);
+        }
       }
 
       if (event.type === "download-progress") {
         clearCheckingTimeout();
         const percent = Number(payload.percent || 0);
 
-        setVisible(true);
         setStatus("downloading");
         setProgress(percent);
         setMessage(`Descargando actualización... ${Math.round(percent)}%`);
+        setSessionHidden(false);
+        setVisible(true);
       }
 
       if (event.type === "update-downloaded") {
         clearCheckingTimeout();
-        setVisible(true);
+
+        const version = payloadNextVersion || nextVersion || null;
+
+        setNextVersion(version);
         setStatus("downloaded");
         setProgress(100);
         setMessage("Actualización descargada. Reiniciá NOSTUR para instalarla.");
+        setSessionHidden(false);
+        setVisible(true);
       }
 
       if (event.type === "installing-update") {
         clearCheckingTimeout();
         setVisible(true);
+        setSessionHidden(false);
         setStatus("installing");
         setInstalling(true);
         setMessage("Instalando actualización. NOSTUR se va a reiniciar...");
@@ -177,6 +259,7 @@ export function NosturUpdateBanner() {
       if (event.type === "error") {
         clearCheckingTimeout();
         setVisible(true);
+        setSessionHidden(false);
         setStatus("error");
         setMessage(payload.message || "No se pudo completar la actualización.");
       }
@@ -189,13 +272,14 @@ export function NosturUpdateBanner() {
       clearCheckingTimeout();
       if (typeof unsubscribe === "function") unsubscribe();
     };
-  }, []);
+  }, [sessionHidden, nextVersion]);
 
   async function handleCheckUpdates() {
     const api = getNosturUpdateApi();
 
     try {
       setVisible(true);
+      setSessionHidden(false);
       setStatus("checking");
       setMessage("Buscando actualizaciones...");
       startCheckingTimeout();
@@ -243,10 +327,12 @@ export function NosturUpdateBanner() {
   }
 
   const isChecking = status === "checking";
+  const isAvailable = status === "available";
   const isDownloaded = status === "downloaded";
   const isDownloading = status === "downloading";
   const isInstalling = status === "installing";
   const isError = status === "error";
+  const canDismissVersion = isAvailable && !isDownloaded && !isInstalling;
 
   return (
     <div className="fixed bottom-4 right-4 z-[9999] w-[360px] max-w-[calc(100vw-32px)] rounded-[18px] border border-black/10 bg-white/95 p-3 shadow-2xl shadow-black/20 backdrop-blur-xl">
@@ -287,7 +373,7 @@ export function NosturUpdateBanner() {
                 type="button"
                 onClick={hideBanner}
                 className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                title="Ocultar"
+                title="Ocultar por ahora"
               >
                 <X size={14} />
               </button>
@@ -310,6 +396,12 @@ export function NosturUpdateBanner() {
             </div>
           ) : null}
 
+          {dismissedVersion && isAvailable ? (
+            <div className="mt-2 text-[10px] font-medium text-slate-400">
+              Podés volver a buscar actualizaciones manualmente desde este botón.
+            </div>
+          ) : null}
+
           {isDownloading ? (
             <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
               <div
@@ -322,6 +414,16 @@ export function NosturUpdateBanner() {
           ) : null}
 
           <div className="mt-3 flex flex-wrap justify-end gap-2">
+            {canDismissVersion ? (
+              <button
+                type="button"
+                onClick={dismissCurrentVersion}
+                className="rounded-[11px] border border-black/10 bg-white px-3 py-2 text-[11px] font-bold text-slate-500 shadow-sm transition hover:bg-slate-50 hover:text-slate-700"
+              >
+                No mostrar esta versión
+              </button>
+            ) : null}
+
             {!isDownloaded && !isInstalling ? (
               <button
                 type="button"

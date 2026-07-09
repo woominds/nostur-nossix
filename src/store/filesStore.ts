@@ -153,7 +153,6 @@ export type FileVoucher = {
   created_at: string;
   updated_at: string;
 };
-  
 
 export type FileVoucherServicio = {
   id: string;
@@ -186,6 +185,7 @@ export type FileWizardInput = {
     operador?: string | null;
     servicio_id?: string | null;
     servicio?: string | null;
+    metodo_contacto?: string | null;
     destino?: string | null;
     fecha_in?: string | null;
     fecha_out?: string | null;
@@ -208,7 +208,7 @@ export type FileWizardInput = {
   };
   pagosComerciales: PagoComercial[];
   movimientosTesoreria: MovimientoTesoreria[];
-    voucher?: FileVoucherInput | null;
+  voucher?: FileVoucherInput | null;
 };
 
 export type FileDetalleUpdateInput = {
@@ -266,7 +266,7 @@ type FilesState = {
   canManageFiles: boolean;
   sellerDefaultApplied: boolean;
 
-   files: FileItem[];
+  files: FileItem[];
   pagosComerciales: PagoComercial[];
   movimientosTesoreria: MovimientoTesoreria[];
   vouchers: FileVoucher[];
@@ -279,6 +279,7 @@ type FilesState = {
     destinos: CatalogItem[];
     servicios: CatalogItem[];
     formasPago: CatalogItem[];
+    metodosContacto: CatalogItem[];
     cajas: Caja[];
     vendedores: ProfileLite[];
     sucursales: CatalogItem[];
@@ -290,7 +291,7 @@ type FilesState = {
   loadFiles: () => Promise<void>;
   searchClientesByPhone: (telefono: string) => Promise<void>;
   createDestinoInline: (nombre: string, pais?: string) => Promise<string | null>;
-   saveFileWizard: (input: FileWizardInput) => Promise<boolean>;
+  saveFileWizard: (input: FileWizardInput) => Promise<boolean>;
   createVoucherForFile: (fileId: string, input: FileVoucherInput) => Promise<boolean>;
   updateFileDetalle: (fileId: string, input: FileDetalleUpdateInput) => Promise<boolean>;
   toggleFileActivo: (file: FileItem) => Promise<boolean>;
@@ -473,6 +474,7 @@ export const useFilesStore = create<FilesState>((set, get) => ({
     destinos: [],
     servicios: [],
     formasPago: [],
+    metodosContacto: [],
     cajas: [],
     vendedores: [],
     sucursales: []
@@ -491,12 +493,12 @@ export const useFilesStore = create<FilesState>((set, get) => ({
         loading: false,
         currentProfile: null,
         canManageFiles: false,
-     files: [],
-pagosComerciales: [],
-movimientosTesoreria: [],
-vouchers: [],
-voucherServicios: [],
-clientesSearch: [],
+        files: [],
+        pagosComerciales: [],
+        movimientosTesoreria: [],
+        vouchers: [],
+        voucherServicios: [],
+        clientesSearch: [],
         error: "No hay usuario autenticado."
       });
 
@@ -529,6 +531,8 @@ clientesSearch: [],
         files: [],
         pagosComerciales: [],
         movimientosTesoreria: [],
+        vouchers: [],
+        voucherServicios: [],
         clientesSearch: [],
         error: "Tu usuario no tiene acceso al módulo Files."
       });
@@ -595,6 +599,7 @@ clientesSearch: [],
       destinosRes,
       serviciosRes,
       formasPagoRes,
+      metodosContactoRes,
       cajasRes,
       sucursalesRes,
       vendedoresRes
@@ -604,6 +609,7 @@ clientesSearch: [],
       supabase.from("destinos").select("*").eq("activo", true).order("nombre"),
       supabase.from("servicios").select("*").eq("activo", true).order("nombre"),
       supabase.from("formas_pago").select("*").eq("activo", true).order("nombre"),
+      supabase.from("metodos_contacto").select("*").eq("activo", true).order("nombre"),
       supabase
         .from("cajas")
         .select("*")
@@ -625,6 +631,7 @@ clientesSearch: [],
       destinosRes.error ||
       serviciosRes.error ||
       formasPagoRes.error ||
+      metodosContactoRes.error ||
       cajasRes.error ||
       sucursalesRes.error ||
       vendedoresRes.error;
@@ -643,19 +650,19 @@ clientesSearch: [],
     const files = (filesRes.data || []) as FileItem[];
     const fileIds = files.map((file) => file.id);
 
-let pagosComerciales: PagoComercial[] = [];
-let movimientosTesoreria: MovimientoTesoreria[] = [];
-let vouchers: FileVoucher[] = [];
-let voucherServicios: FileVoucherServicio[] = [];
+    let pagosComerciales: PagoComercial[] = [];
+    let movimientosTesoreria: MovimientoTesoreria[] = [];
+    let vouchers: FileVoucher[] = [];
+    let voucherServicios: FileVoucherServicio[] = [];
 
-if (fileIds.length > 0) {
-  const [pagosRes, movimientosRes, vouchersRes] = await Promise.all([
-    supabase.from("file_pagos_comerciales").select("*").in("file_id", fileIds),
-    supabase.from("file_movimientos_tesoreria").select("*").in("file_id", fileIds),
-    supabase.from("file_vouchers").select("*").in("file_id", fileIds).eq("activo", true)
-  ]);
+    if (fileIds.length > 0) {
+      const [pagosRes, movimientosRes, vouchersRes] = await Promise.all([
+        supabase.from("file_pagos_comerciales").select("*").in("file_id", fileIds),
+        supabase.from("file_movimientos_tesoreria").select("*").in("file_id", fileIds),
+        supabase.from("file_vouchers").select("*").in("file_id", fileIds).eq("activo", true)
+      ]);
 
-  const childError = pagosRes.error || movimientosRes.error || vouchersRes.error;
+      const childError = pagosRes.error || movimientosRes.error || vouchersRes.error;
 
       if (childError) {
         set({
@@ -668,32 +675,32 @@ if (fileIds.length > 0) {
         return;
       }
 
-     pagosComerciales = (pagosRes.data || []) as PagoComercial[];
-movimientosTesoreria = (movimientosRes.data || []) as MovimientoTesoreria[];
-vouchers = (vouchersRes.data || []) as FileVoucher[];
+      pagosComerciales = (pagosRes.data || []) as PagoComercial[];
+      movimientosTesoreria = (movimientosRes.data || []) as MovimientoTesoreria[];
+      vouchers = (vouchersRes.data || []) as FileVoucher[];
 
-const voucherIds = vouchers.map((voucher) => voucher.id);
+      const voucherIds = vouchers.map((voucher) => voucher.id);
 
-if (voucherIds.length > 0) {
-  const serviciosRes = await supabase
-    .from("file_voucher_servicios")
-    .select("*")
-    .in("voucher_id", voucherIds)
-    .order("orden", { ascending: true });
+      if (voucherIds.length > 0) {
+        const serviciosRes = await supabase
+          .from("file_voucher_servicios")
+          .select("*")
+          .in("voucher_id", voucherIds)
+          .order("orden", { ascending: true });
 
-  if (serviciosRes.error) {
-    set({
-      loading: false,
-      currentProfile,
-      canManageFiles,
-      error: normalizeError(serviciosRes.error)
-    });
+        if (serviciosRes.error) {
+          set({
+            loading: false,
+            currentProfile,
+            canManageFiles,
+            error: normalizeError(serviciosRes.error)
+          });
 
-    return;
-  }
+          return;
+        }
 
-  voucherServicios = (serviciosRes.data || []) as FileVoucherServicio[];
-}
+        voucherServicios = (serviciosRes.data || []) as FileVoucherServicio[];
+      }
     }
 
     set({
@@ -702,15 +709,16 @@ if (voucherIds.length > 0) {
       currentProfile,
       canManageFiles,
       files,
-pagosComerciales,
-movimientosTesoreria,
-vouchers,
-voucherServicios,
-catalogos: {
+      pagosComerciales,
+      movimientosTesoreria,
+      vouchers,
+      voucherServicios,
+      catalogos: {
         operadores: (operadoresRes.data || []) as Operador[],
         destinos: (destinosRes.data || []) as CatalogItem[],
         servicios: (serviciosRes.data || []) as CatalogItem[],
         formasPago: (formasPagoRes.data || []) as CatalogItem[],
+        metodosContacto: (metodosContactoRes.data || []) as CatalogItem[],
         cajas: (cajasRes.data || []) as Caja[],
         sucursales: (sucursalesRes.data || []) as CatalogItem[],
         vendedores: (vendedoresRes.data || []) as ProfileLite[]
@@ -822,6 +830,8 @@ catalogos: {
       currentProfile.sucursal_id ||
       null;
 
+    const metodoContacto = nullableText(input.file.metodo_contacto || input.cliente.origen);
+
     let clienteId = input.cliente.id || null;
 
     if (!clienteId) {
@@ -831,7 +841,7 @@ catalogos: {
           nombre_completo: cleanText(input.cliente.nombre_completo),
           telefono: cleanText(input.cliente.telefono),
           email: nullableText(input.cliente.email),
-          origen: nullableText(input.cliente.origen),
+          origen: metodoContacto,
           vendedor: vendedorNombre,
           vendedor_id: vendedorId,
           sucursal_id: sucursalId,
@@ -865,6 +875,7 @@ catalogos: {
 
         servicio_id: input.file.servicio_id || null,
         servicio: nullableText(input.file.servicio),
+        metodo_contacto: metodoContacto,
         destino: nullableText(input.file.destino),
 
         fecha_in: input.file.fecha_in || null,
@@ -1039,55 +1050,57 @@ catalogos: {
     }
 
     if (input.voucher?.requiere_voucher) {
-  const serviciosValidos = input.voucher.servicios.filter((servicio) =>
-    cleanText(servicio.servicio_detalle)
-  );
+      const serviciosValidos = input.voucher.servicios.filter((servicio) =>
+        cleanText(servicio.servicio_detalle)
+      );
 
-  const voucherRes = await supabase
-    .from("file_vouchers")
-    .insert({
-      file_id: fileId,
-      requiere_voucher: true,
-      reserva_id: nullableText(input.voucher.reserva_id),
-      a_favor_de: nullableText(input.voucher.a_favor_de) || cleanText(input.cliente.nombre_completo),
-      activo: true
-    })
-    .select("id")
-    .single();
+      const voucherRes = await supabase
+        .from("file_vouchers")
+        .insert({
+          file_id: fileId,
+          requiere_voucher: true,
+          reserva_id: nullableText(input.voucher.reserva_id),
+          a_favor_de:
+            nullableText(input.voucher.a_favor_de) || cleanText(input.cliente.nombre_completo),
+          activo: true
+        })
+        .select("id")
+        .single();
 
-  if (voucherRes.error) {
-    set({ saving: false, error: normalizeError(voucherRes.error) });
-    return false;
-  }
+      if (voucherRes.error) {
+        set({ saving: false, error: normalizeError(voucherRes.error) });
+        return false;
+      }
 
-  const voucherId = voucherRes.data.id;
+      const voucherId = voucherRes.data.id;
 
-  if (serviciosValidos.length > 0) {
-    const serviciosPayload = serviciosValidos.map((servicio, index) => ({
-      voucher_id: voucherId,
-      servicio_detalle: cleanText(servicio.servicio_detalle),
-      cantidad_pasajeros: Math.max(Number(servicio.cantidad_pasajeros || 1), 1),
-      fecha_inicio: servicio.fecha_inicio || null,
-      fecha_fin: servicio.fecha_fin || null,
-      orden: index + 1
-    }));
+      if (serviciosValidos.length > 0) {
+        const serviciosPayload = serviciosValidos.map((servicio, index) => ({
+          voucher_id: voucherId,
+          servicio_detalle: cleanText(servicio.servicio_detalle),
+          cantidad_pasajeros: Math.max(Number(servicio.cantidad_pasajeros || 1), 1),
+          fecha_inicio: servicio.fecha_inicio || null,
+          fecha_fin: servicio.fecha_fin || null,
+          orden: index + 1
+        }));
 
-    const serviciosRes = await supabase
-      .from("file_voucher_servicios")
-      .insert(serviciosPayload);
+        const serviciosRes = await supabase
+          .from("file_voucher_servicios")
+          .insert(serviciosPayload);
 
-    if (serviciosRes.error) {
-      set({ saving: false, error: normalizeError(serviciosRes.error) });
-      return false;
+        if (serviciosRes.error) {
+          set({ saving: false, error: normalizeError(serviciosRes.error) });
+          return false;
+        }
+      }
     }
-  }
-}
 
     await get().loadFiles();
 
     set({ saving: false, clientesSearch: [] });
     return true;
   },
+
   createVoucherForFile: async (fileId, input) => {
     set({ saving: true, error: null });
 
@@ -1166,6 +1179,7 @@ catalogos: {
     set({ saving: false });
     return true;
   },
+
   updateFileDetalle: async (fileId, input) => {
     set({ saving: true, error: null });
 
@@ -1307,13 +1321,15 @@ catalogos: {
           file.numero_file,
           file.destino,
           file.servicio,
+          file.metodo_contacto,
           file.estado,
           file.operador,
           file.vendedor,
           file.riesgo ? "riesgo" : "",
           cliente?.nombre_completo,
           cliente?.telefono,
-          cliente?.email
+          cliente?.email,
+          cliente?.origen
         ].join(" ")
       );
 

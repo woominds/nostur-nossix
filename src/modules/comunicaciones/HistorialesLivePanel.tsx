@@ -121,48 +121,63 @@ export function HistorialesLivePanel() {
     setLoading(false);
   }
 
-  async function retomarHistorial(historial: LiveHistorial) {
-    setActionLoadingId(historial.id);
-    setError(null);
-    setStatus(null);
+async function retomarHistorial(historial: LiveHistorial) {
+  setActionLoadingId(historial.id);
+  setError(null);
+  setStatus(null);
 
-    const { data, error: rpcError } = await supabase.rpc("retomar_live_conversacion", {
-      p_live_conversation_row_id: historial.id
-    });
+  try {
+    const telefono =
+      historial.telefono_normalizado ||
+      historial.telefono ||
+      "";
 
-    if (rpcError) {
-      setError(rpcError.message || "No se pudo retomar la conversación.");
-      setActionLoadingId(null);
-      return;
+    const nombre =
+      historial.display_name ||
+      historial.telefono ||
+      historial.telefono_normalizado ||
+      "";
+
+    if (!telefono.trim()) {
+      throw new Error("Este historial no tiene teléfono válido para retomar.");
     }
 
-    const result = data as {
-      conversation_id?: string;
-      conversacion_id?: string;
-      id?: string;
-    } | null;
-
-    const conversationId =
-      result?.conversation_id ||
-      result?.conversacion_id ||
-      result?.id ||
-      historial.conversation_id;
-
-    setStatus("Conversación retomada en LiveNos.");
-
-    if (conversationId) {
-      window.localStorage.setItem("nostur_open_livenos_conversation_id", conversationId);
-    }
-
-    openInternal("livenos", "LiveNos", "internal://livenos", {
-      conversationId,
+    const detail = {
       source: "historiales-live",
-      live_conversation_id: historial.live_conversation_id
-    });
+      action: "open_new_conversation_from_history",
+      openNewConversation: true,
+      open_new_conversation: true,
+      telefono,
+      phone: telefono,
+      nombre,
+      name: nombre,
+      live_conversation_id: historial.live_conversation_id,
+      historial_live_id: historial.id
+    };
+
+    window.localStorage.setItem("nostur_livenos_open_new_conversation", "1");
+    window.localStorage.setItem("nostur_livenos_new_conversation_phone", telefono);
+    window.localStorage.setItem("nostur_livenos_new_conversation_name", nombre);
+
+    openInternal("livenos", "LiveNos", "internal://livenos", detail);
+
+    window.dispatchEvent(
+      new CustomEvent("nostur:open-livenos-conversation", {
+        detail
+      })
+    );
+
+    setStatus("Abrimos LiveNos para iniciar una nueva conversación con plantilla.");
 
     await loadHistoriales();
+  } catch (error) {
+    setError(error instanceof Error ? error.message : "No se pudo retomar la conversación.");
+  } finally {
     setActionLoadingId(null);
   }
+}
+
+  
 
   useEffect(() => {
     void loadHistoriales();

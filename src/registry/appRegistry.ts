@@ -43,8 +43,8 @@ export const appRegistry: RegisteredApp[] = [
   {
     id: "krooze",
     name: "Krooze",
-    url: "https://www.krooze.com.ar/",
-    homeUrl: "https://www.krooze.com.ar/",
+    url: "https://almundo.krooze.com.br/",
+    homeUrl: "https://almundo.krooze.com.br/",
     partition: "persist:krooze",
     color: "#ec4899",
     category: "travel"
