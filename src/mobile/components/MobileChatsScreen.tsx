@@ -1,17 +1,26 @@
 // src/mobile/components/MobileChatsScreen.tsx
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
 import {
   ArrowLeft,
   Bot,
   CheckCheck,
   Clock3,
+  FileText,
+  Forward,
   Loader2,
   MessageCircle,
+  Mic,
+  MoreVertical,
+  Paperclip,
   RefreshCcw,
+  Reply,
   Search,
   Send,
+  Smile,
   Sparkles,
+  Trash2,
   User,
   UserPlus,
   X
@@ -75,6 +84,135 @@ type MobileChatItem =
 
 const NIA_EDGE_FUNCTION = "nia-internal-chat";
 const NOTIFICATION_SOUND_URL = "/sounds/chat-new.mp3";
+
+const MOBILE_CHAT_MEDIA_BUCKET = "livenos-media";
+const QUICK_EMOJIS = ["😊", "👍", "🙏", "❤️", "😂", "😎", "🚀", "✅"];
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+type MobileMediaPayload = {
+  url?: string | null;
+  public_url?: string | null;
+  path?: string | null;
+  filename?: string | null;
+  mime_type?: string | null;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  caption?: string | null;
+};
+
+type WhatsAppSendPayload = {
+  text: string;
+  type?: string;
+  media?: MobileMediaPayload | null;
+  replyToId?: string | null;
+  forwarded?: boolean;
+};
+
+
+
+function normalizeMessageType(type?: string | null, mime?: string | null) {
+  const cleanType = String(type || "").toLowerCase();
+  const cleanMime = String(mime || "").toLowerCase();
+
+  if (cleanType === "image" || cleanMime.startsWith("image/")) return "image";
+  if (cleanType === "audio" || cleanMime.startsWith("audio/")) return "audio";
+  if (cleanType === "video" || cleanMime.startsWith("video/")) return "video";
+  if (cleanType === "document" || cleanType === "file" || cleanMime) return "document";
+
+  return cleanType || "text";
+}
+
+function safeJsonParse(value: unknown): any {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value !== "string") return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function getMediaPayload(message: MobileMensaje): MobileMediaPayload | null {
+  const raw = (message as any).media || (message as any).attachment || (message as any).file || null;
+  const parsed = safeJsonParse(raw) || raw;
+
+  if (!parsed) return null;
+
+  if (typeof parsed === "string") {
+    return {
+      url: parsed,
+      public_url: parsed,
+      filename: parsed.split("/").pop() || "archivo"
+    };
+  }
+
+  const media = parsed as MobileMediaPayload;
+  const url = media.public_url || media.url || null;
+
+  if (!url && !media.path) return null;
+
+  return {
+    ...media,
+    url,
+    public_url: url
+  };
+}
+
+function getMessageDisplayText(message: MobileMensaje) {
+  const text = String(message.text || "").trim();
+  if (text) return text;
+
+  const media = getMediaPayload(message);
+  if (media?.filename) return media.filename;
+
+  const type = normalizeMessageType(message.type, media?.mime_type || media?.content_type);
+  if (type === "image") return "Imagen";
+  if (type === "audio") return "Audio";
+  if (type === "video") return "Video";
+  if (type === "document") return "Archivo";
+
+  return "Mensaje";
+}
+
+function getReplyPreview(message: MobileMensaje | null | undefined) {
+  if (!message) return "Mensaje citado";
+  const author = getMessageRole(message) === "passenger" ? "Cliente" : "NOSTUR";
+  return `${author}: ${getMessageDisplayText(message)}`;
+}
+
+async function uploadMobileChatFile(file: File, conversationId: string): Promise<MobileMediaPayload> {
+  const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `${conversationId}/${Date.now()}-${safeName || `archivo.${ext}`}`;
+
+  const uploadRes = await supabase.storage.from(MOBILE_CHAT_MEDIA_BUCKET).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
+    contentType: file.type || undefined
+  });
+
+  if (uploadRes.error) {
+    throw new Error(
+      uploadRes.error.message ||
+        `No se pudo subir el archivo al bucket ${MOBILE_CHAT_MEDIA_BUCKET}.`
+    );
+  }
+
+  const publicRes = supabase.storage.from(MOBILE_CHAT_MEDIA_BUCKET).getPublicUrl(path);
+  const publicUrl = publicRes.data.publicUrl;
+
+  return {
+    public_url: publicUrl,
+    url: publicUrl,
+    path,
+    filename: file.name || path.split("/").pop() || "archivo",
+    mime_type: file.type || "application/octet-stream",
+    content_type: file.type || "application/octet-stream",
+    size_bytes: file.size
+  };
+}
 
 function canSeeAllConversations(profile: MobileProfile | null): boolean {
   const rol = String(profile?.rol || "").toLowerCase();
@@ -409,6 +547,64 @@ function ConversationRow({
   );
 }
 
+
+function MessageMedia({ message }: { message: MobileMensaje }) {
+  const media = getMediaPayload(message);
+  if (!media) return null;
+
+  const url = media.public_url || media.url || "";
+  const type = normalizeMessageType(message.type, media.mime_type || media.content_type);
+  const filename = media.filename || "archivo";
+
+  if (!url) return null;
+
+  if (type === "image") {
+    return (
+      <a href={url} target="_blank" rel="noreferrer" className="mb-1 block overflow-hidden rounded-2xl bg-black/5">
+        <img src={url} alt={filename} className="max-h-64 w-full object-cover" loading="lazy" />
+      </a>
+    );
+  }
+
+  if (type === "audio") {
+    return (
+      <div className="mb-1 rounded-2xl bg-black/5 p-2">
+        <audio controls src={url} className="w-full" />
+      </div>
+    );
+  }
+
+  if (type === "video") {
+    return (
+      <div className="mb-1 overflow-hidden rounded-2xl bg-black/5">
+        <video controls src={url} className="max-h-64 w-full" />
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="mb-1 flex items-center gap-2 rounded-2xl bg-black/5 p-2 text-current underline decoration-current/30 underline-offset-2"
+    >
+      <FileText size={16} className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{filename}</span>
+    </a>
+  );
+}
+
+function ReplyPreviewBubble({ message }: { message: MobileMensaje | null | undefined }) {
+  if (!message) return null;
+
+  return (
+    <div className="mb-1.5 rounded-xl border-l-2 border-current/40 bg-black/5 px-2 py-1 text-[10px] font-medium leading-snug opacity-90">
+      <div className="line-clamp-2 whitespace-pre-wrap break-words">{getReplyPreview(message)}</div>
+    </div>
+  );
+}
+
 function NiaDetail({
   messages,
   loadingMessages,
@@ -556,36 +752,91 @@ function NiaDetail({
 
 function ConversationDetail({
   conversation,
+  conversaciones,
   mensajes,
   loadingMessages,
   sending,
   joining,
+  uploading,
+  recording,
   canJoin,
   privateMode,
   text,
+  replyingTo,
+  forwardingMessage,
+  activeMessageId,
+  emojiPickerOpen,
+  reactionTargetId,
+  fileInputRef,
   onTextChange,
   onPrivateModeChange,
   onBack,
   onSend,
-  onJoin
+  onJoin,
+  onPickFile,
+  onFileSelected,
+  onToggleRecording,
+  onSetReplyingTo,
+  onCancelReply,
+  onStartForward,
+  onCancelForward,
+  onForwardToConversation,
+  onDeleteMessage,
+  onReactToMessage,
+  onToggleEmojiPicker,
+  onAddEmoji,
+  onToggleMessageActions,
+  onSetReactionTarget
 }: {
   conversation: ConversationVM;
+  conversaciones: ConversationVM[];
   mensajes: MobileMensaje[];
   loadingMessages: boolean;
   sending: boolean;
   joining: boolean;
+  uploading: boolean;
+  recording: boolean;
   canJoin: boolean;
   privateMode: boolean;
   text: string;
+  replyingTo: MobileMensaje | null;
+  forwardingMessage: MobileMensaje | null;
+  activeMessageId: string | null;
+  emojiPickerOpen: boolean;
+  reactionTargetId: string | null;
+ fileInputRef: RefObject<HTMLInputElement | null>;
   onTextChange: (value: string) => void;
   onPrivateModeChange: (value: boolean) => void;
   onBack: () => void;
   onSend: () => void;
   onJoin: () => void;
+  onPickFile: () => void;
+  onFileSelected: (file: File) => void;
+  onToggleRecording: () => void;
+  onSetReplyingTo: (message: MobileMensaje) => void;
+  onCancelReply: () => void;
+  onStartForward: (message: MobileMensaje) => void;
+  onCancelForward: () => void;
+  onForwardToConversation: (conversationId: string) => void;
+  onDeleteMessage: (message: MobileMensaje) => void;
+  onReactToMessage: (message: MobileMensaje, emoji: string) => void;
+  onToggleEmojiPicker: () => void;
+  onAddEmoji: (emoji: string) => void;
+  onToggleMessageActions: (messageId: string) => void;
+  onSetReactionTarget: (messageId: string | null) => void;
 }) {
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const name = getDisplayName(conversation.contacto, conversation);
   const initials = getInitials(name);
+  const mensajesById = useMemo(() => {
+    const map = new Map<string, MobileMensaje>();
+    mensajes.forEach((message) => map.set(message.id, message));
+    return map;
+  }, [mensajes]);
+  const forwardingTargets = useMemo(
+    () => conversaciones.filter((item) => item.id !== conversation.id).slice(0, 12),
+    [conversaciones, conversation.id]
+  );
 
   useEffect(() => {
     const el = timelineRef.current;
@@ -655,16 +906,80 @@ function ConversationDetail({
             const internal = isInternalMessage(message);
             const role = getMessageRole(message);
             const outbound = !internal && role !== "passenger" && role !== "system";
+            const replyMessage = message.reply_to_id ? mensajesById.get(String(message.reply_to_id)) : null;
+            const media = getMediaPayload(message);
+            const reaction = (message as any).reaction || (message as any).reaction_emoji || null;
 
             return (
               <article key={message.id} className="flex w-full flex-col">
                 <div
                   className={[
                     internal ? "max-w-[92%]" : "max-w-[82%]",
-                    "rounded-[18px] px-3 py-2 text-[12px] font-normal leading-snug shadow-sm",
+                    "relative rounded-[18px] px-3 py-2 text-[12px] font-normal leading-snug shadow-sm",
                     getWhatsappBubbleClass(message)
                   ].join(" ")}
                 >
+                  <button
+                    type="button"
+                    onClick={() => onToggleMessageActions(message.id)}
+                    className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-[#64748b] shadow-sm ring-1 ring-black/10"
+                    aria-label="Acciones del mensaje"
+                  >
+                    <MoreVertical size={13} />
+                  </button>
+
+                  {activeMessageId === message.id ? (
+                    <div className="absolute right-0 top-7 z-20 min-w-[174px] overflow-hidden rounded-2xl border border-black/10 bg-white text-[#111827] shadow-xl">
+                      <button
+                        type="button"
+                        onClick={() => onSetReplyingTo(message)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold hover:bg-[#f8fafc]"
+                      >
+                        <Reply size={14} />
+                        Responder
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onStartForward(message)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold hover:bg-[#f8fafc]"
+                      >
+                        <Forward size={14} />
+                        Reenviar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onSetReactionTarget(reactionTargetId === message.id ? null : message.id)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold hover:bg-[#f8fafc]"
+                      >
+                        <Smile size={14} />
+                        Reaccionar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDeleteMessage(message)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 size={14} />
+                        Eliminar
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {reactionTargetId === message.id ? (
+                    <div className="absolute right-0 top-7 z-30 flex gap-1 rounded-full border border-black/10 bg-white p-1 shadow-xl">
+                      {QUICK_REACTIONS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          onClick={() => onReactToMessage(message, emoji)}
+                          className="flex h-8 w-8 items-center justify-center rounded-full text-[16px] hover:bg-[#f1f5f9]"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
                   {internal ? (
                     <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-amber-800">
                       <User size={11} />
@@ -686,9 +1001,27 @@ function ConversationDetail({
                     </div>
                   ) : null}
 
-                  <div className="whitespace-pre-wrap break-words">
-                    {message.text || `[${message.type}]`}
-                  </div>
+                  {message.forwarded ? (
+                    <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold opacity-75">
+                      <Forward size={11} />
+                      Reenviado
+                    </div>
+                  ) : null}
+
+                  <ReplyPreviewBubble message={replyMessage} />
+                  <MessageMedia message={message} />
+
+                  {message.text || !media ? (
+                    <div className="whitespace-pre-wrap break-words">
+                      {message.text || `[${message.type}]`}
+                    </div>
+                  ) : null}
+
+                  {reaction ? (
+                    <div className="absolute -bottom-3 right-2 rounded-full bg-white px-1.5 py-0.5 text-[12px] shadow-sm ring-1 ring-black/10">
+                      {String(reaction)}
+                    </div>
+                  ) : null}
 
                   <div
                     className={[
@@ -711,6 +1044,73 @@ function ConversationDetail({
       </div>
 
       <footer className="shrink-0 border-t border-black/10 bg-white/95 p-2.5 backdrop-blur-xl">
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) onFileSelected(file);
+          }}
+        />
+
+        {forwardingMessage ? (
+          <div className="mb-2 rounded-2xl border border-blue-200 bg-blue-50 p-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="min-w-0 text-[11px] font-semibold text-blue-800">
+                Reenviar: <span className="font-medium">{getMessageDisplayText(forwardingMessage)}</span>
+              </div>
+              <button type="button" onClick={onCancelForward} className="text-blue-700">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {forwardingTargets.map((target) => (
+                <button
+                  key={target.id}
+                  type="button"
+                  onClick={() => onForwardToConversation(target.id)}
+                  className="max-w-[150px] shrink-0 rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-[#172033] shadow-sm"
+                >
+                  <span className="block truncate">{getDisplayName(target.contacto, target)}</span>
+                </button>
+              ))}
+              {forwardingTargets.length === 0 ? (
+                <div className="text-[11px] font-medium text-blue-700">No hay otros chats visibles.</div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {replyingTo ? (
+          <div className="mb-2 flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+            <Reply size={14} className="shrink-0 text-emerald-700" />
+            <div className="min-w-0 flex-1 truncate text-[11px] font-semibold text-emerald-800">
+              {getReplyPreview(replyingTo)}
+            </div>
+            <button type="button" onClick={onCancelReply} className="text-emerald-700">
+              <X size={14} />
+            </button>
+          </div>
+        ) : null}
+
+        {emojiPickerOpen ? (
+          <div className="mb-2 flex gap-1 rounded-2xl border border-black/10 bg-white p-1.5 shadow-sm">
+            {QUICK_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => onAddEmoji(emoji)}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[17px] hover:bg-[#f1f5f9]"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         <div className="mb-2 grid grid-cols-2 gap-2 rounded-2xl bg-[#f1f5f9] p-1">
           <button
             type="button"
@@ -735,7 +1135,26 @@ function ConversationDetail({
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onPickFile}
+            disabled={sending || uploading || privateMode}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#f1f5f9] text-[#64748b] disabled:opacity-40"
+            title="Adjuntar archivo"
+          >
+            {uploading ? <Loader2 size={17} className="animate-spin" /> : <Paperclip size={17} />}
+          </button>
+
+          <button
+            type="button"
+            onClick={onToggleEmojiPicker}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#f1f5f9] text-[#64748b]"
+            title="Emoticones"
+          >
+            <Smile size={17} />
+          </button>
+
           <input
             value={text}
             onChange={(event) => onTextChange(event.target.value)}
@@ -754,17 +1173,32 @@ function ConversationDetail({
             ].join(" ")}
           />
 
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={sending || !text.trim()}
-            className={[
-              "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-sm disabled:opacity-50",
-              privateMode ? "bg-amber-600" : "bg-[#172033]"
-            ].join(" ")}
-          >
-            {sending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
-          </button>
+          {!text.trim() && !privateMode ? (
+            <button
+              type="button"
+              onClick={onToggleRecording}
+              disabled={sending || uploading}
+              className={[
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-sm disabled:opacity-50",
+                recording ? "bg-red-600" : "bg-[#172033]"
+              ].join(" ")}
+              title={recording ? "Detener audio" : "Grabar audio"}
+            >
+              {recording ? <Loader2 size={17} className="animate-spin" /> : <Mic size={17} />}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={sending || uploading || !text.trim()}
+              className={[
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white shadow-sm disabled:opacity-50",
+                privateMode ? "bg-amber-600" : "bg-[#172033]"
+              ].join(" ")}
+            >
+              {sending ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+            </button>
+          )}
         </div>
       </footer>
     </div>
@@ -776,6 +1210,8 @@ export function MobileChatsScreen() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [currentProfile, setCurrentProfile] = useState<MobileProfile | null>(null);
@@ -796,6 +1232,15 @@ export function MobileChatsScreen() {
 
   const [composerText, setComposerText] = useState("");
   const [privateMode, setPrivateMode] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<MobileMensaje | null>(null);
+  const [forwardingMessage, setForwardingMessage] = useState<MobileMensaje | null>(null);
+  const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [reactionTargetId, setReactionTargetId] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   const selectedKindRef = useRef(selectedKind);
   const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
@@ -1358,6 +1803,11 @@ export function MobileChatsScreen() {
     selectedKindRef.current = "conversation";
     setComposerText("");
     setPrivateMode(false);
+    setReplyingTo(null);
+    setForwardingMessage(null);
+    setActiveMessageId(null);
+    setEmojiPickerOpen(false);
+    setReactionTargetId(null);
     await loadConversationMessages(conversationId);
     await loadData({ silent: true });
   }
@@ -1386,6 +1836,11 @@ export function MobileChatsScreen() {
     selectedConversationIdRef.current = null;
     setComposerText("");
     setPrivateMode(false);
+    setReplyingTo(null);
+    setForwardingMessage(null);
+    setActiveMessageId(null);
+    setEmojiPickerOpen(false);
+    setReactionTargetId(null);
     setMensajes([]);
     setNiaMessages([]);
   }
@@ -1545,38 +2000,31 @@ export function MobileChatsScreen() {
     setSending(false);
   }
 
-  async function sendWhatsappMessage() {
-    if (privateMode) {
-      await sendPrivateMessage();
-      return;
-    }
-
-    if (!selectedConversation || !composerText.trim()) return;
-
-    setSending(true);
-    setError(null);
-
+  async function sendWhatsappPayload(
+    targetConversation: ConversationVM,
+    payload: WhatsAppSendPayload
+  ) {
     const userId = await getCurrentUserId();
 
     if (!userId) {
-      setError("No se pudo identificar el usuario actual.");
-      setSending(false);
-      return;
+      throw new Error("No se pudo identificar el usuario actual.");
     }
 
-    const text = composerText.trim();
+    const text = payload.text.trim();
+    const media = payload.media || null;
+    const messageType = normalizeMessageType(payload.type || (media ? undefined : "text"), media?.mime_type || media?.content_type);
     const now = new Date().toISOString();
 
     const insertRes = await supabase
       .from("mensajes")
       .insert({
-        conversacion_id: selectedConversation.id,
+        conversacion_id: targetConversation.id,
         direction: "out",
-        type: "text",
+        type: messageType,
         text,
-        media: null,
-        reply_to_id: null,
-        forwarded: false,
+        media,
+        reply_to_id: payload.replyToId || null,
+        forwarded: Boolean(payload.forwarded),
         status: "pending",
         error: null,
         wa_message_id: null,
@@ -1591,47 +2039,48 @@ export function MobileChatsScreen() {
       .single();
 
     if (insertRes.error) {
-      setError(insertRes.error.message || "No se pudo crear el mensaje.");
-      setSending(false);
-      return;
+      throw new Error(insertRes.error.message || "No se pudo crear el mensaje.");
     }
 
     const messageId = insertRes.data.id as string;
+    const preview = text || media?.filename || (messageType === "image" ? "Imagen" : messageType === "audio" ? "Audio" : "Archivo");
 
     await supabase
       .from("conversaciones")
       .update({
         last_message_at: now,
         last_outbound_message_at: now,
-        last_message_preview: text,
+        last_message_preview: preview,
         estado_gestion: "en_gestion",
         updated_at: now
       })
-      .eq("id", selectedConversation.id);
-
-    setComposerText("");
-
-    await loadConversationMessages(selectedConversation.id, { silent: true });
-    await loadData({ silent: true });
+      .eq("id", targetConversation.id);
 
     const sendRes = await supabase.functions.invoke("whatsapp-send-message", {
       body: {
-        conversacion_id: selectedConversation.id,
-        conversation_id: selectedConversation.id,
+        conversacion_id: targetConversation.id,
+        conversation_id: targetConversation.id,
         message_id: messageId,
         local_message_id: messageId,
-        to: selectedConversation.wa_phone,
-        wa_phone: selectedConversation.wa_phone,
+        to: targetConversation.wa_phone,
+        wa_phone: targetConversation.wa_phone,
         text,
-        message_type: "text",
+        caption: text,
+        media,
+        media_url: media?.public_url || media?.url || null,
+        filename: media?.filename || null,
+        mime_type: media?.mime_type || media?.content_type || null,
+        message_type: messageType,
+        type: messageType,
+        reply_to_id: payload.replyToId || null,
+        forwarded: Boolean(payload.forwarded),
         sender_profile_id: userId,
         show_agent_name: true
       }
     });
 
     if (sendRes.error || !sendRes.data?.ok) {
-      const errorMessage =
-        sendRes.error?.message || sendRes.data?.error || "WhatsApp rechazó el envío.";
+      const errorMessage = sendRes.error?.message || sendRes.data?.error || "WhatsApp rechazó el envío.";
 
       await supabase
         .from("mensajes")
@@ -1641,13 +2090,257 @@ export function MobileChatsScreen() {
         })
         .eq("id", messageId);
 
-      setError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return messageId;
+  }
+
+  async function sendWhatsappMessage() {
+    if (privateMode) {
+      await sendPrivateMessage();
+      return;
+    }
+
+    if (!selectedConversation || !composerText.trim()) return;
+
+    setSending(true);
+    setError(null);
+
+    const text = composerText.trim();
+    const replyToId = replyingTo?.id || null;
+
+    setComposerText("");
+    setReplyingTo(null);
+    setEmojiPickerOpen(false);
+
+    try {
+      await sendWhatsappPayload(selectedConversation, {
+        text,
+        type: "text",
+        replyToId
+      });
+
+      await loadConversationMessages(selectedConversation.id, { silent: true });
+      await loadData({ silent: true });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo enviar el mensaje.");
+      setComposerText(text);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function pickFile() {
+    fileInputRef.current?.click();
+  }
+
+  async function sendFileMessage(file: File) {
+    if (!selectedConversation || privateMode) return;
+
+    setUploading(true);
+    setSending(true);
+    setError(null);
+
+    const caption = composerText.trim();
+    const replyToId = replyingTo?.id || null;
+
+    try {
+      const media = await uploadMobileChatFile(file, selectedConversation.id);
+      const type = normalizeMessageType(undefined, file.type);
+
+      setComposerText("");
+      setReplyingTo(null);
+
+      await sendWhatsappPayload(selectedConversation, {
+        text: caption,
+        type,
+        media,
+        replyToId
+      });
+
+      await loadConversationMessages(selectedConversation.id, { silent: true });
+      await loadData({ silent: true });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo enviar el archivo.");
+    } finally {
+      setUploading(false);
+      setSending(false);
+    }
+  }
+
+  async function toggleAudioRecording() {
+    if (recording) {
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch {
+        setRecording(false);
+      }
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("El navegador no permite grabar audio desde esta pantalla.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+        setRecording(false);
+
+        if (blob.size > 0) {
+          const extension = mimeType.includes("mp4") || mimeType.includes("m4a") ? "m4a" : "webm";
+          const file = new File([blob], `audio-${Date.now()}.${extension}`, { type: mimeType });
+          void sendFileMessage(file);
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo acceder al micrófono.");
+      setRecording(false);
+    }
+  }
+
+  function setReply(message: MobileMensaje) {
+    setReplyingTo(message);
+    setActiveMessageId(null);
+    setReactionTargetId(null);
+    setForwardingMessage(null);
+  }
+
+  function startForward(message: MobileMensaje) {
+    setForwardingMessage(message);
+    setActiveMessageId(null);
+    setReactionTargetId(null);
+    setReplyingTo(null);
+  }
+
+  async function forwardToConversation(conversationId: string) {
+    const target = conversations.find((item) => item.id === conversationId);
+    if (!target || !forwardingMessage) return;
+
+    setSending(true);
+    setError(null);
+
+    try {
+      await sendWhatsappPayload(target, {
+        text: String(forwardingMessage.text || ""),
+        type: forwardingMessage.type || "text",
+        media: getMediaPayload(forwardingMessage),
+        forwarded: true
+      });
+
+      setForwardingMessage(null);
+      await loadData({ silent: true });
+
+      if (selectedConversationIdRef.current) {
+        await loadConversationMessages(selectedConversationIdRef.current, { silent: true });
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo reenviar el mensaje.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function deleteMessage(message: MobileMensaje) {
+    if (!selectedConversation) return;
+
+    setActiveMessageId(null);
+    setReactionTargetId(null);
+    setError(null);
+
+    const now = new Date().toISOString();
+    const updateRes = await supabase
+      .from("mensajes")
+      .update({
+        deleted_at: now,
+        text: "Mensaje eliminado"
+      })
+      .eq("id", message.id);
+
+    if (updateRes.error) {
+      setError(updateRes.error.message || "No se pudo eliminar el mensaje.");
+      return;
+    }
+
+    try {
+      await supabase.functions.invoke("whatsapp-send-message", {
+        body: {
+          action: "delete",
+          message_type: "delete",
+          conversacion_id: selectedConversation.id,
+          conversation_id: selectedConversation.id,
+          message_id: message.id,
+          wa_message_id: message.wa_message_id,
+          to: selectedConversation.wa_phone,
+          wa_phone: selectedConversation.wa_phone
+        }
+      });
+    } catch {
+      // Si WhatsApp no permite borrar, por lo menos queda oculto localmente.
     }
 
     await loadConversationMessages(selectedConversation.id, { silent: true });
     await loadData({ silent: true });
+  }
 
-    setSending(false);
+  async function reactToMessage(message: MobileMensaje, emoji: string) {
+    if (!selectedConversation) return;
+
+    setReactionTargetId(null);
+    setActiveMessageId(null);
+    setError(null);
+
+    const updateRes = await supabase
+      .from("mensajes")
+      .update({ reaction: emoji } as any)
+      .eq("id", message.id);
+
+    if (updateRes.error) {
+      console.warn("No se pudo guardar reaction en mensajes.reaction:", updateRes.error.message);
+    }
+
+    try {
+      const userId = await getCurrentUserId();
+
+      await supabase.functions.invoke("whatsapp-send-message", {
+        body: {
+          conversacion_id: selectedConversation.id,
+          conversation_id: selectedConversation.id,
+          to: selectedConversation.wa_phone,
+          wa_phone: selectedConversation.wa_phone,
+          message_type: "reaction",
+          type: "reaction",
+          emoji,
+          reaction: emoji,
+          reaction_message_id: message.wa_message_id || message.id,
+          target_message_id: message.wa_message_id || message.id,
+          sender_profile_id: userId
+        }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo enviar la reacción.");
+    }
+
+    await loadConversationMessages(selectedConversation.id, { silent: true });
   }
 
   async function sendNiaMessage() {
@@ -1740,18 +2433,44 @@ export function MobileChatsScreen() {
     return (
       <ConversationDetail
         conversation={selectedConversation}
+        conversaciones={conversations}
         mensajes={visibleMensajes}
         loadingMessages={loadingMessages}
         sending={sending}
         joining={joining}
+        uploading={uploading}
+        recording={recording}
         canJoin={currentUserCanJoinSelectedConversation}
         privateMode={privateMode}
         text={composerText}
+        replyingTo={replyingTo}
+        forwardingMessage={forwardingMessage}
+        activeMessageId={activeMessageId}
+        emojiPickerOpen={emojiPickerOpen}
+        reactionTargetId={reactionTargetId}
+        fileInputRef={fileInputRef}
         onTextChange={setComposerText}
         onPrivateModeChange={setPrivateMode}
         onBack={backToList}
         onSend={sendWhatsappMessage}
         onJoin={() => void joinConversation()}
+        onPickFile={pickFile}
+        onFileSelected={(file) => void sendFileMessage(file)}
+        onToggleRecording={() => void toggleAudioRecording()}
+        onSetReplyingTo={setReply}
+        onCancelReply={() => setReplyingTo(null)}
+        onStartForward={startForward}
+        onCancelForward={() => setForwardingMessage(null)}
+        onForwardToConversation={(conversationId) => void forwardToConversation(conversationId)}
+        onDeleteMessage={(message) => void deleteMessage(message)}
+        onReactToMessage={(message, emoji) => void reactToMessage(message, emoji)}
+        onToggleEmojiPicker={() => setEmojiPickerOpen((current) => !current)}
+        onAddEmoji={(emoji) => setComposerText((current) => `${current}${emoji}`)}
+        onToggleMessageActions={(messageId) => {
+          setActiveMessageId((current) => (current === messageId ? null : messageId));
+          setReactionTargetId(null);
+        }}
+        onSetReactionTarget={setReactionTargetId}
       />
     );
   }
