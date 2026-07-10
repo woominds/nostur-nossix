@@ -70,6 +70,15 @@ type MobileMensaje = Mensaje & {
   sender_kind?: string | null;
 };
 
+type MobileInternalNote = {
+  id: string;
+  conversacion_id: string;
+  autor_id: string | null;
+  contenido: string | null;
+  tipo: string | null;
+  created_at: string | null;
+};
+
 type MobileChatItem =
   | {
       kind: "nia";
@@ -84,10 +93,20 @@ type MobileChatItem =
 
 const NIA_EDGE_FUNCTION = "nia-internal-chat";
 const NOTIFICATION_SOUND_URL = "/sounds/chat-new.mp3";
-
 const MOBILE_CHAT_MEDIA_BUCKET = "livenos-media";
-const QUICK_EMOJIS = ["😊", "👍", "🙏", "❤️", "😂", "😎", "🚀", "✅"];
+
+const QUICK_EMOJIS = [
+  "😊", "🙂", "😉", "😂", "🤣", "😍", "🥰", "😘",
+  "👍", "👌", "👏", "🙌", "🙏", "💪", "🫶", "✅",
+  "❤️", "💙", "✨", "🔥", "🚀", "✈️", "🏝️", "🧳",
+  "📍", "📅", "💵", "🧾", "⚠️", "🔔", "📲", "🎉"
+];
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+
+
+
+
 
 type MobileMediaPayload = {
   url?: string | null;
@@ -108,13 +127,17 @@ type WhatsAppSendPayload = {
   forwarded?: boolean;
 };
 
+function cleanMimeType(mime?: string | null) {
+  return String(mime || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+}
+
 function normalizeMessageType(type?: string | null, mime?: string | null) {
   const cleanType = String(type || "").toLowerCase();
   const cleanMime = cleanMimeType(mime);
 
-  // Si el envío lo fuerza como documento, respetarlo.
-  // Esto es clave para audios m4a/mp4/webm grabados desde mobile,
-  // porque WhatsApp los rechaza como "audio" pero pueden entrar como documento.
   if (cleanType === "document" || cleanType === "file") return "document";
 
   if (cleanType === "image" || cleanMime.startsWith("image/")) return "image";
@@ -132,13 +155,6 @@ function normalizeMessageType(type?: string | null, mime?: string | null) {
   if (cleanMime) return "document";
 
   return cleanType || "text";
-}
-
-function cleanMimeType(mime?: string | null) {
-  return String(mime || "")
-    .split(";")[0]
-    .trim()
-    .toLowerCase();
 }
 
 function getOutgoingFileMessageType(file: File) {
@@ -404,28 +420,70 @@ function playNotificationSound() {
   }
 }
 
-function showBrowserNotification(title: string, body: string) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission !== "granted") return;
+async function getMobileServiceWorkerRegistration(): Promise<ServiceWorkerRegistration | null> {
+  if (!("serviceWorker" in navigator)) return null;
 
   try {
-    new Notification(title, {
-      body,
-      icon: brandAssets.iconoColor,
-      badge: brandAssets.iconoColor
-    });
+    const existing = await navigator.serviceWorker.getRegistration("/");
+
+    if (existing) return existing;
+
+    return await navigator.serviceWorker.register("/nostur-mobile-sw.js");
   } catch {
-    // No bloquear la app si el navegador no permite mostrar notificación.
+    return null;
   }
+}
+
+function showBrowserNotification(
+  title: string,
+  body: string,
+  data: {
+    conversationId?: string | null;
+    messageId?: string | null;
+    kind?: string;
+  } = {}
+) {
+  void (async () => {
+    if (!("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    try {
+      const registration = await getMobileServiceWorkerRegistration();
+
+      if (registration?.showNotification) {
+        await registration.showNotification(title, {
+          body,
+          icon: brandAssets.iconoColor,
+          badge: brandAssets.iconoColor,
+          data
+        });
+
+        return;
+      }
+
+      new Notification(title, {
+        body,
+        icon: brandAssets.iconoColor,
+        badge: brandAssets.iconoColor,
+        data
+      });
+    } catch {
+      // No bloquear la app si el navegador no permite mostrar notificación.
+    }
+  })();
 }
 
 async function activateMobileNotifications() {
   playNotificationSound();
 
+  await getMobileServiceWorkerRegistration();
+
   if (!("Notification" in window)) return;
 
   if (Notification.permission === "granted") {
-    showBrowserNotification(brandText.appName, "Avisos activados correctamente.");
+    showBrowserNotification(brandText.appName, "Avisos activados correctamente.", {
+      kind: "test"
+    });
     return;
   }
 
@@ -433,7 +491,9 @@ async function activateMobileNotifications() {
     const permission = await Notification.requestPermission();
 
     if (permission === "granted") {
-      showBrowserNotification(brandText.appName, "Avisos activados correctamente.");
+      showBrowserNotification(brandText.appName, "Avisos activados correctamente.", {
+        kind: "test"
+      });
     }
   } catch {
     // No bloquear la app si el navegador no permite solicitar permisos.
@@ -588,7 +648,6 @@ function ConversationRow({
   );
 }
 
-
 function MessageMedia({ message }: { message: MobileMensaje }) {
   const media = getMediaPayload(message);
   if (!media) return null;
@@ -601,7 +660,12 @@ function MessageMedia({ message }: { message: MobileMensaje }) {
 
   if (type === "image") {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="mb-1 block overflow-hidden rounded-2xl bg-black/5">
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="mb-1 block overflow-hidden rounded-2xl bg-black/5"
+      >
         <img src={url} alt={filename} className="max-h-64 w-full object-cover" loading="lazy" />
       </a>
     );
@@ -641,7 +705,9 @@ function ReplyPreviewBubble({ message }: { message: MobileMensaje | null | undef
 
   return (
     <div className="mb-1.5 rounded-xl border-l-2 border-current/40 bg-black/5 px-2 py-1 text-[10px] font-medium leading-snug opacity-90">
-      <div className="line-clamp-2 whitespace-pre-wrap break-words">{getReplyPreview(message)}</div>
+      <div className="line-clamp-2 whitespace-pre-wrap break-words">
+        {getReplyPreview(message)}
+      </div>
     </div>
   );
 }
@@ -727,8 +793,7 @@ function NiaDetail({
           </div>
         ) : (
           messages.map((message) => {
-            const assistant =
-              message.direction === "assistant" || message.direction === "nia";
+            const assistant = message.direction === "assistant" || message.direction === "nia";
 
             return (
               <article key={message.id} className="flex w-full flex-col">
@@ -774,8 +839,7 @@ function NiaDetail({
               }
             }}
             placeholder="Escribile a NIA"
-            className="h-10 min-w-0 flex-1 rounded-full border border-black/10 bg-[#f8fafc] px-4 text-[13px] font-medium text-[#111827] outline-none placeholder:text-[#94a3b8] focus:border-purple-500"
-          />
+className="h-10 min-w-0 flex-1 rounded-full border border-black/10 bg-[#f8fafc] px-4 text-[16px] font-medium text-[#111827] outline-none placeholder:text-[#94a3b8] focus:border-purple-500"          />
 
           <button
             type="button"
@@ -875,11 +939,13 @@ function ConversationDetail({
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const name = getDisplayName(conversation.contacto, conversation);
   const initials = getInitials(name);
+
   const mensajesById = useMemo(() => {
     const map = new Map<string, MobileMensaje>();
     mensajes.forEach((message) => map.set(message.id, message));
     return map;
   }, [mensajes]);
+
   const forwardingTargets = useMemo(
     () => conversaciones.filter((item) => item.id !== conversation.id).slice(0, 12),
     [conversaciones, conversation.id]
@@ -914,7 +980,9 @@ function ConversationDetail({
           </div>
 
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[14px] font-semibold leading-tight text-[#111827]">{name}</div>
+            <div className="truncate text-[14px] font-semibold leading-tight text-[#111827]">
+              {name}
+            </div>
             <div className="truncate text-[10.5px] font-normal leading-tight text-[#64748b]">
               {conversation.wa_phone} · {getConversationStateLabel(conversation)}
             </div>
@@ -953,7 +1021,9 @@ function ConversationDetail({
             const internal = isInternalMessage(message);
             const role = getMessageRole(message);
             const outbound = !internal && role !== "passenger" && role !== "system";
-            const replyMessage = message.reply_to_id ? mensajesById.get(String(message.reply_to_id)) : null;
+            const replyMessage = message.reply_to_id
+              ? mensajesById.get(String(message.reply_to_id))
+              : null;
             const media = getMediaPayload(message);
             const reaction = (message as any).reaction || (message as any).reaction_emoji || null;
 
@@ -985,6 +1055,7 @@ function ConversationDetail({
                         <Reply size={14} />
                         Responder
                       </button>
+
                       <button
                         type="button"
                         onClick={() => onStartForward(message)}
@@ -993,14 +1064,18 @@ function ConversationDetail({
                         <Forward size={14} />
                         Reenviar
                       </button>
+
                       <button
                         type="button"
-                        onClick={() => onSetReactionTarget(reactionTargetId === message.id ? null : message.id)}
+                        onClick={() =>
+                          onSetReactionTarget(reactionTargetId === message.id ? null : message.id)
+                        }
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] font-semibold hover:bg-[#f8fafc]"
                       >
                         <Smile size={14} />
                         Reaccionar
                       </button>
+
                       <button
                         type="button"
                         onClick={() => onDeleteMessage(message)}
@@ -1090,7 +1165,7 @@ function ConversationDetail({
         )}
       </div>
 
-      <footer className="shrink-0 border-t border-black/10 bg-white/95 p-2.5 backdrop-blur-xl">
+            <footer className="shrink-0 border-t border-black/10 bg-white/95 p-2.5 backdrop-blur-xl">
         <input
           ref={fileInputRef}
           type="file"
@@ -1107,12 +1182,15 @@ function ConversationDetail({
           <div className="mb-2 rounded-2xl border border-blue-200 bg-blue-50 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="min-w-0 text-[11px] font-semibold text-blue-800">
-                Reenviar: <span className="font-medium">{getMessageDisplayText(forwardingMessage)}</span>
+                Reenviar:{" "}
+                <span className="font-medium">{getMessageDisplayText(forwardingMessage)}</span>
               </div>
+
               <button type="button" onClick={onCancelForward} className="text-blue-700">
                 <X size={14} />
               </button>
             </div>
+
             <div className="flex gap-1.5 overflow-x-auto pb-1">
               {forwardingTargets.map((target) => (
                 <button
@@ -1124,8 +1202,11 @@ function ConversationDetail({
                   <span className="block truncate">{getDisplayName(target.contacto, target)}</span>
                 </button>
               ))}
+
               {forwardingTargets.length === 0 ? (
-                <div className="text-[11px] font-medium text-blue-700">No hay otros chats visibles.</div>
+                <div className="text-[11px] font-medium text-blue-700">
+                  No hay otros chats visibles.
+                </div>
               ) : null}
             </div>
           </div>
@@ -1150,6 +1231,7 @@ function ConversationDetail({
                 <Mic size={14} className="shrink-0" />
                 Audio grabado listo para enviar
               </div>
+
               <button
                 type="button"
                 onClick={onDiscardPendingAudio}
@@ -1159,8 +1241,10 @@ function ConversationDetail({
                 <X size={14} />
               </button>
             </div>
+
             <div className="flex items-center gap-2">
               <audio controls src={pendingAudioPreviewUrl} className="min-w-0 flex-1" />
+
               <button
                 type="button"
                 onClick={onSendPendingAudio}
@@ -1168,7 +1252,11 @@ function ConversationDetail({
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#172033] text-white shadow-sm disabled:opacity-50"
                 title="Enviar audio"
               >
-                {sending || uploading ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
+                {sending || uploading ? (
+                  <Loader2 size={17} className="animate-spin" />
+                ) : (
+                  <Send size={17} />
+                )}
               </button>
             </div>
           </div>
@@ -1243,13 +1331,12 @@ function ConversationDetail({
               }
             }}
             placeholder={privateMode ? "Mensaje privado interno" : "Escribí un mensaje"}
-            className={[
-              "h-10 min-w-0 flex-1 rounded-full border px-4 text-[13px] font-medium text-[#111827] outline-none placeholder:text-[#94a3b8]",
-              privateMode
-                ? "border-amber-200 bg-amber-50 focus:border-amber-400"
-                : "border-black/10 bg-[#f8fafc] focus:border-[#172033]"
-            ].join(" ")}
-          />
+           className={[
+  "h-10 min-w-0 flex-1 rounded-full border px-4 text-[16px] font-medium text-[#111827] outline-none placeholder:text-[#94a3b8]",
+  privateMode
+    ? "border-amber-200 bg-amber-50 focus:border-amber-400"
+    : "border-black/10 bg-[#f8fafc] focus:border-[#172033]"
+].join(" ")}          />
 
           {!text.trim() && !pendingAudioPreviewUrl && !privateMode ? (
             <button
@@ -1322,6 +1409,52 @@ export function MobileChatsScreen() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  const selectedKindRef = useRef(selectedKind);
+  const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
+  const niaConversationIdRef = useRef<string | null>(niaConversation?.id || null);
+
+  const knownConversationMessageIdsRef = useRef<Set<string>>(new Set());
+  const knownNiaMessageIdsRef = useRef<Set<string>>(new Set());
+  const knownInternalNoteIdsRef = useRef<Set<string>>(new Set());
+  const initializedRealtimeRef = useRef(false);
+
+  function getDraftKey(kind: "nia" | "conversation", id: string) {
+    return `nostur_mobile_chat_draft:${kind}:${id}`;
+  }
+
+  function saveDraft(kind: "nia" | "conversation", id: string, value: string) {
+    const key = getDraftKey(kind, id);
+    const clean = value.trim();
+
+    if (!clean) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+
+    window.localStorage.setItem(key, value);
+  }
+
+  function loadDraft(kind: "nia" | "conversation", id: string) {
+    return window.localStorage.getItem(getDraftKey(kind, id)) || "";
+  }
+
+  function clearDraft(kind: "nia" | "conversation", id: string) {
+    window.localStorage.removeItem(getDraftKey(kind, id));
+  }
+
+  function updateComposerText(value: string) {
+    setComposerText(value);
+
+    if (selectedKindRef.current === "conversation" && selectedConversationIdRef.current) {
+      saveDraft("conversation", selectedConversationIdRef.current, value);
+      return;
+    }
+
+    if (selectedKindRef.current === "nia" && niaConversationIdRef.current) {
+      saveDraft("nia", niaConversationIdRef.current, value);
+    }
+  }
+
   function setPendingAudio(file: File) {
     setPendingAudioFile(file);
     setPendingAudioPreviewUrl((currentUrl) => {
@@ -1344,13 +1477,6 @@ export function MobileChatsScreen() {
     });
   }
 
-  const selectedKindRef = useRef(selectedKind);
-  const selectedConversationIdRef = useRef<string | null>(selectedConversationId);
-  const niaConversationIdRef = useRef<string | null>(niaConversation?.id || null);
-  const knownConversationMessageIdsRef = useRef<Set<string>>(new Set());
-  const knownNiaMessageIdsRef = useRef<Set<string>>(new Set());
-  const initializedRealtimeRef = useRef(false);
-
   const selectedConversation = useMemo(() => {
     if (!selectedConversationId) return null;
     return conversations.find((conv) => conv.id === selectedConversationId) || null;
@@ -1366,7 +1492,7 @@ export function MobileChatsScreen() {
         return null;
       });
     };
-  }, [selectedConversationId]);
+  }, []);
 
   const visibleMensajes = useMemo(() => {
     if (!selectedConversationId) return mensajes;
@@ -1478,40 +1604,43 @@ export function MobileChatsScreen() {
     return created;
   }, []);
 
-  const loadNiaMessages = useCallback(async (conversationId: string, options: { silent?: boolean } = {}) => {
-    if (!options.silent) {
-      setLoadingMessages(true);
-    }
+  const loadNiaMessages = useCallback(
+    async (conversationId: string, options: { silent?: boolean } = {}) => {
+      if (!options.silent) {
+        setLoadingMessages(true);
+      }
 
-    setError(null);
+      setError(null);
 
-    const messagesRes = await supabase
-      .from("nia_mensajes")
-      .select("id,conversacion_id,direction,text,created_at")
-      .eq("conversacion_id", conversationId)
-      .order("created_at", { ascending: true });
+      const messagesRes = await supabase
+        .from("nia_mensajes")
+        .select("id,conversacion_id,direction,text,created_at")
+        .eq("conversacion_id", conversationId)
+        .order("created_at", { ascending: true });
 
-    if (messagesRes.error) {
-      setError(messagesRes.error.message || "No se pudieron cargar los mensajes de NIA.");
+      if (messagesRes.error) {
+        setError(messagesRes.error.message || "No se pudieron cargar los mensajes de NIA.");
+
+        if (!options.silent) {
+          setLoadingMessages(false);
+        }
+
+        return;
+      }
+
+      const nextMessages = (messagesRes.data || []) as NiaMensaje[];
+
+      knownNiaMessageIdsRef.current = new Set(nextMessages.map((message) => message.id));
+      setNiaMessages(nextMessages);
+
+      await supabase.from("nia_conversaciones").update({ unread_count: 0 }).eq("id", conversationId);
 
       if (!options.silent) {
         setLoadingMessages(false);
       }
-
-      return;
-    }
-
-    const nextMessages = (messagesRes.data || []) as NiaMensaje[];
-
-    knownNiaMessageIdsRef.current = new Set(nextMessages.map((message) => message.id));
-    setNiaMessages(nextMessages);
-
-    await supabase.from("nia_conversaciones").update({ unread_count: 0 }).eq("id", conversationId);
-
-    if (!options.silent) {
-      setLoadingMessages(false);
-    }
-  }, []);
+    },
+    []
+  );
 
   const loadConversationMessages = useCallback(
     async (conversationId: string, options: { silent?: boolean } = {}) => {
@@ -1688,6 +1817,86 @@ export function MobileChatsScreen() {
   }, [loadData]);
 
   useEffect(() => {
+    const mobileNotificationsStartedAt = new Date(Date.now() - 5000).toISOString();
+
+    async function notifyInternalNote(note: MobileInternalNote) {
+      const tipo = String(note.tipo || "").toLowerCase();
+
+      if (tipo !== "mensaje_interno") return;
+      if (!note.id || !note.conversacion_id) return;
+
+      if (knownInternalNoteIdsRef.current.has(note.id)) return;
+
+      knownInternalNoteIdsRef.current.add(note.id);
+
+      if (knownInternalNoteIdsRef.current.size > 250) {
+        knownInternalNoteIdsRef.current = new Set(
+          Array.from(knownInternalNoteIdsRef.current).slice(-120)
+        );
+      }
+
+      if (!initializedRealtimeRef.current) return;
+
+      const currentUserId = currentUserIdRef.current;
+
+      if (currentUserId && note.autor_id === currentUserId) return;
+
+      const relatedConversation = conversations.find((conv) => conv.id === note.conversacion_id);
+
+      let authorName = "Mensaje interno";
+
+      if (note.autor_id) {
+        const { data: authorProfile } = await supabase
+          .from("profiles")
+          .select("nombre,apellido,email")
+          .eq("id", note.autor_id)
+          .maybeSingle();
+
+        if (authorProfile) {
+          authorName =
+            `${authorProfile.nombre || ""} ${authorProfile.apellido || ""}`.trim() ||
+            authorProfile.email ||
+            "Mensaje interno";
+        }
+      }
+
+      const passengerName = relatedConversation
+        ? getDisplayName(relatedConversation.contacto, relatedConversation)
+        : "Conversación LiveNos";
+
+      const preview =
+        String(note.contenido || "").trim().replace(/\s+/g, " ").slice(0, 130) ||
+        "Nuevo mensaje interno";
+
+      playNotificationSound();
+
+      showBrowserNotification(`Interno · ${passengerName}`, `${authorName}: ${preview}`, {
+        conversationId: note.conversacion_id,
+        messageId: note.id,
+        kind: "internal"
+      });
+    }
+
+    async function pollRecentInternalNotes() {
+      try {
+        const { data, error } = await supabase
+          .from("notas_conversacion")
+          .select("id,conversacion_id,autor_id,contenido,tipo,created_at")
+          .eq("tipo", "mensaje_interno")
+          .gte("created_at", mobileNotificationsStartedAt)
+          .order("created_at", { ascending: true })
+          .limit(30);
+
+        if (error) return;
+
+        for (const note of (data || []) as MobileInternalNote[]) {
+          await notifyInternalNote(note);
+        }
+      } catch {
+        // No bloquear mobile por polling de notificaciones internas.
+      }
+    }
+
     const channel = supabase
       .channel(`mobile-chats-${Date.now()}`)
       .on(
@@ -1699,6 +1908,17 @@ export function MobileChatsScreen() {
         },
         () => {
           void loadData({ silent: true });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notas_conversacion"
+        },
+        (payload) => {
+          void notifyInternalNote(payload.new as MobileInternalNote);
         }
       )
       .on(
@@ -1730,7 +1950,11 @@ export function MobileChatsScreen() {
                 ? getDisplayName(relatedConversation.contacto, relatedConversation)
                 : "Nuevo mensaje";
 
-              showBrowserNotification(title, message.text || "Tenés un nuevo mensaje.");
+              showBrowserNotification(title, message.text || "Tenés un nuevo mensaje.", {
+                conversationId,
+                messageId: message.id,
+                kind: "whatsapp"
+              });
             }
           }
 
@@ -1797,7 +2021,12 @@ export function MobileChatsScreen() {
 
             if (initializedRealtimeRef.current && isNiaResponse) {
               playNotificationSound();
-              showBrowserNotification("NIA", message.text || "NIA respondió.");
+
+              showBrowserNotification("NIA", message.text || "NIA respondió.", {
+                conversationId,
+                messageId: message.id,
+                kind: "nia"
+              });
             }
           }
 
@@ -1844,6 +2073,7 @@ export function MobileChatsScreen() {
 
     const fallbackInterval = window.setInterval(() => {
       void loadData({ silent: true });
+      void pollRecentInternalNotes();
 
       if (selectedKindRef.current === "conversation" && selectedConversationIdRef.current) {
         void loadConversationMessages(selectedConversationIdRef.current, { silent: true });
@@ -1915,13 +2145,15 @@ export function MobileChatsScreen() {
     selectedConversationIdRef.current = conversationId;
     setSelectedKind("conversation");
     selectedKindRef.current = "conversation";
-    setComposerText("");
+
+    setComposerText(loadDraft("conversation", conversationId));
     setPrivateMode(false);
     setReplyingTo(null);
     setForwardingMessage(null);
     setActiveMessageId(null);
     setEmojiPickerOpen(false);
     setReactionTargetId(null);
+
     await loadConversationMessages(conversationId);
     await loadData({ silent: true });
   }
@@ -1935,7 +2167,8 @@ export function MobileChatsScreen() {
     selectedConversationIdRef.current = null;
     setSelectedKind("nia");
     selectedKindRef.current = "nia";
-    setComposerText("");
+
+    setComposerText(loadDraft("nia", conversation.id));
     setPrivateMode(false);
     setMensajes([]);
 
@@ -1948,6 +2181,7 @@ export function MobileChatsScreen() {
     selectedKindRef.current = "list";
     setSelectedConversationId(null);
     selectedConversationIdRef.current = null;
+
     setComposerText("");
     setPrivateMode(false);
     setReplyingTo(null);
@@ -2052,33 +2286,21 @@ export function MobileChatsScreen() {
     }));
 
     setComposerText("");
+    clearDraft("conversation", conversationId);
 
     const insertRes = await supabase
-      .from("mensajes")
+      .from("notas_conversacion")
       .insert({
         conversacion_id: conversationId,
-        direction: "out",
-        type: "text",
-        text,
-        media: null,
-        reply_to_id: null,
-        forwarded: false,
-        status: "sent",
-        error: null,
-        wa_message_id: null,
-        sender_profile_id: userId,
-        deleted_at: null,
-        delivered_at: null,
-        read_at: null,
-        wa_timestamp: now,
-        sender_kind: "humano"
+        autor_id: userId,
+        contenido: text,
+        tipo: "mensaje_interno",
+        scheduled_for: null
       })
-      .select("*")
+      .select("id,conversacion_id,autor_id,contenido,tipo,created_at")
       .single();
 
     if (insertRes.error) {
-      console.error("Error guardando mensaje privado mobile:", insertRes.error);
-
       setPrivateMessagesByConversation((current) => ({
         ...current,
         [conversationId]: (current[conversationId] || []).map((message) =>
@@ -2096,18 +2318,6 @@ export function MobileChatsScreen() {
       setSending(false);
       return;
     }
-
-    const savedMessage = {
-      ...(insertRes.data as MobileMensaje),
-      sender_kind: "interno"
-    } as MobileMensaje;
-
-    setPrivateMessagesByConversation((current) => ({
-      ...current,
-      [conversationId]: (current[conversationId] || []).map((message) =>
-        message.id === localId ? savedMessage : message
-      )
-    }));
 
     await supabase
       .from("conversaciones")
@@ -2133,7 +2343,10 @@ export function MobileChatsScreen() {
 
     const text = payload.text.trim();
     const media = payload.media || null;
-    const messageType = normalizeMessageType(payload.type || (media ? undefined : "text"), media?.mime_type || media?.content_type);
+    const messageType = normalizeMessageType(
+      payload.type || (media ? undefined : "text"),
+      media?.mime_type || media?.content_type
+    );
     const now = new Date().toISOString();
 
     const insertRes = await supabase
@@ -2164,7 +2377,10 @@ export function MobileChatsScreen() {
     }
 
     const messageId = insertRes.data.id as string;
-    const preview = text || media?.filename || (messageType === "image" ? "Imagen" : messageType === "audio" ? "Audio" : "Archivo");
+    const preview =
+      text ||
+      media?.filename ||
+      (messageType === "image" ? "Imagen" : messageType === "audio" ? "Audio" : "Archivo");
 
     await supabase
       .from("conversaciones")
@@ -2201,7 +2417,8 @@ export function MobileChatsScreen() {
     });
 
     if (sendRes.error || !sendRes.data?.ok) {
-      const errorMessage = sendRes.error?.message || sendRes.data?.error || "WhatsApp rechazó el envío.";
+      const errorMessage =
+        sendRes.error?.message || sendRes.data?.error || "WhatsApp rechazó el envío.";
 
       await supabase
         .from("mensajes")
@@ -2237,8 +2454,10 @@ export function MobileChatsScreen() {
 
     const text = composerText.trim();
     const replyToId = replyingTo?.id || null;
+    const conversationId = selectedConversation.id;
 
     setComposerText("");
+    clearDraft("conversation", conversationId);
     setReplyingTo(null);
     setEmojiPickerOpen(false);
 
@@ -2254,6 +2473,7 @@ export function MobileChatsScreen() {
     } catch (error) {
       setError(error instanceof Error ? error.message : "No se pudo enviar el mensaje.");
       setComposerText(text);
+      saveDraft("conversation", conversationId, text);
     } finally {
       setSending(false);
     }
@@ -2272,12 +2492,14 @@ export function MobileChatsScreen() {
 
     const caption = composerText.trim();
     const replyToId = replyingTo?.id || null;
+    const conversationId = selectedConversation.id;
 
     try {
       const media = await uploadMobileChatFile(file, selectedConversation.id);
       const type = getOutgoingFileMessageType(file);
 
       setComposerText("");
+      clearDraft("conversation", conversationId);
       setReplyingTo(null);
 
       await sendWhatsappPayload(selectedConversation, {
@@ -2291,6 +2513,10 @@ export function MobileChatsScreen() {
       await loadData({ silent: true });
     } catch (error) {
       setError(error instanceof Error ? error.message : "No se pudo enviar el archivo.");
+      if (caption) {
+        setComposerText(caption);
+        saveDraft("conversation", conversationId, caption);
+      }
     } finally {
       setUploading(false);
       setSending(false);
@@ -2305,89 +2531,89 @@ export function MobileChatsScreen() {
     await sendFileMessage(file);
   }
 
-async function toggleAudioRecording() {
-  if (recording) {
+  async function toggleAudioRecording() {
+    if (recording) {
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch {
+        setRecording(false);
+      }
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("El navegador no permite grabar audio desde esta pantalla.");
+      return;
+    }
+
     try {
-      mediaRecorderRef.current?.stop();
-    } catch {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      const preferredAudioMimeTypes = [
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+        "audio/mp4",
+        "audio/webm;codecs=opus",
+        "audio/webm"
+      ];
+
+      const supportedAudioMimeType =
+        preferredAudioMimeTypes.find((mimeType) => {
+          try {
+            return typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(mimeType);
+          } catch {
+            return false;
+          }
+        }) || "";
+
+      const recorder = supportedAudioMimeType
+        ? new MediaRecorder(stream, { mimeType: supportedAudioMimeType })
+        : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const recorderMimeType = recorder.mimeType || supportedAudioMimeType || "audio/webm";
+        const contentType = cleanMimeType(recorderMimeType) || "audio/webm";
+
+        const blob = new Blob(audioChunksRef.current, { type: recorderMimeType });
+
+        stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+        setRecording(false);
+
+        if (blob.size > 0) {
+          const extension =
+            contentType === "audio/ogg"
+              ? "ogg"
+              : contentType === "audio/mp4"
+                ? "m4a"
+                : contentType === "audio/mpeg" || contentType === "audio/mp3"
+                  ? "mp3"
+                  : "webm";
+
+          const file = new File([blob], `audio-${Date.now()}.${extension}`, {
+            type: contentType
+          });
+
+          setPendingAudio(file);
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "No se pudo acceder al micrófono.");
       setRecording(false);
     }
-    return;
   }
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setError("El navegador no permite grabar audio desde esta pantalla.");
-    return;
-  }
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-    const preferredAudioMimeTypes = [
-      "audio/ogg;codecs=opus",
-      "audio/ogg",
-      "audio/mp4",
-      "audio/webm;codecs=opus",
-      "audio/webm"
-    ];
-
-    const supportedAudioMimeType =
-      preferredAudioMimeTypes.find((mimeType) => {
-        try {
-          return typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(mimeType);
-        } catch {
-          return false;
-        }
-      }) || "";
-
-    const recorder = supportedAudioMimeType
-      ? new MediaRecorder(stream, { mimeType: supportedAudioMimeType })
-      : new MediaRecorder(stream);
-
-    audioChunksRef.current = [];
-
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunksRef.current.push(event.data);
-      }
-    };
-
-    recorder.onstop = () => {
-      const recorderMimeType = recorder.mimeType || supportedAudioMimeType || "audio/webm";
-      const contentType = cleanMimeType(recorderMimeType) || "audio/webm";
-
-      const blob = new Blob(audioChunksRef.current, { type: recorderMimeType });
-
-      stream.getTracks().forEach((track) => track.stop());
-      mediaRecorderRef.current = null;
-      setRecording(false);
-
-      if (blob.size > 0) {
-    const extension =
-  contentType === "audio/ogg"
-    ? "ogg"
-    : contentType === "audio/mp4"
-      ? "m4a"
-      : contentType === "audio/mpeg" || contentType === "audio/mp3"
-        ? "mp3"
-        : "webm";
-
-        const file = new File([blob], `audio-${Date.now()}.${extension}`, {
-          type: contentType
-        });
-
-        setPendingAudio(file);
-      }
-    };
-
-    mediaRecorderRef.current = recorder;
-    recorder.start();
-    setRecording(true);
-  } catch (error) {
-    setError(error instanceof Error ? error.message : "No se pudo acceder al micrófono.");
-    setRecording(false);
-  }
-}
 
   function setReply(message: MobileMensaje) {
     setReplyingTo(message);
@@ -2558,6 +2784,7 @@ async function toggleAudioRecording() {
       .eq("id", conversation.id);
 
     setComposerText("");
+    clearDraft("nia", conversation.id);
 
     await loadNiaMessages(conversation.id, { silent: true });
     await loadNiaConversation();
@@ -2593,7 +2820,7 @@ async function toggleAudioRecording() {
         loadingMessages={loadingMessages}
         sending={sending}
         text={composerText}
-        onTextChange={setComposerText}
+        onTextChange={updateComposerText}
         onBack={backToList}
         onSend={sendNiaMessage}
       />
@@ -2621,7 +2848,7 @@ async function toggleAudioRecording() {
         emojiPickerOpen={emojiPickerOpen}
         reactionTargetId={reactionTargetId}
         fileInputRef={fileInputRef}
-        onTextChange={setComposerText}
+        onTextChange={updateComposerText}
         onPrivateModeChange={setPrivateMode}
         onBack={backToList}
         onSend={sendWhatsappMessage}
@@ -2639,7 +2866,7 @@ async function toggleAudioRecording() {
         onDeleteMessage={(message) => void deleteMessage(message)}
         onReactToMessage={(message, emoji) => void reactToMessage(message, emoji)}
         onToggleEmojiPicker={() => setEmojiPickerOpen((current) => !current)}
-        onAddEmoji={(emoji) => setComposerText((current) => `${current}${emoji}`)}
+        onAddEmoji={(emoji) => updateComposerText(`${composerText}${emoji}`)}
         onToggleMessageActions={(messageId) => {
           setActiveMessageId((current) => (current === messageId ? null : messageId));
           setReactionTargetId(null);
@@ -2712,8 +2939,7 @@ async function toggleAudioRecording() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Buscar conversación"
-            className="h-full min-w-0 flex-1 bg-transparent text-[13px] font-medium text-[#111827] outline-none placeholder:text-[#94a3b8]"
-          />
+className="h-full min-w-0 flex-1 bg-transparent text-[16px] font-medium text-[#111827] outline-none placeholder:text-[#94a3b8]"          />
 
           {search ? (
             <button
@@ -2787,3 +3013,4 @@ async function toggleAudioRecording() {
 }
 
 export default MobileChatsScreen;
+

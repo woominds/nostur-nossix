@@ -263,6 +263,7 @@ export function MailPanel() {
     filters,
     loadingIdentity,
     loadingThreads,
+     rules,
     loadingMessages,
     loadingMailboxes,
     loadingFolders,
@@ -321,8 +322,20 @@ export function MailPanel() {
   const isTrashMailbox = filters.mailbox === "trash";
 
   const unreadTotal = useMemo(() => {
+    const inbox = mailboxes.find((mailbox) => String(mailbox.codigo || "").toLowerCase() === "inbox");
+
+    if (inbox) {
+      return Number(inbox.unread_count || 0);
+    }
+
     return threads.reduce((acc, thread) => acc + Number(thread.unread_count || 0), 0);
-  }, [threads]);
+  }, [mailboxes, threads]);
+
+  const inboxTotal = useMemo(() => {
+    const inbox = mailboxes.find((mailbox) => String(mailbox.codigo || "").toLowerCase() === "inbox");
+
+    return Number(inbox?.messages_count || inbox?.provider_total_count || 0);
+  }, [mailboxes]);
 
   const inboxMailbox = useMemo(() => {
     return mailboxes.find((mailbox) => mailbox.codigo === "inbox");
@@ -748,18 +761,14 @@ export function MailPanel() {
     }
   }
 
-  async function handleSelectThread(thread: MailThread) {
+   async function handleSelectThread(thread: MailThread) {
     await selectThread(thread);
 
-    if (thread.unread_count > 0) {
-      window.setTimeout(() => {
-        const unread = useMailStore
-          .getState()
-          .messages.find((message) => message.direction === "INBOUND" && !message.read_at);
+    const messageId = thread.last_message_id;
 
-        if (unread?.message_id) {
-          void markMessageRead(unread.message_id, true);
-        }
+    if (thread.unread_count > 0 && messageId) {
+      window.setTimeout(() => {
+        void markMessageRead(messageId, true);
       }, 400);
     }
   }
@@ -897,7 +906,7 @@ export function MailPanel() {
             <nav className="space-y-1">
               <button
                 type="button"
-                onClick={() => setFilters({ mailbox: "inbox", folderId: null })}
+                onClick={() => setFilters({ mailbox: "inbox", unreadOnly: false, folderId: null })}
                 className={cx(
                   "flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium",
                   filters.mailbox === "inbox" && !filters.folderId
@@ -909,7 +918,7 @@ export function MailPanel() {
                   <Inbox className="h-4 w-4" />
                   Bandeja
                 </span>
-                <span className="text-xs">{inboxMailbox?.unread_count || unreadTotal || ""}</span>
+              <span className="text-xs">{inboxTotal || inboxMailbox?.messages_count || unreadTotal || ""}</span>
               </button>
 
               <button
@@ -930,7 +939,7 @@ export function MailPanel() {
 
               <button
                 type="button"
-                onClick={() => setFilters({ mailbox: "starred", folderId: null })}
+               onClick={() => setFilters({ mailbox: "starred", unreadOnly: false, folderId: null })}
                 className={cx(
                   "flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium",
                   filters.mailbox === "starred" && !filters.folderId
@@ -946,7 +955,7 @@ export function MailPanel() {
 
               <button
                 type="button"
-                onClick={() => setFilters({ mailbox: "archived", folderId: null })}
+             onClick={() => setFilters({ mailbox: "archived", unreadOnly: false, folderId: null })}
                 className={cx(
                   "flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium",
                   filters.mailbox === "archived" && !filters.folderId
@@ -978,7 +987,7 @@ export function MailPanel() {
 
               <button
                 type="button"
-                onClick={() => setFilters({ mailbox: "all", folderId: null })}
+              onClick={() => setFilters({ mailbox: "all", unreadOnly: false, folderId: null })}
                 className={cx(
                   "flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium",
                   filters.mailbox === "all" && !filters.folderId
@@ -1060,6 +1069,38 @@ export function MailPanel() {
               {folderActionMessage ? (
                 <div className="mb-2 rounded-lg bg-white px-2 py-1.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-100">
                   {folderActionMessage}
+                </div>
+              ) : null}
+
+                            {rules.length > 0 ? (
+                <div className="mb-3 rounded-xl bg-white p-2 ring-1 ring-blue-100">
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-blue-500">
+                    Reglas activas
+                  </p>
+
+                  <div className="space-y-1">
+                    {rules
+                      .filter((rule) => rule.enabled)
+                      .slice(0, 5)
+                      .map((rule) => {
+                        const folder = folders.find((item) => item.id === rule.folder_id);
+
+                        return (
+                          <div
+                            key={rule.id}
+                            className="rounded-lg bg-blue-50 px-2 py-1.5 text-[11px] font-medium text-blue-700"
+                          >
+                            <div className="truncate">
+                              {rule.from_equals || rule.from_contains || rule.subject_contains || rule.name}
+                            </div>
+
+                            <div className="truncate text-[10px] font-normal text-blue-500">
+                              → {folder ? getFolderName(folder) : "Carpeta"}
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
               ) : null}
 
@@ -1240,9 +1281,11 @@ export function MailPanel() {
                   Cargando
                 </span>
               ) : (
-                <span className="text-xs text-slate-500">
-                  {threads.length} hilos{selectedFolder ? ` · ${getFolderName(selectedFolder)}` : ""}
-                </span>
+              <span className="text-xs text-slate-500">
+  {threads.length} hilo{threads.length === 1 ? "" : "s"}
+  {filters.mailbox === "inbox" && inboxTotal ? ` de ${inboxTotal} correos` : ""}
+  {selectedFolder ? ` · ${getFolderName(selectedFolder)}` : ""}
+</span>
               )}
             </div>
           </div>
@@ -1421,31 +1464,34 @@ export function MailPanel() {
           ) : (
             <>
               <div className="border-b border-slate-200 bg-white px-4 py-3">
-                <div className="mb-3 flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="mb-1 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void selectThread(null)}
-                        className="rounded-lg p-1 text-slate-500 hover:bg-slate-100 lg:hidden"
-                      >
-                        <ArrowLeft className="h-4 w-4" />
-                      </button>
+                <div className="mb-3 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+  <div className="min-w-0 overflow-hidden">
+    <div className="mb-1 flex min-w-0 items-center gap-2 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => void selectThread(null)}
+        className="shrink-0 rounded-lg p-1 text-slate-500 hover:bg-slate-100 lg:hidden"
+      >
+        <ArrowLeft className="h-4 w-4" />
+      </button>
 
-                      <h2 className="truncate text-base font-semibold text-slate-900">
-                        {selectedThread.subject || "(sin asunto)"}
-                      </h2>
-                    </div>
+      <h2
+        className="min-w-0 max-w-full truncate text-base font-semibold text-slate-900"
+        title={selectedThread.subject || "(sin asunto)"}
+      >
+        {selectedThread.subject || "(sin asunto)"}
+      </h2>
+    </div>
 
-                    <p className="text-xs text-slate-500">
-                      {selectedThread.messages_count} mensaje{selectedThread.messages_count === 1 ? "" : "s"}
-                      {" · "}
-                      Último: {formatDateTime(selectedThread.last_message_at)}
-                    </p>
-                  </div>
+    <p className="truncate text-xs text-slate-500">
+      {selectedThread.messages_count} mensaje{selectedThread.messages_count === 1 ? "" : "s"}
+      {" · "}
+      Último: {formatDateTime(selectedThread.last_message_at)}
+    </p>
+  </div>
 
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
+  <div className="flex max-w-[520px] shrink-0 flex-wrap items-center justify-end gap-2">
+                        <button
                       type="button"
                       onClick={() => void handleRefreshSelectedThread()}
                       className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50"

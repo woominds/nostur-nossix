@@ -176,6 +176,11 @@ export type DocumentoDraft = {
   mes: string;
   anio: string;
   neto_gravado: string;
+  alicuota_iva: string;
+  iva_importe: string;
+  no_gravado: string;
+  exento: string;
+  total: string;
   observaciones: string;
   selectedCarritoIds: string[];
 };
@@ -402,15 +407,28 @@ function canProfileUse(profile: ProfileLite | null): boolean {
   );
 }
 
-function calculateDocumentTotals(netoGravado: number, tipoDocumento: string) {
-  const sign = tipoDocumento === "NOTA_CREDITO" ? -1 : 1;
-  const neto = netoGravado * sign;
-  const iva = neto * 0.21;
-  const total = neto + iva;
+function calculateDocumentTotalsFromDraft(draft: DocumentoDraft) {
+  const sign = draft.tipo_documento === "NOTA_CREDITO" ? -1 : 1;
+
+  const neto = parseMoney(draft.neto_gravado) * sign;
+  const alicuota = parseMoney(draft.alicuota_iva || "21");
+  const noGravado = parseMoney(draft.no_gravado) * sign;
+  const exento = parseMoney(draft.exento) * sign;
+
+  const ivaManual = parseMoney(draft.iva_importe) * sign;
+  const ivaCalculado = neto * (alicuota / 100);
+  const iva = draft.iva_importe.trim() ? ivaManual : ivaCalculado;
+
+  const totalManual = parseMoney(draft.total) * sign;
+  const totalCalculado = neto + iva + noGravado + exento;
+  const total = draft.total.trim() ? totalManual : totalCalculado;
 
   return {
     neto,
+    alicuota,
     iva,
+    noGravado,
+    exento,
     total
   };
 }
@@ -589,13 +607,11 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       retencionesQuery = retencionesQuery.eq("sucursal_id", filters.sucursalId);
     }
 
-    let carritosDisponiblesQuery = supabase
-      .from("carritos")
-      .select("*, clientes:cliente_id(*)")
-      .eq("controlado", true)
-      .eq("facturado", false)
-      .eq("cancelado", false)
-      .order("fecha_venta", { ascending: false });
+   let carritosDisponiblesQuery = supabase
+  .from("carritos")
+  .select("*, clientes:cliente_id(*)")
+  .neq("estado", "ANULADO")
+  .order("fecha_venta", { ascending: false });
 
     if (filters.moneda !== "todos") {
       carritosDisponiblesQuery = carritosDisponiblesQuery.eq("moneda", filters.moneda);
@@ -668,14 +684,13 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       return false;
     }
 
-    if (!draft.sucursal_id) {
-      set({ saving: false, error: "Seleccioná una sucursal." });
-      return false;
-    }
 
-    const sucursal = getSucursalName(get().catalogos.sucursales, draft.sucursal_id);
+
+   const sucursal = draft.sucursal_id
+  ? getSucursalName(get().catalogos.sucursales, draft.sucursal_id)
+  : "Todas las sucursales";
     const isFacturaCarritos = draft.tipo_documento === "FACTURA";
-    const isPostventa = draft.tipo_documento === "POSTVENTA";
+   
 
     let selectedCarritos: CarritoDisponible[] = [];
 
@@ -690,24 +705,25 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       }
     }
 
-    const netoGravado = isFacturaCarritos
-      ? selectedCarritos.reduce((total, carrito) => {
-          const control = carrito.carritos_control?.[0];
-          return total + getNumber(control?.importe_a_facturar);
-        }, 0)
-      : parseMoney(draft.neto_gravado);
+const suggestedNetoCarritos = selectedCarritos.reduce((total, carrito) => {
+  const control = carrito.carritos_control?.[0];
+  return total + getNumber(control?.importe_a_facturar);
+}, 0);
 
-    if (!isFacturaCarritos && netoGravado <= 0) {
-      set({ saving: false, error: "Ingresá un importe válido." });
-      return false;
-    }
+const draftForTotals: DocumentoDraft = {
+  ...draft,
+  neto_gravado:
+    draft.neto_gravado.trim() || isFacturaCarritos
+      ? draft.neto_gravado.trim() || String(suggestedNetoCarritos)
+      : draft.neto_gravado
+};
 
-    const totals =
-      isPostventa ||
-      draft.tipo_documento === "NOTA_CREDITO" ||
-      draft.tipo_documento === "NOTA_DEBITO"
-        ? calculateDocumentTotals(netoGravado, draft.tipo_documento)
-        : { neto: netoGravado, iva: 0, total: netoGravado };
+const totals = calculateDocumentTotalsFromDraft(draftForTotals);
+
+if (totals.total === 0) {
+  set({ saving: false, error: "Ingresá un importe válido." });
+  return false;
+}
 
     const payload = {
       tipo_documento: draft.tipo_documento,
@@ -718,12 +734,12 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       sucursal,
       mes: draft.mes ? Number(draft.mes) : null,
       anio: draft.anio ? Number(draft.anio) : null,
-      neto_gravado: Number(totals.neto.toFixed(2)),
-      alicuota_iva: isFacturaCarritos ? 0 : 21,
-      iva_importe: Number(totals.iva.toFixed(2)),
-      no_gravado: 0,
-      exento: 0,
-      total: Number(totals.total.toFixed(2)),
+   neto_gravado: Number(totals.neto.toFixed(2)),
+alicuota_iva: Number(totals.alicuota.toFixed(2)),
+iva_importe: Number(totals.iva.toFixed(2)),
+no_gravado: Number(totals.noGravado.toFixed(2)),
+exento: Number(totals.exento.toFixed(2)),
+total: Number(totals.total.toFixed(2)),
       estado: "PENDIENTE",
       cobrado: false,
       forma_cobro: null,
@@ -1184,25 +1200,31 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
     return get().getSelectedFacturas()[0]?.sucursal || null;
   },
 
-  getCarritosDisponiblesForDraft: (draft) => {
-    return get().carritosDisponibles.filter((carrito) => {
-      const controles = Array.isArray(carrito.carritos_control) ? carrito.carritos_control : [];
+getCarritosDisponiblesForDraft: (draft) => {
+  return get().carritosDisponibles.filter((carrito) => {
+    const controles = Array.isArray(carrito.carritos_control) ? carrito.carritos_control : [];
+    const estado = String((carrito as { estado?: string }).estado || "").toUpperCase();
 
-      const tieneControlFacturable = controles.some(
-        (control) =>
-          control.controlado &&
-          !control.facturado &&
-          !control.anulado &&
-          getNumber(control.importe_a_facturar) !== 0
-      );
+    const carritoFacturado = Boolean(carrito.facturado);
+    const carritoCancelado = Boolean(carrito.cancelado) || estado === "ANULADO";
+    const carritoControlado = Boolean(carrito.controlado) || estado === "CONTROLADO";
 
-      if (!tieneControlFacturable) return false;
-      if (draft.moneda !== carrito.moneda) return false;
-      if (draft.sucursal_id && carrito.sucursal_id !== draft.sucursal_id) return false;
+    const tieneControlFacturable = controles.some(
+      (control) =>
+        (control.controlado || carritoControlado) &&
+        !control.facturado &&
+        !control.anulado &&
+        !carritoFacturado &&
+        !carritoCancelado &&
+        getNumber(control.importe_a_facturar) !== 0
+    );
 
-      return true;
-    });
-  },
+    if (!tieneControlFacturable) return false;
+    if (draft.moneda !== carrito.moneda) return false;
+
+    return true;
+  });
+},
 
   getSucursalResumen: () => {
     const { catalogos } = get();

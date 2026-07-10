@@ -27,11 +27,6 @@ import {
 import { IconButton } from "../ui/IconButton";
 import { formatMoneyAR } from "../../lib/formatters";
 
-/* =========================================================
-   NOSSIX / NOSTUR — FACTURAS A COBRAR
-   Rediseño visual compacto
-========================================================= */
-
 type SelectOption = {
   value: string;
   label: string;
@@ -94,9 +89,12 @@ const FORMA_COBRO_OPTIONS: SelectOption[] = [
   { value: "CASHFLOW", label: "Cashflow" }
 ];
 
-/* =========================================================
-   HELPERS
-========================================================= */
+const IVA_OPTIONS: SelectOption[] = [
+  { value: "0", label: "0%" },
+  { value: "10.5", label: "10,5%" },
+  { value: "21", label: "21%" },
+  { value: "27", label: "27%" }
+];
 
 function getToday(): string {
   const now = new Date();
@@ -125,13 +123,40 @@ function formatDateAR(value?: string | null): string {
 function parseMoney(value: string | number | null | undefined): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
 
-  const normalized = String(value || "")
-    .replace(/\./g, "")
-    .replace(",", ".")
-    .replace(/[^\d.-]/g, "");
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+
+  let normalized = raw
+    .replace(/\s/g, "")
+    .replace(/\$/g, "")
+    .replace(/ARS/gi, "")
+    .replace(/USD/gi, "");
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+
+    if (lastComma > lastDot) {
+      normalized = normalized.replace(/\./g, "").replace(",", ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  }
+
+  normalized = normalized.replace(/[^\d.-]/g, "");
 
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function moneyInput(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return "";
+  return String(value.toFixed(2)).replace(".", ",");
 }
 
 function maskDocumentoNumero(value: string): string {
@@ -177,10 +202,6 @@ function getMonthYearLabel(mes: number, anio: number): string {
   return `${MONTH_NAMES[mes - 1] || "Mes"} ${anio}`;
 }
 
-/* =========================================================
-   UI BASE
-========================================================= */
-
 function FieldLabel({ children }: { children: ReactNode }) {
   return (
     <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-[#64748b]">
@@ -193,12 +214,14 @@ function TextInput({
   value,
   onChange,
   placeholder,
-  inputMode = "text"
+  inputMode = "text",
+  disabled = false
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
+  disabled?: boolean;
 }) {
   return (
     <input
@@ -206,7 +229,8 @@ function TextInput({
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       inputMode={inputMode}
-      className="h-8 w-full rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-normal text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#4f7c90]"
+      disabled={disabled}
+      className="h-8 w-full rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-normal text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#4f7c90] disabled:cursor-not-allowed disabled:bg-[#f8fafc] disabled:text-[#64748b]"
     />
   );
 }
@@ -370,11 +394,6 @@ function Toast({ toast, onClose }: { toast: ToastState; onClose: () => void }) {
   );
 }
 
-
-/* =========================================================
-   DRAFTS
-========================================================= */
-
 function createInitialDocumentDraft(): DocumentoDraft {
   const today = getToday();
 
@@ -387,6 +406,11 @@ function createInitialDocumentDraft(): DocumentoDraft {
     mes: today.slice(5, 7),
     anio: today.slice(0, 4),
     neto_gravado: "",
+    alicuota_iva: "21",
+    iva_importe: "",
+    no_gravado: "0",
+    exento: "0",
+    total: "",
     observaciones: "",
     selectedCarritoIds: []
   };
@@ -399,6 +423,30 @@ function createInitialCobroDraft(total = 0): CobroDraft {
     importe_ingresado_banco: total > 0 ? String(total.toFixed(2)).replace(".", ",") : "",
     referencia_cobro: "",
     observaciones: ""
+  };
+}
+
+function recalculateDraftMoney(
+  draft: DocumentoDraft,
+  patch: Partial<DocumentoDraft>,
+  forceTotal = true
+): DocumentoDraft {
+  const next = {
+    ...draft,
+    ...patch
+  };
+
+  const neto = parseMoney(next.neto_gravado);
+  const alicuota = parseMoney(next.alicuota_iva || "21");
+  const iva = neto * (alicuota / 100);
+  const noGravado = parseMoney(next.no_gravado);
+  const exento = parseMoney(next.exento);
+  const total = neto + iva + noGravado + exento;
+
+  return {
+    ...next,
+    iva_importe: moneyInput(iva),
+    total: forceTotal ? moneyInput(total) : next.total
   };
 }
 
@@ -418,46 +466,63 @@ function DocumentoModal({
 
   const [draft, setDraft] = useState<DocumentoDraft>(() => createInitialDocumentDraft());
 
-  const sucursalOptions: SelectOption[] = catalogos.sucursales.map((item) => ({
-    value: item.id,
-    label: item.nombre
-  }));
-
-  useEffect(() => {
-    if (draft.sucursal_id || catalogos.sucursales.length === 0) return;
-
-    const barrioJardin = catalogos.sucursales.find((item) => {
-      const nombre = item.nombre.toLowerCase();
-      return nombre.includes("barrio jardín") || nombre.includes("barrio jardin");
-    });
-
-    const defaultSucursal = barrioJardin || catalogos.sucursales[0];
-
-    if (defaultSucursal?.id) {
-      setDraft((current) => ({
-        ...current,
-        sucursal_id: defaultSucursal.id
-      }));
-    }
-  }, [catalogos.sucursales, draft.sucursal_id]);
+  const sucursalOptions: SelectOption[] = [
+    { value: "", label: "Todas las sucursales" },
+    ...catalogos.sucursales.map((item) => ({
+      value: item.id,
+      label: item.nombre
+    }))
+  ];
 
   const carritosDisponibles = getCarritosDisponiblesForDraft(draft);
   const selectedCarritos = carritosDisponibles.filter((carrito) =>
     draft.selectedCarritoIds.includes(carrito.id)
   );
 
-  const facturaCarritosTotal = selectedCarritos.reduce((total, carrito) => {
+  const facturaCarritosTotalSugerido = selectedCarritos.reduce((total, carrito) => {
     const control = carrito.carritos_control?.[0];
     return total + parseMoney(control?.importe_a_facturar);
   }, 0);
 
   const inputNeto = parseMoney(draft.neto_gravado);
-  const inputIva = inputNeto * 0.21;
-  const inputTotal = inputNeto + inputIva;
+  const inputAlicuota = parseMoney(draft.alicuota_iva || "21");
+  const inputIva = draft.iva_importe.trim()
+    ? parseMoney(draft.iva_importe)
+    : inputNeto * (inputAlicuota / 100);
+  const inputNoGravado = parseMoney(draft.no_gravado);
+  const inputExento = parseMoney(draft.exento);
+  const inputTotal = draft.total.trim()
+    ? parseMoney(draft.total)
+    : inputNeto + inputIva + inputNoGravado + inputExento;
+
   const isFacturaCarritos = draft.tipo_documento === "FACTURA";
 
   function setField<K extends keyof DocumentoDraft>(key: K, value: DocumentoDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function selectCarrito(carritoId: string) {
+    setDraft((current) => {
+      const checked = current.selectedCarritoIds.includes(carritoId);
+
+      const selectedCarritoIds = checked
+        ? current.selectedCarritoIds.filter((id) => id !== carritoId)
+        : [...current.selectedCarritoIds, carritoId];
+
+      const nextSelected = carritosDisponibles.filter((item) =>
+        selectedCarritoIds.includes(item.id)
+      );
+
+      const suggestedNeto = nextSelected.reduce((total, item) => {
+        const control = item.carritos_control?.[0];
+        return total + parseMoney(control?.importe_a_facturar);
+      }, 0);
+
+      return recalculateDraftMoney(current, {
+        selectedCarritoIds,
+        neto_gravado: suggestedNeto > 0 ? moneyInput(suggestedNeto) : ""
+      });
+    });
   }
 
   async function submit() {
@@ -467,7 +532,7 @@ function DocumentoModal({
 
   return (
     <div className="fixed inset-0 z-[220] flex items-start justify-center bg-black/35 px-4 pt-8 backdrop-blur-sm">
-      <div className="max-h-[calc(100vh-56px)] w-full max-w-6xl overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl">
+      <div className="max-h-[calc(100vh-56px)] w-full max-w-7xl overflow-auto rounded-[18px] border border-black/10 bg-white p-4 text-[#172033] shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-[17px] font-semibold text-[#172033]">
@@ -488,9 +553,9 @@ function DocumentoModal({
           </button>
         </div>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_330px]">
           <main className="rounded-[16px] border border-black/10 bg-white p-3">
-            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-5">
               <div>
                 <FieldLabel>Tipo documento</FieldLabel>
 
@@ -557,50 +622,148 @@ function DocumentoModal({
                     }))
                   }
                   options={sucursalOptions}
-                  placeholder="Seleccionar sucursal"
+                  placeholder="Todas las sucursales"
                 />
               </div>
 
-              {!isFacturaCarritos ? (
-                <>
-                  <div>
-                    <FieldLabel>Mes</FieldLabel>
+              <div>
+                <FieldLabel>Mes</FieldLabel>
 
-                    <NosturSelect
-                      value={draft.mes}
-                      onChange={(value) => setField("mes", value)}
-                      options={MONTH_NAMES.map((month, index) => ({
-                        value: String(index + 1).padStart(2, "0"),
-                        label: month
-                      }))}
-                    />
-                  </div>
+                <NosturSelect
+                  value={draft.mes}
+                  onChange={(value) => setField("mes", value)}
+                  options={MONTH_NAMES.map((month, index) => ({
+                    value: String(index + 1).padStart(2, "0"),
+                    label: month
+                  }))}
+                />
+              </div>
 
-                  <div>
-                    <FieldLabel>Año</FieldLabel>
+              <div>
+                <FieldLabel>Año</FieldLabel>
 
-                    <TextInput
-                      value={draft.anio}
-                      onChange={(value) => setField("anio", value.replace(/\D/g, "").slice(0, 4))}
-                      placeholder="2026"
-                      inputMode="numeric"
-                    />
-                  </div>
+                <TextInput
+                  value={draft.anio}
+                  onChange={(value) => setField("anio", value.replace(/\D/g, "").slice(0, 4))}
+                  placeholder="2026"
+                  inputMode="numeric"
+                />
+              </div>
 
-                  <div>
-                    <FieldLabel>Importe sin IVA</FieldLabel>
+              <div>
+                <FieldLabel>Neto gravado</FieldLabel>
 
-                    <TextInput
-                      value={draft.neto_gravado}
-                      onChange={(value) => setField("neto_gravado", value)}
-                      placeholder="0,00"
-                      inputMode="decimal"
-                    />
-                  </div>
-                </>
-              ) : null}
+                <TextInput
+                  value={draft.neto_gravado}
+                  onChange={(value) =>
+                    setDraft((current) =>
+                      recalculateDraftMoney(current, {
+                        neto_gravado: value
+                      })
+                    )
+                  }
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
+              </div>
 
-              <div className="md:col-span-2 xl:col-span-4">
+              <div>
+                <FieldLabel>Alícuota IVA %</FieldLabel>
+
+                <NosturSelect
+                  value={draft.alicuota_iva}
+                  onChange={(value) =>
+                    setDraft((current) =>
+                      recalculateDraftMoney(current, {
+                        alicuota_iva: value
+                      })
+                    )
+                  }
+                  options={IVA_OPTIONS}
+                />
+              </div>
+
+              <div>
+                <FieldLabel>IVA $</FieldLabel>
+
+                <TextInput
+                  value={draft.iva_importe}
+                  onChange={(value) => {
+                    const total =
+                      parseMoney(draft.neto_gravado) +
+                      parseMoney(value) +
+                      parseMoney(draft.no_gravado) +
+                      parseMoney(draft.exento);
+
+                    setDraft((current) => ({
+                      ...current,
+                      iva_importe: value,
+                      total: moneyInput(total)
+                    }));
+                  }}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
+              </div>
+
+              <div>
+                <FieldLabel>No gravado</FieldLabel>
+
+                <TextInput
+                  value={draft.no_gravado}
+                  onChange={(value) => {
+                    const total =
+                      parseMoney(draft.neto_gravado) +
+                      parseMoney(draft.iva_importe) +
+                      parseMoney(value) +
+                      parseMoney(draft.exento);
+
+                    setDraft((current) => ({
+                      ...current,
+                      no_gravado: value,
+                      total: moneyInput(total)
+                    }));
+                  }}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
+              </div>
+
+              <div>
+                <FieldLabel>Exento</FieldLabel>
+
+                <TextInput
+                  value={draft.exento}
+                  onChange={(value) => {
+                    const total =
+                      parseMoney(draft.neto_gravado) +
+                      parseMoney(draft.iva_importe) +
+                      parseMoney(draft.no_gravado) +
+                      parseMoney(value);
+
+                    setDraft((current) => ({
+                      ...current,
+                      exento: value,
+                      total: moneyInput(total)
+                    }));
+                  }}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
+              </div>
+
+              <div>
+                <FieldLabel>Total</FieldLabel>
+
+                <TextInput
+                  value={draft.total}
+                  onChange={(value) => setField("total", value)}
+                  placeholder="0,00"
+                  inputMode="decimal"
+                />
+              </div>
+
+              <div className="md:col-span-2 xl:col-span-5">
                 <FieldLabel>Observaciones / motivo</FieldLabel>
 
                 <TextArea
@@ -620,18 +783,18 @@ function DocumentoModal({
                     </h3>
 
                     <p className="mt-0.5 text-[11.5px] font-normal text-[#64748b]">
-                      Solo aparecen carritos controlados, no anulados y no facturados para la
-                      sucursal/moneda elegida.
+                      Aparecen todos los carritos controlados, no anulados y no facturados de la
+                      moneda elegida. No se divide por sucursal.
                     </p>
                   </div>
 
                   <div className="rounded-[14px] border border-[#4f7c90]/20 bg-[#eef6f7] px-3 py-2 text-right">
                     <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#4f7c90]">
-                      Total factura
+                      Sugerido carritos
                     </div>
 
                     <div className="text-[14px] font-semibold text-[#172033]">
-                      {formatMoneyAR(facturaCarritosTotal, draft.moneda)}
+                      {formatMoneyAR(facturaCarritosTotalSugerido, draft.moneda)}
                     </div>
                   </div>
                 </div>
@@ -639,7 +802,7 @@ function DocumentoModal({
                 <div className="grid gap-1.5">
                   {carritosDisponibles.length === 0 ? (
                     <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-5 text-center text-[12px] font-normal text-[#64748b]">
-                      No hay carritos disponibles para esta sucursal y moneda.
+                      No hay carritos disponibles para la moneda elegida.
                     </div>
                   ) : (
                     carritosDisponibles.map((carrito) => {
@@ -650,16 +813,9 @@ function DocumentoModal({
                         <button
                           key={carrito.id}
                           type="button"
-                          onClick={() =>
-                            setDraft((current) => ({
-                              ...current,
-                              selectedCarritoIds: checked
-                                ? current.selectedCarritoIds.filter((id) => id !== carrito.id)
-                                : [...current.selectedCarritoIds, carrito.id]
-                            }))
-                          }
+                          onClick={() => selectCarrito(carrito.id)}
                           className={[
-                            "grid gap-2 rounded-[12px] border px-2.5 py-2 text-left transition md:grid-cols-[30px_1.2fr_1fr_140px]",
+                            "grid gap-2 rounded-[12px] border px-2.5 py-2 text-left transition md:grid-cols-[30px_1.1fr_1fr_110px_140px]",
                             checked
                               ? "border-[#4f7c90]/50 bg-[#eef6f7]"
                               : "border-black/10 bg-[#f8fafc] hover:bg-white"
@@ -701,6 +857,17 @@ function DocumentoModal({
                             </div>
                           </div>
 
+                          <div className="min-w-0">
+                            <div className="truncate text-[12px] font-semibold text-[#172033]">
+                              {catalogos.sucursales.find((item) => item.id === carrito.sucursal_id)
+                                ?.nombre || "Sin sucursal"}
+                            </div>
+
+                            <div className="truncate text-[11px] font-normal text-[#64748b]">
+                              {carrito.moneda}
+                            </div>
+                          </div>
+
                           <div className="text-right">
                             <div className="text-[12px] font-semibold text-[#172033]">
                               {formatMoneyAR(control?.importe_a_facturar, carrito.moneda)}
@@ -714,30 +881,44 @@ function DocumentoModal({
                   )}
                 </div>
               </div>
-            ) : (
-              <div className="mt-4 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
-                <div className="flex justify-between gap-3">
-                  <span className="text-[#64748b]">Importe sin IVA</span>
-                  <strong className="font-semibold text-[#172033]">
-                    {formatMoneyAR(inputNeto, draft.moneda)}
-                  </strong>
-                </div>
+            ) : null}
 
-                <div className="flex justify-between gap-3">
-                  <span className="text-[#64748b]">IVA 21%</span>
-                  <strong className="font-semibold text-[#172033]">
-                    {formatMoneyAR(inputIva, draft.moneda)}
-                  </strong>
-                </div>
-
-                <div className="mt-2 flex justify-between gap-3 border-t border-black/10 pt-2">
-                  <span className="font-semibold text-[#172033]">Total</span>
-                  <strong className="font-semibold text-[#4f7c90]">
-                    {formatMoneyAR(inputTotal, draft.moneda)}
-                  </strong>
-                </div>
+            <div className="mt-4 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
+              <div className="flex justify-between gap-3">
+                <span className="text-[#64748b]">Neto gravado</span>
+                <strong className="font-semibold text-[#172033]">
+                  {formatMoneyAR(inputNeto, draft.moneda)}
+                </strong>
               </div>
-            )}
+
+              <div className="flex justify-between gap-3">
+                <span className="text-[#64748b]">IVA {inputAlicuota}%</span>
+                <strong className="font-semibold text-[#172033]">
+                  {formatMoneyAR(inputIva, draft.moneda)}
+                </strong>
+              </div>
+
+              <div className="flex justify-between gap-3">
+                <span className="text-[#64748b]">No gravado</span>
+                <strong className="font-semibold text-[#172033]">
+                  {formatMoneyAR(inputNoGravado, draft.moneda)}
+                </strong>
+              </div>
+
+              <div className="flex justify-between gap-3">
+                <span className="text-[#64748b]">Exento</span>
+                <strong className="font-semibold text-[#172033]">
+                  {formatMoneyAR(inputExento, draft.moneda)}
+                </strong>
+              </div>
+
+              <div className="mt-2 flex justify-between gap-3 border-t border-black/10 pt-2">
+                <span className="font-semibold text-[#172033]">Total</span>
+                <strong className="font-semibold text-[#4f7c90]">
+                  {formatMoneyAR(inputTotal, draft.moneda)}
+                </strong>
+              </div>
+            </div>
           </main>
 
           <aside className="rounded-[16px] border border-black/10 bg-[#f8fafc] p-3">
@@ -761,8 +942,10 @@ function DocumentoModal({
               <div>
                 <FieldLabel>Sucursal / moneda</FieldLabel>
                 <div className="font-semibold text-[#172033]">
-                  {catalogos.sucursales.find((item) => item.id === draft.sucursal_id)?.nombre ||
-                    "Sin sucursal"}
+                  {draft.sucursal_id
+                    ? catalogos.sucursales.find((item) => item.id === draft.sucursal_id)?.nombre ||
+                      "Sin sucursal"
+                    : "Todas las sucursales"}
                 </div>
 
                 <div className="text-[#64748b]">{draft.moneda}</div>
@@ -775,16 +958,33 @@ function DocumentoModal({
                 </div>
 
                 <div className="flex justify-between gap-3">
-                  <span className="text-[#64748b]">Total</span>
+                  <span className="text-[#64748b]">Neto</span>
                   <strong className="font-semibold text-[#172033]">
-                    {formatMoneyAR(isFacturaCarritos ? facturaCarritosTotal : inputTotal, draft.moneda)}
+                    {formatMoneyAR(inputNeto, draft.moneda)}
+                  </strong>
+                </div>
+
+                <div className="flex justify-between gap-3">
+                  <span className="text-[#64748b]">IVA</span>
+                  <strong className="font-semibold text-[#172033]">
+                    {formatMoneyAR(inputIva, draft.moneda)}
+                  </strong>
+                </div>
+
+                <div className="mt-2 flex justify-between gap-3 border-t border-black/10 pt-2">
+                  <span className="font-semibold text-[#172033]">Total</span>
+                  <strong className="font-semibold text-[#172033]">
+                    {formatMoneyAR(inputTotal, draft.moneda)}
                   </strong>
                 </div>
               </div>
 
-              <div className="rounded-[14px] border border-amber-200 bg-amber-50 p-3 text-[11px] font-medium text-amber-700">
-                La factura de carritos toma el importe a facturar desde Control de Ventas.
-              </div>
+              {isFacturaCarritos ? (
+                <div className="rounded-[14px] border border-amber-200 bg-amber-50 p-3 text-[11px] font-medium text-amber-700">
+                  Al seleccionar carritos se completa un importe sugerido, pero podés modificar
+                  neto, IVA, no gravado, exento y total manualmente.
+                </div>
+              ) : null}
             </div>
           </aside>
         </div>
@@ -1311,7 +1511,7 @@ function GrupoMonedaCard({
 
 export function FacturasCobrarPanel() {
   const loading = useFacturasCobrarStore((state) => state.loading);
-  const saving = useFacturasCobrarStore((state) => state.saving);
+  
   const error = useFacturasCobrarStore((state) => state.error);
   const filters = useFacturasCobrarStore((state) => state.filters);
   const selectedTab = useFacturasCobrarStore((state) => state.selectedTab);
@@ -1361,7 +1561,7 @@ export function FacturasCobrarPanel() {
     clearSelection();
 
     window.setTimeout(() => {
-      loadFacturas();
+      void loadFacturas();
     }, 0);
   }
 
@@ -1375,7 +1575,7 @@ export function FacturasCobrarPanel() {
   }
 
   useEffect(() => {
-    loadFacturas();
+    void loadFacturas();
   }, [loadFacturas]);
 
   const sucursalOptions: SelectOption[] = [
@@ -1389,8 +1589,7 @@ export function FacturasCobrarPanel() {
   const selectedCount = selectedFacturaIds.length;
 
   return (
-
-        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
       <header className="shrink-0 border-b border-black/10 bg-white/78 px-5 py-3 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1412,7 +1611,7 @@ export function FacturasCobrarPanel() {
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              onClick={loadFacturas}
+              onClick={() => void loadFacturas()}
               disabled={loading}
               className="inline-flex h-7 items-center gap-1.5 rounded-[10px] bg-white px-2.5 text-[11px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] disabled:opacity-50"
             >
@@ -1596,7 +1795,7 @@ export function FacturasCobrarPanel() {
 
                 <button
                   type="button"
-                  onClick={loadFacturas}
+                  onClick={() => void loadFacturas()}
                   className="h-8 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc]"
                 >
                   Aplicar filtros
@@ -1814,8 +2013,6 @@ export function FacturasCobrarPanel() {
           }}
         />
       ) : null}
-
-      {saving ? null : null}
     </div>
   );
 }

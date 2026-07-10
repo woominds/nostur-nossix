@@ -96,6 +96,81 @@ type CandeFeedbackDraft = {
   tipo: CandeFeedbackTipo;
 };
 
+const LIVENOS_DRAFT_PREFIX = "nostur:livenos:draft:";
+
+const LIVENOS_WIDTH_PREFIX = "nostur:livenos:width:";
+
+function clampLiveNosWidth(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function readLiveNosWidth(key: string, fallback: number, min: number, max: number) {
+  try {
+    const raw = window.localStorage.getItem(`${LIVENOS_WIDTH_PREFIX}${key}`);
+    const parsed = raw ? Number(raw) : fallback;
+
+    if (!Number.isFinite(parsed)) return fallback;
+
+    return clampLiveNosWidth(parsed, min, max);
+  } catch {
+    return fallback;
+  }
+}
+
+function saveLiveNosWidth(key: string, value: number) {
+  try {
+    window.localStorage.setItem(`${LIVENOS_WIDTH_PREFIX}${key}`, String(Math.round(value)));
+  } catch {
+    // no bloquear LiveNos si localStorage falla
+  }
+}
+
+function getLiveNosDraftKey(kind: "client" | "internal", conversationId?: string | null) {
+  if (!conversationId) return null;
+  return `${LIVENOS_DRAFT_PREFIX}${kind}:${conversationId}`;
+}
+
+function loadLiveNosDraft(kind: "client" | "internal", conversationId?: string | null) {
+  const key = getLiveNosDraftKey(kind, conversationId);
+  if (!key) return "";
+
+  try {
+    return window.localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveLiveNosDraft(
+  kind: "client" | "internal",
+  conversationId: string | null | undefined,
+  value: string
+) {
+  const key = getLiveNosDraftKey(kind, conversationId);
+  if (!key) return;
+
+  try {
+    if (value.trim()) {
+      window.localStorage.setItem(key, value);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // no bloquear LiveNos si localStorage falla
+  }
+}
+
+function clearLiveNosDraft(kind: "client" | "internal", conversationId?: string | null) {
+  const key = getLiveNosDraftKey(kind, conversationId);
+  if (!key) return;
+
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // no bloquear LiveNos si localStorage falla
+  }
+}
+
 function getDatoFromKeys(
   datos: Record<string, unknown> | null | undefined,
   keys: string[],
@@ -421,13 +496,28 @@ const [windowTicker, setWindowTicker] = useState(Date.now());
 const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 const [liveNosWidth, setLiveNosWidth] = useState(1400);
 
+const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
+  readLiveNosWidth("left-sidebar", 255, 220, 380)
+);
+
+const [conversationsColumnWidth, setConversationsColumnWidth] = useState(() =>
+  readLiveNosWidth("conversations-column", 325, 260, 560)
+);
+
+const [rightPanelWidth, setRightPanelWidth] = useState(() =>
+  readLiveNosWidth("right-panel", 330, 260, 520)
+);
+
 const compactLiveNos = liveNosWidth < 980;
 const liveNosRootRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const timelineRef = useRef<HTMLDivElement | null>(null);
+const fileInputRef = useRef<HTMLInputElement | null>(null);
+const imageInputRef = useRef<HTMLInputElement | null>(null);
+const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+const internalTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+const timelineRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const selectedIdRef = useRef<string | null>(null);
+  const suppressDraftPersistenceRef = useRef(false);
   const pendingScrollMessageIdRef = useRef<string | null>(null);
   const reloadTimerRef = useRef<number | null>(null);
   const audioRecorderRef = useRef<MediaRecorder | null>(null);
@@ -998,8 +1088,42 @@ if (
   }, [selectedId]);
 
   useEffect(() => {
+    if (!selectedConversation?.id) return;
+    if (suppressDraftPersistenceRef.current) return;
+
+    saveLiveNosDraft("client", selectedConversation.id, composerText);
+  }, [selectedConversation?.id, composerText]);
+
+  useEffect(() => {
+    if (!selectedConversation?.id) return;
+    if (suppressDraftPersistenceRef.current) return;
+
+    saveLiveNosDraft("internal", selectedConversation.id, internalText);
+  }, [selectedConversation?.id, internalText]);
+
+  useEffect(() => {
   window.localStorage.setItem("nostur_livenos_show_agent_name", showAgentName ? "1" : "0");
 }, [showAgentName]);
+
+useEffect(() => {
+  const timer = window.setInterval(() => {
+    setWindowTicker(Date.now());
+  }, 30000);
+
+  return () => window.clearInterval(timer);
+}, []);
+
+useEffect(() => {
+  saveLiveNosWidth("left-sidebar", leftSidebarWidth);
+}, [leftSidebarWidth]);
+
+useEffect(() => {
+  saveLiveNosWidth("conversations-column", conversationsColumnWidth);
+}, [conversationsColumnWidth]);
+
+useEffect(() => {
+  saveLiveNosWidth("right-panel", rightPanelWidth);
+}, [rightPanelWidth]);
 
 
 useEffect(() => {
@@ -1254,12 +1378,28 @@ useEffect(() => {
   }, [pendingAttachment]);
 
 useEffect(() => {
-  const timer = window.setInterval(() => {
-    setWindowTicker(Date.now());
-  }, 30000);
+  const textarea = composerTextareaRef.current;
 
-  return () => window.clearInterval(timer);
-}, []);
+  if (!textarea) return;
+
+  textarea.style.height = "40px";
+
+  const nextHeight = Math.min(textarea.scrollHeight, 150);
+  textarea.style.height = `${Math.max(40, nextHeight)}px`;
+}, [composerText]);
+
+
+useEffect(() => {
+  const textarea = internalTextareaRef.current;
+
+  if (!textarea) return;
+
+  textarea.style.height = "32px";
+
+  const nextHeight = Math.min(textarea.scrollHeight, 120);
+  textarea.style.height = `${Math.max(32, nextHeight)}px`;
+}, [internalText]);
+
 
 useEffect(() => {
   function openConversationFromNotification(event: Event) {
@@ -1314,7 +1454,7 @@ const incomingName =
 
     if (shouldOpenNewConversation) {
   setError(null);
-  resetConversationUiState();
+ resetConversationUiState({ preserveDrafts: true });
 
   const firstTemplate = activeWhatsappTemplates[0] || null;
 
@@ -1339,7 +1479,7 @@ const incomingName =
     if (!conversationId) return;
 
     setError(null);
-    resetConversationUiState();
+   resetConversationUiState({ preserveDrafts: true });
 
     void loadData().then(() => {
       setSelectedId(conversationId);
@@ -1385,7 +1525,7 @@ const pendingNewConversationName =
   if (shouldOpenNewConversationFromStorage) {
   window.setTimeout(() => {
     setError(null);
-    resetConversationUiState();
+  resetConversationUiState({ preserveDrafts: true });
 
     const firstTemplate = activeWhatsappTemplates[0] || null;
 
@@ -1406,7 +1546,7 @@ const pendingNewConversationName =
   if (pendingConversationId) {
     window.setTimeout(() => {
       setError(null);
-      resetConversationUiState();
+    resetConversationUiState({ preserveDrafts: true });
 
       void loadData().then(() => {
         setSelectedId(pendingConversationId);
@@ -1464,16 +1604,33 @@ useEffect(() => {
     return data.user?.id || null;
   }
 
-  function resetConversationUiState() {
+  function resetConversationUiState(options: { preserveDrafts?: boolean } = {}) {
+    const currentConversationId = selectedIdRef.current;
+
+    if (
+      options.preserveDrafts &&
+      currentConversationId &&
+      currentConversationId !== NIA_INTERNAL_ID
+    ) {
+      saveLiveNosDraft("client", currentConversationId, composerText);
+      saveLiveNosDraft("internal", currentConversationId, internalText);
+    }
+
+    suppressDraftPersistenceRef.current = true;
+
+    window.setTimeout(() => {
+      suppressDraftPersistenceRef.current = false;
+    }, 250);
+
     setComposerText("");
     setInternalText("");
     setScheduledText("");
     setReminderText("");
     setScheduledFor("");
     setReminderFor("");
-setTransferTargetId("");
-setTransferNote("");
-setCollaborationTargetId("");
+    setTransferTargetId("");
+    setTransferNote("");
+    setCollaborationTargetId("");
     setReplyToMessage(null);
     setOpenMessageMenuId(null);
     setShowEmojiPanel(false);
@@ -1507,54 +1664,59 @@ setCollaborationTargetId("");
     setOpportunityModalOpen(false);
   }
 
- async function selectConversation(id: string) {
-  if (id === NIA_INTERNAL_ID) {
-    setSelectedId(NIA_INTERNAL_ID);
-    selectedIdRef.current = NIA_INTERNAL_ID;
+  async function selectConversation(id: string) {
+    if (id === NIA_INTERNAL_ID) {
+      resetConversationUiState({ preserveDrafts: true });
 
-    setMensajes([]);
-    setNotas([]);
-    setReacciones([]);
+      setSelectedId(NIA_INTERNAL_ID);
+      selectedIdRef.current = NIA_INTERNAL_ID;
+
+      setMensajes([]);
+      setNotas([]);
+      setReacciones([]);
+      setEditingContactName(false);
+      setContactNameDraft("");
+
+      setStatus("NIA abierta como chat interno.");
+      return;
+    }
+
+    let selected = conversaciones.find((conv) => conv.id === id) || null;
+
+    if (!selected) {
+      await loadData();
+
+      selected = conversaciones.find((conv) => conv.id === id) || null;
+    }
+
+    if (!selected) {
+      resetConversationUiState({ preserveDrafts: true });
+
+      setSelectedId(id);
+      selectedIdRef.current = id;
+      setMensajes([]);
+      setNotas([]);
+      setReacciones([]);
+      setError(null);
+      return;
+    }
+
+    resetConversationUiState({ preserveDrafts: true });
+
+    setSelectedId(id);
+    selectedIdRef.current = id;
+
+    setComposerText(loadLiveNosDraft("client", id));
+    setInternalText(loadLiveNosDraft("internal", id));
+
     setEditingContactName(false);
-    setContactNameDraft("");
+    setContactNameDraft(getDisplayName(selected?.contacto, selected || null));
 
-    resetConversationUiState();
-
-    setStatus("NIA abierta como chat interno.");
-    return;
+    if (selected && selected.unread_count > 0) {
+      await supabase.from("conversaciones").update({ unread_count: 0 }).eq("id", id);
+      await loadData();
+    }
   }
-
-let selected = conversaciones.find((conv) => conv.id === id) || null;
-
-if (!selected) {
-  await loadData();
-
-  selected = conversaciones.find((conv) => conv.id === id) || null;
-}
-
-if (!selected) {
-  setSelectedId(id);
-  selectedIdRef.current = id;
-  setMensajes([]);
-  setNotas([]);
-  setReacciones([]);
-  setError(null);
-  return;
-}
-
-  setSelectedId(id);
-  selectedIdRef.current = id;
-
-  resetConversationUiState();
-
-  setEditingContactName(false);
-  setContactNameDraft(getDisplayName(selected?.contacto, selected || null));
-
-  if (selected && selected.unread_count > 0) {
-    await supabase.from("conversaciones").update({ unread_count: 0 }).eq("id", id);
-    await loadData();
-  }
-}
 
   async function takeConversation() {
     if (!selectedConversation) return;
@@ -2144,6 +2306,7 @@ await loadConversationDetail(selectedConversation.id, { preserveScroll: true });
       return;
     }
 
+      clearLiveNosDraft("internal", selectedConversation.id);
     setInternalText("");
     shouldStickToBottomRef.current = true;
 
@@ -2337,8 +2500,11 @@ media_filename:
         return;
       }
 
+           clearLiveNosDraft("client", selectedConversation.id);
+
       await loadData();
       await loadConversationDetail(selectedConversation.id, { preserveScroll: true });
+      setActionLoading(false);
       setActionLoading(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo preparar el archivo.");
@@ -3100,7 +3266,7 @@ function handleSelectedFile(file: File | null, source: "file" | "image" = "file"
     void setAttachmentFromFile(file);
   }
 
-  function handleComposerPaste(event: React.ClipboardEvent<HTMLInputElement>) {
+  function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
     const items = Array.from(event.clipboardData?.items || []);
     const fileItem = items.find((item) => item.kind === "file");
     const file = fileItem?.getAsFile() || null;
@@ -3473,6 +3639,58 @@ function getContextOpportunityIdForNia(context: Record<string, any> | null | und
     tone
   };
 }
+function startLiveNosColumnResize(
+  event: React.PointerEvent<HTMLDivElement>,
+  column: "left-sidebar" | "conversations-column" | "right-panel"
+) {
+  if (compactLiveNos) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+
+  const startX = event.clientX;
+  const startLeftWidth = leftSidebarWidth;
+  const startConversationsWidth = conversationsColumnWidth;
+  const startRightWidth = rightPanelWidth;
+
+  const previousCursor = document.body.style.cursor;
+  const previousUserSelect = document.body.style.userSelect;
+
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+
+  function handlePointerMove(moveEvent: PointerEvent) {
+    const deltaX = moveEvent.clientX - startX;
+
+    if (column === "left-sidebar") {
+      setLeftSidebarWidth(clampLiveNosWidth(startLeftWidth + deltaX, 220, 380));
+      return;
+    }
+
+    if (column === "conversations-column") {
+      setConversationsColumnWidth(
+        clampLiveNosWidth(startConversationsWidth + deltaX, 260, 560)
+      );
+      return;
+    }
+
+    if (column === "right-panel") {
+      setRightPanelWidth(clampLiveNosWidth(startRightWidth - deltaX, 260, 520));
+    }
+  }
+
+  function handlePointerUp() {
+    document.body.style.cursor = previousCursor;
+    document.body.style.userSelect = previousUserSelect;
+
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", handlePointerUp);
+  }
+
+  window.addEventListener("pointermove", handlePointerMove);
+  window.addEventListener("pointerup", handlePointerUp);
+}
+
 
 function renderWhatsappWindowCountdown() {
   if (!selectedConversation) return null;
@@ -5185,19 +5403,23 @@ function renderWhatsappWindowCountdown() {
         </header>
 
        <main
+ 
   className={[
     "grid min-h-0 flex-1 overflow-hidden",
-    compactLiveNos
-      ? "grid-cols-[minmax(235px,36%)_minmax(0,1fr)] gap-2 p-2"
-      : "grid-cols-[255px_325px_minmax(0,1fr)] gap-3 p-3"
+    compactLiveNos ? "gap-2 p-2" : "gap-3 p-3"
+  ].join(" ")}
+  style={{
+    gridTemplateColumns: compactLiveNos
+      ? "minmax(235px,36%) minmax(0,1fr)"
+      : `${leftSidebarWidth}px ${conversationsColumnWidth}px minmax(0,1fr)`
+  }}
+>
+ <aside
+  className={[
+    "relative min-h-0 flex-col gap-3 overflow-visible",
+    compactLiveNos ? "hidden" : "flex"
   ].join(" ")}
 >
-  <aside
-    className={[
-      "min-h-0 flex-col gap-3 overflow-hidden",
-      compactLiveNos ? "hidden" : "flex"
-    ].join(" ")}
-  >
             <LiveNosSidebar
   activeInbox={activeInbox}
   inboxCounts={inboxCounts}
@@ -5217,8 +5439,19 @@ function renderWhatsappWindowCountdown() {
   }}
   onClearSellerFilter={() => setSellerFilterId(null)}
 />
+
+{!compactLiveNos ? (
+  <div
+    role="separator"
+    aria-label="Redimensionar sidebar"
+    onPointerDown={(event) => startLiveNosColumnResize(event, "left-sidebar")}
+    className="absolute -right-2 top-0 z-30 h-full w-4 cursor-col-resize rounded-full transition hover:bg-[#4f7c90]/10"
+  >
+    <div className="mx-auto h-full w-px bg-black/10" />
+  </div>
+) : null}
           </aside>
-<div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+<div className="relative flex min-h-0 flex-col gap-2 overflow-visible">
   {compactLiveNos ? renderCompactInboxTabs() : null}
 
   <ConversationsColumn
@@ -5230,6 +5463,17 @@ function renderWhatsappWindowCountdown() {
     onSearchChange={setSearch}
     onSelectConversation={selectConversation}
   />
+
+  {!compactLiveNos ? (
+  <div
+    role="separator"
+    aria-label="Redimensionar lista de conversaciones"
+    onPointerDown={(event) => startLiveNosColumnResize(event, "conversations-column")}
+    className="absolute -right-2 top-0 z-30 h-full w-4 cursor-col-resize rounded-full transition hover:bg-[#4f7c90]/10"
+  >
+    <div className="mx-auto h-full w-px bg-black/10" />
+  </div>
+) : null}
 </div>
 
           <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-black/10 bg-white/86 shadow-sm">
@@ -5431,11 +5675,11 @@ function renderWhatsappWindowCountdown() {
 </div>
                 </div>
 
-              <div
-  className={[
-    "grid min-h-0 flex-1 overflow-hidden",
-    compactLiveNos ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_330px]"
-  ].join(" ")}
+ <div
+  className="grid min-h-0 flex-1 overflow-hidden"
+  style={{
+    gridTemplateColumns: compactLiveNos ? "1fr" : `minmax(0,1fr) ${rightPanelWidth}px`
+  }}
 >
                   <div
                     className="relative flex min-h-0 flex-col overflow-hidden"
@@ -5605,7 +5849,7 @@ function renderWhatsappWindowCountdown() {
 
                         <div className="relative min-w-0 flex-1">
                           {showEmojiPanel ? (
-                            <div className="fixed bottom-[164px] left-[520px] z-[9999] w-[420px] rounded-[18px] border border-black/10 bg-white p-3 shadow-2xl">
+<div className="absolute bottom-[58px] left-1/2 z-[9999] max-h-[420px] w-[520px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto rounded-[18px] border border-black/10 bg-white p-3 shadow-2xl">
                               <div className="mb-2 flex items-center justify-between">
                                 <div className="text-[12px] font-semibold text-[#142033]">Emoticones</div>
 
@@ -5625,7 +5869,7 @@ function renderWhatsappWindowCountdown() {
                                       {group.label}
                                     </div>
 
-                                    <div className="grid grid-cols-12 gap-1">
+                           <div className="grid grid-cols-[repeat(16,minmax(0,1fr))] gap-1">
                                       {group.emojis.map((emoji) => (
                                         <button
                                           key={`${group.label}-${emoji}`}
@@ -5633,7 +5877,7 @@ function renderWhatsappWindowCountdown() {
                                           onClick={() => {
                                             setComposerText((current) => `${current}${emoji}`);
                                           }}
-                                          className="flex h-7 w-7 items-center justify-center rounded-lg text-[17px] hover:bg-[#f1f5f9]"
+                                          className="flex h-7 w-7 items-center justify-center rounded-lg text-[16px] hover:bg-[#f1f5f9]"
                                         >
                                           {emoji}
                                         </button>
@@ -5646,7 +5890,7 @@ function renderWhatsappWindowCountdown() {
                           ) : null}
 
                           {showQuickRepliesPanel ? (
-                            <div className="fixed bottom-[164px] left-[520px] z-[9999] w-[440px] rounded-[18px] border border-black/10 bg-white p-3 shadow-2xl">
+                           <div className="absolute bottom-[58px] left-1/2 z-[9999] max-h-[460px] w-[540px] max-w-[calc(100vw-32px)] -translate-x-1/2 overflow-y-auto rounded-[18px] border border-black/10 bg-white p-3 shadow-2xl">
                               <div className="mb-3 flex items-center justify-between gap-3">
                                 <div>
                                   <div className="text-[12px] font-semibold text-[#142033]">
@@ -5748,9 +5992,12 @@ function renderWhatsappWindowCountdown() {
                             </div>
                           ) : null}
 
-                       <input
+                    
+<textarea
+  ref={composerTextareaRef}
   value={composerText}
   disabled={!canWriteToClient}
+  rows={1}
   onPaste={handleComposerPaste}
   onChange={(event) => {
     const value = event.target.value;
@@ -5780,7 +6027,7 @@ function renderWhatsappWindowCountdown() {
         : "Escribí un mensaje al pasajero"
   }
   className={[
-    "h-10 w-full rounded-full border border-black/10 px-4 text-[13px] font-normal outline-none placeholder:text-[#94a3b8]",
+    "max-h-[150px] min-h-10 w-full resize-none overflow-y-auto rounded-2xl border border-black/10 px-4 py-2.5 text-[13px] font-normal leading-relaxed outline-none placeholder:text-[#94a3b8]",
     canWriteToClient
       ? "bg-white text-[#142033] focus:border-[#4f7c90]"
       : "cursor-not-allowed bg-[#f1f5f9] text-[#94a3b8]"
@@ -5844,23 +6091,30 @@ function renderWhatsappWindowCountdown() {
                       </div>
 
                       <div className="mt-2 border-t border-dashed border-amber-200 pt-2">
-                        <div className="flex items-center gap-2">
-                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700">
+                        <div className="flex items-end gap-2">
+  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700">
                             <MessageCircle size={16} />
                           </div>
 
-                          <input
-                            value={internalText}
-                            onChange={(event) => setInternalText(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" && !event.shiftKey) {
-                                event.preventDefault();
-                                void sendInternalMessage();
-                              }
-                            }}
-                            placeholder="Mensaje interno para el equipo..."
-                            className="h-8 min-w-0 flex-1 rounded-full border border-amber-200 bg-amber-50 px-3 text-[12px] font-normal text-[#142033] outline-none placeholder:text-[#b69362] focus:border-amber-300"
-                          />
+                        <textarea
+  ref={internalTextareaRef}
+  value={internalText}
+  rows={1}
+  onChange={(event) => setInternalText(event.target.value)}
+  onKeyDown={(event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendInternalMessage();
+    }
+
+    if (event.key === "Escape") {
+      setShowEmojiPanel(false);
+      setShowQuickRepliesPanel(false);
+    }
+  }}
+  placeholder="Mensaje interno para el equipo..."
+  className="max-h-[120px] min-h-8 min-w-0 flex-1 resize-none overflow-y-auto rounded-2xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] font-normal leading-relaxed text-[#142033] outline-none placeholder:text-[#b69362] focus:border-amber-300"
+/>
 
                           <button
                             type="button"
@@ -5875,12 +6129,22 @@ function renderWhatsappWindowCountdown() {
                     </div>
                   </div>
 
-            <aside
+<aside
   className={[
-    "min-h-0 overflow-auto border-l border-black/10 bg-white p-3",
+    "relative min-h-0 overflow-auto border-l border-black/10 bg-white p-3",
     compactLiveNos ? "hidden" : "block"
   ].join(" ")}
 >
+  {!compactLiveNos ? (
+    <div
+      role="separator"
+      aria-label="Redimensionar panel derecho"
+      onPointerDown={(event) => startLiveNosColumnResize(event, "right-panel")}
+      className="absolute -left-2 top-0 z-30 h-full w-4 cursor-col-resize rounded-full transition hover:bg-[#4f7c90]/10"
+    >
+      <div className="mx-auto h-full w-px bg-black/10" />
+    </div>
+  ) : null}
                     <RightPanelTabs rightTab={rightTab} onChangeTab={setRightTab} />
 
                     <div className="mt-3">{renderRightPanelContent()}</div>

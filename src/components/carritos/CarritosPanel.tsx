@@ -96,6 +96,8 @@ const ESTADO_OPTIONS: SelectOption[] = [
   { value: "CTA_CTE", label: "Cta Cte" }
 ];
 
+const CARRITO_WIZARD_DRAFT_KEY = "nostur:carritos:wizard-draft:v1";
+
 const MONEDA_OPTIONS: SelectOption[] = [
   { value: "ARS", label: "ARS" },
   { value: "USD", label: "USD" }
@@ -360,6 +362,52 @@ function createInitialDraft(): WizardDraft {
     riesgo_motivo: "",
     confirmado: false
   };
+}
+
+
+function loadStoredWizardDraft(): { draft: WizardDraft; step: WizardStep } | null {
+  try {
+    const raw = window.localStorage.getItem(CARRITO_WIZARD_DRAFT_KEY);
+
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as {
+      draft?: WizardDraft;
+      step?: WizardStep;
+    };
+
+    if (!parsed.draft) return null;
+
+    return {
+      draft: parsed.draft,
+      step: parsed.step || 1
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredWizardDraft(draft: WizardDraft, step: WizardStep) {
+  try {
+    window.localStorage.setItem(
+      CARRITO_WIZARD_DRAFT_KEY,
+      JSON.stringify({
+        draft,
+        step,
+        savedAt: new Date().toISOString()
+      })
+    );
+  } catch {
+    // localStorage puede fallar si está lleno o bloqueado.
+  }
+}
+
+function clearStoredWizardDraft() {
+  try {
+    window.localStorage.removeItem(CARRITO_WIZARD_DRAFT_KEY);
+  } catch {
+    // noop
+  }
 }
 
 function FieldLabel({ children }: { children: ReactNode }) {
@@ -1017,21 +1065,28 @@ function CarritoWizard({
   const createDestinoInline = useCarritosStore((state) => state.createDestinoInline);
   const saveCarritoWizard = useCarritosStore((state) => state.saveCarritoWizard);
 
-  const [step, setStep] = useState<WizardStep>(1);
-  const [wizardError, setWizardError] = useState<string | null>(null);
+ const storedDraft = useMemo(() => loadStoredWizardDraft(), []);
 
-  const [draft, setDraft] = useState<WizardDraft>(() => {
-    const initial = createInitialDraft();
+const [step, setStep] = useState<WizardStep>(() => storedDraft?.step || 1);
+const [wizardError, setWizardError] = useState<string | null>(null);
+const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
 
-    initial.cliente.vendedor_id = currentProfile?.id || "";
-    initial.cliente.sucursal_id = currentProfile?.sucursal_id || "";
-    initial.venta.moneda = "ARS";
-    initial.pagosComerciales[0].moneda = "ARS";
-    initial.movimientosTesoreria[0].moneda = "ARS";
-    initial.movimientosTesoreria[0].fecha_movimiento = initial.venta.fecha_venta;
+const [draft, setDraft] = useState<WizardDraft>(() => {
+  if (storedDraft?.draft) {
+    return storedDraft.draft;
+  }
 
-    return initial;
-  });
+  const initial = createInitialDraft();
+
+  initial.cliente.vendedor_id = currentProfile?.id || "";
+  initial.cliente.sucursal_id = currentProfile?.sucursal_id || "";
+  initial.venta.moneda = "ARS";
+  initial.pagosComerciales[0].moneda = "ARS";
+  initial.movimientosTesoreria[0].moneda = "ARS";
+  initial.movimientosTesoreria[0].fecha_movimiento = initial.venta.fecha_venta;
+
+  return initial;
+});
 
   const bruto = parseMoney(draft.venta.importe_bruto);
   const promocode = draft.venta.promocode_aplicado ? parseMoney(draft.venta.promocode_importe) : 0;
@@ -1053,6 +1108,17 @@ function CarritoWizard({
   const saldo = Math.max(0, totalFinal - totalTesoreria);
   const saldoComercial = Math.max(0, totalFinal - totalComercial);
   const visibleEnCarritos = saldo <= 0.009;
+  useEffect(() => {
+  const timer = window.setTimeout(() => {
+    saveStoredWizardDraft(draft, step);
+    setDraftSavedAt(new Date().toLocaleTimeString("es-AR", {
+      hour: "2-digit",
+      minute: "2-digit"
+    }));
+  }, 700);
+
+  return () => window.clearTimeout(timer);
+}, [draft, step]);
 
   function setCliente<K extends keyof WizardDraft["cliente"]>(
     key: K,
@@ -1337,13 +1403,16 @@ function CarritoWizard({
 
     const ok = await saveCarritoWizard(payload);
 
-    if (ok) {
-      onSaved(
-        visibleEnCarritos ? "Carrito cargado correctamente." : "Venta creada y enviada a Cta Cte."
-      );
-      onClose();
-    }
-  }
+  if (ok) {
+  clearStoredWizardDraft();
+
+  onSaved(
+    visibleEnCarritos ? "Carrito cargado correctamente." : "Venta creada y enviada a Cta Cte."
+  );
+
+  onClose();
+}
+}
 
   const metodoOptions: SelectOption[] = catalogos.metodosContacto.map((item) => ({
     value: item.nombre,
@@ -1409,6 +1478,11 @@ function CarritoWizard({
           <div className="min-h-0 flex-1 overflow-auto p-3 sm:p-4">
             <WizardStepper step={step} />
             <WizardError message={wizardError} onClose={() => setWizardError(null)} />
+              {storedDraft ? (
+  <div className="mb-3 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
+    Recuperamos un borrador de carrito pendiente. Podés continuarlo, guardarlo o descartarlo.
+  </div>
+) : null}
 
             <div className="grid gap-3">
               <main className="rounded-[16px] border border-black/10 bg-white p-3">
@@ -2257,16 +2331,51 @@ function CarritoWizard({
               />
             </div>
 
-            <div className="sticky bottom-0 mt-4 flex justify-between gap-2 border-t border-black/10 bg-[#edf3f7]/95 pt-3 backdrop-blur">
-              <button
-                type="button"
-                onClick={onClose}
-                className="h-8 rounded-[10px] px-3 text-[12px] font-medium text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#172033]"
-              >
-                Cancelar
-              </button>
+            <div className="sticky bottom-0 mt-4 flex flex-col gap-2 border-t border-black/10 bg-[#edf3f7]/95 pt-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    saveStoredWizardDraft(draft, step);
+                    setDraftSavedAt(
+                      new Date().toLocaleTimeString("es-AR", {
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })
+                    );
+                  }}
+                  className="h-8 rounded-[10px] border border-[#4f7c90]/25 bg-white px-3 text-[12px] font-medium text-[#4f7c90] hover:bg-[#eef6f7]"
+                >
+                  Guardar borrador
+                </button>
 
-              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearStoredWizardDraft();
+                    onClose();
+                  }}
+                  className="h-8 rounded-[10px] px-3 text-[12px] font-medium text-red-600 hover:bg-red-50"
+                >
+                  Descartar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="h-8 rounded-[10px] px-3 text-[12px] font-medium text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#172033]"
+                >
+                  Cerrar
+                </button>
+
+                {draftSavedAt ? (
+                  <span className="text-[11px] font-normal text-[#64748b]">
+                    Borrador guardado {draftSavedAt}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end gap-2">
                 <button
                   type="button"
                   disabled={step === 1}
@@ -2841,7 +2950,7 @@ function CarritoEditModal({
           </button>
         </div>
 
-        <div className="max-h-[calc(100vh-132px)] overflow-auto p-3 sm:p-4">
+       <div className="max-h-[calc(100vh-178px)] overflow-auto p-3 pb-6 sm:p-4 sm:pb-6">
           {editError ? (
             <div className="mb-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-medium text-red-700">
               {editError}
@@ -3341,25 +3450,25 @@ function CarritoEditModal({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-black/10 bg-white/85 px-4 py-3 backdrop-blur-xl">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="h-8 rounded-[10px] border border-black/10 bg-white px-4 text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc] disabled:opacity-50"
-          >
-            Cancelar
-          </button>
+     <div className="sticky bottom-0 z-20 flex justify-end gap-2 border-t border-black/10 bg-white/95 px-4 py-3 backdrop-blur-xl">
+  <button
+    type="button"
+    onClick={onClose}
+    disabled={saving}
+    className="h-9 rounded-[10px] border border-black/10 bg-white px-4 text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc] disabled:opacity-50"
+  >
+    Cancelar
+  </button>
 
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || loadingData}
-            className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white hover:bg-[#406b7d] disabled:opacity-50"
-          >
-            {saving ? "Guardando..." : "Guardar cambios"}
-          </button>
-        </div>
+  <button
+    type="button"
+    onClick={handleSave}
+    disabled={saving || loadingData}
+    className="h-9 rounded-[10px] bg-[#4f7c90] px-5 text-[12px] font-semibold text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
+  >
+    {saving ? "Guardando..." : "Guardar cambios"}
+  </button>
+</div>
       </div>
     </div>,
     document.body

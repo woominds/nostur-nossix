@@ -1091,11 +1091,52 @@ export function GlobalWhatsappNotifications() {
       }
     }
 
+     async function pollRecentInternalNotes() {
+      if (!mounted) return;
+
+      try {
+        const { data, error } = await supabase
+          .from("notas_conversacion")
+          .select("id,conversacion_id,autor_id,contenido,tipo,created_at")
+          .eq("tipo", "mensaje_interno")
+          .gte("created_at", pollingStartedAt)
+          .order("created_at", { ascending: true })
+          .limit(25);
+
+        if (error) {
+          logWarn("Polling mensajes internos falló", error.message);
+          return;
+        }
+
+        const notes = (data || []) as InternalNotePayload[];
+
+        if (notes.length > 0) {
+          logInfo("Polling detectó mensajes internos recientes", {
+            count: notes.length,
+            ids: notes.map((note) => note.id)
+          });
+        }
+
+        for (const note of notes) {
+          if (!mounted) return;
+          if (processedMessagesRef.current.has(`internal:${note.id}`)) continue;
+
+          await handleInternalNote(note);
+        }
+      } catch (error) {
+        logWarn("Polling mensajes internos lanzó excepción", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
     pollingTimer = window.setInterval(() => {
       void pollRecentInboundMessages();
+      void pollRecentInternalNotes();
     }, 6000);
 
     void pollRecentInboundMessages();
+    void pollRecentInternalNotes();
 
       const channel = supabase
       .channel(`global-whatsapp-notifications-${Date.now()}`)

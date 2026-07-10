@@ -133,9 +133,7 @@ async function getCurrentUserId(): Promise<string | null> {
 function canProfileManage(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
-        profile.rol === "gerencia" ||
-        profile.rol === "administracion")
+      (profile.rol === "admin_general" || profile.rol === "gerencia")
   );
 }
 
@@ -147,6 +145,30 @@ function canProfileUse(profile: ProfileLite | null): boolean {
         profile.rol === "administracion" ||
         profile.rol === "vendedor")
   );
+}
+
+const RESUELTOS_RETENTION_DAYS = 30;
+
+function getResolvedRetentionCutoff(): number {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - RESUELTOS_RETENTION_DAYS);
+  cutoff.setHours(0, 0, 0, 0);
+
+  return cutoff.getTime();
+}
+
+function isPendienteWithinRetention(pendiente: Pendiente): boolean {
+  if (!pendiente.resuelto) return true;
+
+  const resolvedAt = pendiente.resuelto_at || pendiente.updated_at;
+
+  if (!resolvedAt) return false;
+
+  const resolvedTime = new Date(resolvedAt).getTime();
+
+  if (!Number.isFinite(resolvedTime)) return false;
+
+  return resolvedTime >= getResolvedRetentionCutoff();
 }
 
 function sortPendientes(a: Pendiente, b: Pendiente): number {
@@ -260,7 +282,10 @@ export const usePendientesStore = create<PendientesState>((set, get) => ({
       return;
     }
 
-    const pendientes = ((pendientesRes.data || []) as Pendiente[]).sort(sortPendientes);
+const pendientes = ((pendientesRes.data || []) as Pendiente[])
+  .filter(isPendienteWithinRetention)
+  .sort(sortPendientes);
+
 
     set({
       loading: false,
@@ -452,19 +477,15 @@ export const usePendientesStore = create<PendientesState>((set, get) => ({
 
     return pendientes
       .filter((pendiente) => {
-        if (filters.estado === "abiertos" && pendiente.resuelto) return false;
-        if (filters.estado === "resueltos" && !pendiente.resuelto) return false;
         if (filters.prioridad !== "todos" && pendiente.prioridad !== filters.prioridad) return false;
-        if (filters.vendedorId !== "todos" && pendiente.vendedor_id !== filters.vendedorId) return false;
 
         if (search) {
-          const haystack = normalizeText([
-            pendiente.titulo,
-            pendiente.descripcion,
-            pendiente.prioridad,
-            pendiente.vendedor,
-            pendiente.sucursal
-          ].join(" "));
+        const haystack = normalizeText([
+  pendiente.titulo,
+  pendiente.descripcion,
+  pendiente.prioridad,
+  pendiente.sucursal
+].join(" "));
 
           if (!haystack.includes(search)) return false;
         }
@@ -480,7 +501,7 @@ export const usePendientesStore = create<PendientesState>((set, get) => ({
     return {
       total: pendientes.length,
       abiertos: pendientes.filter((item) => !item.resuelto).length,
-      resueltos: pendientes.filter((item) => item.resuelto).length,
+     resueltos: pendientes.filter((item) => item.resuelto && isPendienteWithinRetention(item)).length,
       urgentes: pendientes.filter((item) => !item.resuelto && item.prioridad === "URGENTE").length,
       altas: pendientes.filter((item) => !item.resuelto && item.prioridad === "ALTA").length
     };

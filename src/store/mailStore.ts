@@ -505,14 +505,21 @@ function buildThreadQuery(filters: MailFilters) {
     .select("*")
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("updated_at", { ascending: false, nullsFirst: false })
-    .limit(100);
+    .limit(300);
 
   if (filters.mailbox === "inbox") {
-    query = query.eq("is_archived", false);
+    query = query
+      .eq("is_archived", false)
+      .neq("estado", "PAPELERA")
+      .neq("estado", "ELIMINADO")
+      .neq("estado", "SPAM");
   }
 
   if (filters.mailbox === "sent") {
-    query = query.eq("last_message_direction", "OUTBOUND");
+    query = query
+      .eq("last_message_direction", "OUTBOUND")
+      .neq("estado", "PAPELERA")
+      .neq("estado", "ELIMINADO");
   }
 
   if (filters.mailbox === "drafts") {
@@ -528,11 +535,17 @@ function buildThreadQuery(filters: MailFilters) {
   }
 
   if (filters.mailbox === "archived") {
-    query = query.eq("is_archived", true);
+    query = query
+      .eq("is_archived", true)
+      .neq("estado", "PAPELERA")
+      .neq("estado", "ELIMINADO");
   }
 
   if (filters.mailbox === "starred") {
-    query = query.eq("is_starred", true);
+    query = query
+      .eq("is_starred", true)
+      .neq("estado", "PAPELERA")
+      .neq("estado", "ELIMINADO");
   }
 
   if (filters.unreadOnly) {
@@ -553,6 +566,108 @@ function buildThreadQuery(filters: MailFilters) {
   }
 
   return query;
+}
+
+
+function buildMessageQuery(filters: MailFilters) {
+  let query = supabase
+    .from("vw_mail_messages")
+    .select("*")
+    .order("received_at", { ascending: false, nullsFirst: false })
+    .order("sent_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false, nullsFirst: false })
+    .limit(300);
+
+  if (filters.mailbox === "inbox") {
+    query = query
+      .eq("direction", "INBOUND")
+      .is("archived_at", null);
+  }
+
+  if (filters.mailbox === "sent") {
+    query = query.eq("direction", "OUTBOUND");
+  }
+
+  if (filters.mailbox === "trash") {
+    query = query.eq("thread_estado", "PAPELERA");
+  }
+
+  if (filters.mailbox === "spam") {
+    query = query.eq("thread_estado", "SPAM");
+  }
+
+  if (filters.mailbox === "archived") {
+    query = query.not("archived_at", "is", null);
+  }
+
+  if (filters.unreadOnly) {
+    query = query.is("read_at", null).eq("direction", "INBOUND");
+  }
+
+  const search = filters.search.trim();
+
+  if (search) {
+    query = query.or(
+      [
+        `subject.ilike.%${search}%`,
+        `from_email.ilike.%${search}%`,
+        `from_name.ilike.%${search}%`,
+        `snippet.ilike.%${search}%`,
+        `body_text.ilike.%${search}%`
+      ].join(",")
+    );
+  }
+
+  return query;
+}
+
+function messageToThread(message: MailMessage): MailThread {
+  return {
+    thread_id: message.thread_id || message.message_id,
+    account_id: message.account_id,
+    identity_id: message.identity_id,
+    account_email: message.account_email,
+    profile_id: message.profile_id,
+    identity_nombre: message.identity_nombre,
+    identity_email: message.identity_email,
+
+    subject: message.subject || message.thread_subject || "(sin asunto)",
+    estado: message.thread_estado,
+    prioridad: message.thread_prioridad,
+
+    messages_count: 1,
+    unread_count: message.direction === "INBOUND" && !message.read_at ? 1 : 0,
+
+    last_message_at: message.received_at || message.sent_at || message.created_at,
+    last_from_email: message.from_email,
+    last_from_name: message.from_name,
+    last_snippet: message.snippet || message.body_text,
+
+    last_message_id: message.message_id,
+    last_message_direction: message.direction,
+    last_message_status: message.status,
+    last_message_to_emails: message.to_emails,
+    last_message_has_attachments: message.has_attachments,
+    last_message_created_at: message.created_at,
+
+    is_archived: Boolean(message.archived_at),
+    is_starred: false,
+
+    related_type: message.related_type,
+    related_id: message.related_id,
+    contacto_id: message.contacto_id,
+    cliente_id: message.cliente_id,
+    carrito_id: message.carrito_id,
+    file_id: message.file_id,
+    presupuesto_id: message.presupuesto_id,
+    conversacion_id: message.conversacion_id,
+
+    sucursal_id: message.sucursal_id,
+    assigned_to: message.assigned_to,
+
+    created_at: message.created_at,
+    updated_at: message.updated_at
+  };
 }
 
 export const useMailStore = create<MailStoreState>((set, get) => ({
@@ -666,42 +781,62 @@ export const useMailStore = create<MailStoreState>((set, get) => ({
     }
   },
 
-  fetchFolders: async () => {
-    set({ loadingFolders: true, error: null });
+fetchFolders: async () => {
+  set({ loadingFolders: true, error: null });
 
-    try {
-      const { data: authData, error: authError } = await supabase.auth.getUser();
+  try {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
 
-      if (authError) throw authError;
+    if (authError) throw authError;
 
-      const userId = authData.user?.id;
+    const authUserId = authData.user?.id || null;
+    const identityEmail = get().identity?.email?.trim().toLowerCase() || null;
 
-      if (!userId) {
-        set({ folders: [], loadingFolders: false });
-        return;
-      }
+    const userIds = new Set<string>();
 
-      const { data, error } = await supabase
-        .from("mail_folders")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("is_archived", false)
-        .order("position", { ascending: true })
-        .order("name", { ascending: true });
+    if (authUserId) {
+      userIds.add(authUserId);
+    }
 
-      if (error) throw error;
+    if (identityEmail) {
+      const { data: profileRows, error: profileError } = await supabase
+        .from("profiles")
+        .select("id,email")
+        .ilike("email", identityEmail);
 
-      set({
-        folders: (data ?? []) as MailUserFolder[],
-        loadingFolders: false
-      });
-    } catch (error) {
-      set({
-        error: normalizeError(error),
-        loadingFolders: false
+      if (profileError) throw profileError;
+
+      (profileRows || []).forEach((profile) => {
+        if (profile.id) userIds.add(String(profile.id));
       });
     }
-  },
+
+    if (userIds.size === 0) {
+      set({ folders: [], loadingFolders: false });
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("mail_folders")
+      .select("*")
+      .in("user_id", Array.from(userIds))
+      .eq("is_archived", false)
+      .order("position", { ascending: true })
+      .order("name", { ascending: true });
+
+    if (error) throw error;
+
+    set({
+      folders: (data ?? []) as MailUserFolder[],
+      loadingFolders: false
+    });
+  } catch (error) {
+    set({
+      error: normalizeError(error),
+      loadingFolders: false
+    });
+  }
+},
 
   fetchRules: async () => {
     set({ loadingRules: true, error: null });
@@ -749,21 +884,36 @@ export const useMailStore = create<MailStoreState>((set, get) => ({
     try {
       const { data: authData, error: authError } = await supabase.auth.getUser();
 
-      if (authError) throw authError;
+if (authError) throw authError;
 
-      const userId = authData.user?.id;
+let userId = authData.user?.id || null;
+const identityEmail = get().identity?.email?.trim().toLowerCase() || null;
 
-      if (!userId) throw new Error("No se pudo identificar el usuario.");
+if (identityEmail) {
+  const { data: profileRow, error: profileError } = await supabase
+    .from("profiles")
+    .select("id,email")
+    .ilike("email", identityEmail)
+    .maybeSingle();
 
-      const { data, error } = await supabase
-        .from("mail_folders")
-        .insert({
-          user_id: userId,
-          name: cleanName,
-          parent_id: parentId || null
-        })
-        .select("id")
-        .single();
+  if (profileError) throw profileError;
+
+  if (profileRow?.id) {
+    userId = String(profileRow.id);
+  }
+}
+
+if (!userId) throw new Error("No se pudo identificar el usuario.");
+
+const { data, error } = await supabase
+  .from("mail_folders")
+  .insert({
+    user_id: userId,
+    name: cleanName,
+    parent_id: parentId || null
+  })
+  .select("id")
+  .single();
 
       if (error) throw error;
 
@@ -997,7 +1147,7 @@ export const useMailStore = create<MailStoreState>((set, get) => ({
     }
   },
 
-  fetchThreads: async () => {
+   fetchThreads: async () => {
     const { filters } = get();
 
     set({ loadingThreads: true, error: null });
@@ -1033,6 +1183,25 @@ export const useMailStore = create<MailStoreState>((set, get) => ({
           set({ threads: [], loadingThreads: false });
           return;
         }
+      }
+
+      if (filters.mailbox === "inbox" && !filters.folderId) {
+        let messageQuery = buildMessageQuery(filters);
+
+        const { data: messagesData, error: messagesError } = await messageQuery;
+
+        if (messagesError) throw messagesError;
+
+        const messageThreads = ((messagesData ?? []) as MailMessage[])
+          .filter((message) => Boolean(message.message_id))
+          .map(messageToThread);
+
+        set({
+          threads: messageThreads,
+          loadingThreads: false
+        });
+
+        return;
       }
 
       let query = buildThreadQuery(filters);
@@ -1328,37 +1497,7 @@ export const useMailStore = create<MailStoreState>((set, get) => ({
   },
 
 
-   trashThread: async (threadId: string, trashed = true) => {
-    set({ error: null });
 
-    try {
-      const { error } = await supabase.rpc("mail_set_thread_trashed", {
-        p_thread_id: threadId,
-        p_trashed: trashed
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      const { selectedThread } = get();
-
-      if (selectedThread?.thread_id === threadId) {
-        set({
-          selectedThread: {
-            ...selectedThread,
-            estado: trashed ? "PAPELERA" : "ABIERTO",
-            is_archived: trashed
-          }
-        });
-      }
-
-      await get().fetchThreads();
-      await get().fetchMailboxes();
-    } catch (error) {
-      set({ error: normalizeError(error) });
-    }
-  },
 
 trashThreads: async (threadIds, trashed = true) => {
   set({ error: null });

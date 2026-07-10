@@ -2136,72 +2136,77 @@ function DestinoAutocomplete({
   placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(
-    null
-  );
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const query = normalizeSearchText(value);
 
   const filtered = options
-    .filter((option) => normalizeSearchText(`${option.label} ${option.value}`).includes(query))
+    .filter((option) => {
+      if (!query) return true;
+
+      return normalizeSearchText(`${option.label} ${option.value}`).includes(query);
+    })
     .slice(0, 18);
 
-  function openFloating() {
-    const rect = wrapperRef.current?.getBoundingClientRect();
-
-    if (rect) {
-      setPosition({
-        top: rect.bottom + 6,
-        left: rect.left,
-        width: rect.width
-      });
-    }
-
-    setOpen(true);
+  function closeDelayed() {
+    window.setTimeout(() => {
+      setOpen(false);
+    }, 160);
   }
 
   return (
-    <>
-      <div ref={wrapperRef}>
-        <input
-          value={value}
-          onChange={(event) => {
-            onChange(event.target.value);
-            openFloating();
+    <div className="relative">
+      <input
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={closeDelayed}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+
+          if (event.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        placeholder={placeholder}
+        className="h-8 w-full rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-normal text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#4f7c90]"
+      />
+
+      {open ? (
+        <div
+          className="absolute left-0 right-0 top-[36px] z-[220] max-h-72 overflow-auto rounded-[14px] border border-black/10 bg-white p-1.5 shadow-2xl"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
           }}
-          onFocus={openFloating}
-          placeholder={placeholder}
-          className="h-8 w-full rounded-[10px] border border-black/10 bg-white px-3 text-[12px] font-normal text-[#172033] outline-none transition placeholder:text-[#94a3b8] focus:border-[#4f7c90]"
-        />
-      </div>
+        >
+          {filtered.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+              }}
+              className="block w-full rounded-[10px] px-3 py-2 text-left text-[12px] font-medium text-[#64748b] hover:bg-[#f8fafc]"
+            >
+              Usar “{value || "destino"}”
+            </button>
+          ) : (
+            <>
+              {value.trim() ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(value);
+                    setOpen(false);
+                  }}
+                  className="mb-1 block w-full rounded-[10px] px-3 py-2 text-left text-[12px] font-medium text-[#64748b] hover:bg-[#f8fafc]"
+                >
+                  Usar “{value}”
+                </button>
+              ) : null}
 
-      {open && position ? (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-[900] cursor-default bg-transparent"
-            onClick={() => setOpen(false)}
-            tabIndex={-1}
-          />
-
-          <div
-            className="fixed z-[910] max-h-72 overflow-auto rounded-[14px] border border-black/10 bg-white p-1.5 shadow-2xl"
-            style={{
-              top: position.top,
-              left: position.left,
-              width: position.width
-            }}
-          >
-            {filtered.length === 0 ? (
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="block w-full rounded-[10px] px-3 py-2 text-left text-[12px] font-medium text-[#64748b] hover:bg-[#f8fafc]"
-              >
-                Usar “{value || "destino"}”
-              </button>
-            ) : (
-              filtered.map((option) => (
+              {filtered.map((option) => (
                 <button
                   key={option.value}
                   type="button"
@@ -2213,12 +2218,12 @@ function DestinoAutocomplete({
                 >
                   {option.label}
                 </button>
-              ))
-            )}
-          </div>
-        </>
+              ))}
+            </>
+          )}
+        </div>
       ) : null}
-    </>
+    </div>
   );
 }
 

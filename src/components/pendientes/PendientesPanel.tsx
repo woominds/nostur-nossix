@@ -38,6 +38,8 @@ type ToastState = {
   message: string;
 } | null;
 
+type PendientesTab = "pendientes" | "resueltos";
+
 type ConfirmState = {
   title: string;
   message: string;
@@ -56,12 +58,6 @@ const PRIORIDAD_OPTIONS: SelectOption[] = [
 const PRIORIDAD_FILTER_OPTIONS: SelectOption[] = [
   { value: "todos", label: "Todas" },
   ...PRIORIDAD_OPTIONS
-];
-
-const ESTADO_OPTIONS: SelectOption[] = [
-  { value: "todos", label: "Todos" },
-  { value: "abiertos", label: "Abiertos" },
-  { value: "resueltos", label: "Resueltos" }
 ];
 
 /* =========================================================
@@ -654,12 +650,13 @@ function PendienteCard({
 ========================================================= */
 
 export function PendientesPanel() {
+  const [activeTab, setActiveTab] = useState<PendientesTab>("pendientes");
+
   const loading = usePendientesStore((state) => state.loading);
   const saving = usePendientesStore((state) => state.saving);
   const error = usePendientesStore((state) => state.error);
   const filters = usePendientesStore((state) => state.filters);
-  const canManagePendientes = usePendientesStore((state) => state.canManagePendientes);
-  const catalogos = usePendientesStore((state) => state.catalogos);
+
 
   const loadPendientes = usePendientesStore((state) => state.loadPendientes);
   const createPendiente = usePendientesStore((state) => state.createPendiente);
@@ -672,16 +669,14 @@ export function PendientesPanel() {
   const getPendientesFiltrados = usePendientesStore((state) => state.getPendientesFiltrados);
   const getMetrics = usePendientesStore((state) => state.getMetrics);
 
-  const pendientes = getPendientesFiltrados();
-  const metrics = getMetrics();
+const pendientesBase = getPendientesFiltrados();
+const metrics = getMetrics();
 
-  const vendedorOptions: SelectOption[] = [
-    { value: "todos", label: "Todos" },
-    ...catalogos.vendedores.map((item) => ({
-      value: item.id,
-      label: `${item.nombre} ${item.apellido}`.trim()
-    }))
-  ];
+const pendientes = pendientesBase.filter((pendiente) =>
+  activeTab === "pendientes" ? !pendiente.resuelto : pendiente.resuelto
+);
+
+
 
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [modalPendiente, setModalPendiente] = useState<Pendiente | null>(null);
@@ -802,6 +797,41 @@ export function PendientesPanel() {
           </div>
         ) : null}
 
+
+        <section className="mb-3 rounded-[16px] border border-black/10 bg-white/62 p-1.5 shadow-sm backdrop-blur-xl">
+  <div className="grid grid-cols-2 gap-1.5">
+    <button
+      type="button"
+      onClick={() => setActiveTab("pendientes")}
+      className={[
+        "h-9 rounded-[12px] text-[12px] font-semibold transition",
+        activeTab === "pendientes"
+          ? "bg-[#4f7c90] text-white shadow-sm"
+          : "bg-white text-[#64748b] hover:bg-[#f8fafc] hover:text-[#172033]"
+      ].join(" ")}
+    >
+      Pendientes abiertos · {metrics.abiertos}
+    </button>
+
+    <button
+      type="button"
+      onClick={() => setActiveTab("resueltos")}
+      className={[
+        "h-9 rounded-[12px] text-[12px] font-semibold transition",
+        activeTab === "resueltos"
+          ? "bg-emerald-600 text-white shadow-sm"
+          : "bg-white text-[#64748b] hover:bg-[#f8fafc] hover:text-[#172033]"
+      ].join(" ")}
+    >
+      Pendientes resueltos · {metrics.resueltos}
+    </button>
+  </div>
+
+  <div className="mt-1.5 px-2 text-[11px] font-normal text-[#64748b]">
+    Los resueltos se muestran durante 30 días desde su resolución.
+  </div>
+</section>
+
         <section className="relative z-[60] mb-3 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
@@ -814,12 +844,9 @@ export function PendientesPanel() {
 
                 <h2 className="text-[12px] font-semibold text-[#172033]">Filtros</h2>
 
-                <span className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-nostur-orange ring-1 ring-orange-100">
-                  {filters.estado} · {filters.prioridad}
-                  {canManagePendientes && filters.vendedorId !== "todos"
-                    ? ` · ${vendedorOptions.find((item) => item.value === filters.vendedorId)?.label || "Vendedor"}`
-                    : ""}
-                </span>
+               <span className="rounded-md bg-orange-50 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-nostur-orange ring-1 ring-orange-100">
+{activeTab === "pendientes" ? "abiertos" : "resueltos"} · {filters.prioridad}
+</span>
               </div>
 
               <div className="mt-1 truncate text-[11.5px] font-normal text-[#64748b]">
@@ -840,22 +867,9 @@ export function PendientesPanel() {
           </div>
 
           {filtersOpen ? (
-            <div
-              className={[
-                "mt-3 grid gap-2.5",
-                canManagePendientes
-                  ? "lg:grid-cols-[150px_150px_210px_minmax(0,1fr)]"
-                  : "lg:grid-cols-[150px_150px_minmax(0,1fr)]"
-              ].join(" ")}
-            >
-              <div>
-                <FieldLabel>Estado</FieldLabel>
-                <NosturSelect
-                  value={filters.estado}
-                  onChange={(value) => setFilter("estado", value as typeof filters.estado)}
-                  options={ESTADO_OPTIONS}
-                />
-              </div>
+           
+          <div className="mt-3 grid gap-2.5 lg:grid-cols-[150px_minmax(0,1fr)]">
+             
 
               <div>
                 <FieldLabel>Prioridad</FieldLabel>
@@ -866,16 +880,7 @@ export function PendientesPanel() {
                 />
               </div>
 
-              {canManagePendientes ? (
-                <div>
-                  <FieldLabel>Vendedor</FieldLabel>
-                  <NosturSelect
-                    value={filters.vendedorId}
-                    onChange={(value) => setFilter("vendedorId", value)}
-                    options={vendedorOptions}
-                  />
-                </div>
-              ) : null}
+           
 
               <div>
                 <FieldLabel>Buscar</FieldLabel>
@@ -885,7 +890,7 @@ export function PendientesPanel() {
                   <input
                     value={filters.search}
                     onChange={(event) => setFilter("search", event.target.value)}
-                    placeholder="Buscar por texto, vendedor, sucursal o prioridad..."
+                   placeholder="Buscar por texto, sucursal o prioridad..."
                     className="h-full min-w-0 flex-1 bg-transparent text-[12px] font-normal text-[#172033] outline-none placeholder:text-[#94a3b8]"
                   />
                 </div>
@@ -905,7 +910,9 @@ export function PendientesPanel() {
         <section className="relative z-0 rounded-[16px] border border-black/10 bg-white/62 p-3 shadow-sm backdrop-blur-xl">
           <div className="mb-2.5 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-[14px] font-semibold text-[#172033]">Listado de pendientes</h2>
+            <h2 className="text-[14px] font-semibold text-[#172033]">
+  {activeTab === "pendientes" ? "Pendientes abiertos" : "Pendientes resueltos"}
+</h2>
 
               <p className="text-[11.5px] font-normal text-[#64748b]">
                 {loading ? "Cargando..." : `${pendientes.length} pendientes encontrados`}
@@ -919,7 +926,9 @@ export function PendientesPanel() {
             </div>
           ) : pendientes.length === 0 ? (
             <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-5 text-center text-[12px] font-normal text-[#64748b]">
-              No hay pendientes para los filtros seleccionados.
+             {activeTab === "pendientes"
+  ? "No hay pendientes abiertos para los filtros seleccionados."
+  : "No hay pendientes resueltos en los últimos 30 días."}
             </div>
           ) : (
             <div className="grid gap-1.5">
