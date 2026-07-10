@@ -1113,17 +1113,39 @@ async function findOrCreateConversacion(params: {
   lastMessage: string | null;
   phoneNumberId: string | null;
 }) {
-  const existingRes = await params.supabase
+  const normalizedPhone = normalizePhoneDigits(params.phone);
+
+  // 1. Primero buscamos por teléfono normalizado.
+  let existingRes = await params.supabase
     .from("conversaciones")
-    .select("id, unread_count, metadata, assigned_to")
+    .select("id, unread_count, metadata, assigned_to, contacto_id")
     .eq("channel", "whatsapp")
-    .eq("wa_phone_normalized", normalizePhoneDigits(params.phone))
+    .eq("wa_phone_normalized", normalizedPhone)
     .is("deleted_at", null)
     .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (existingRes.error) throw existingRes.error;
+  if (existingRes.error) {
+    throw existingRes.error;
+  }
+
+  // 2. Si no apareció por teléfono, buscamos por contacto_id.
+  // Esto evita violar conversaciones_contacto_id_key.
+  if (!existingRes.data?.id) {
+    existingRes = await params.supabase
+      .from("conversaciones")
+      .select("id, unread_count, metadata, assigned_to, contacto_id")
+      .eq("contacto_id", params.contactoId)
+      .is("deleted_at", null)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingRes.error) {
+      throw existingRes.error;
+    }
+  }
 
   if (existingRes.data?.id) {
     const previousMetadata = readRecord(existingRes.data.metadata);
@@ -1136,7 +1158,7 @@ async function findOrCreateConversacion(params: {
         wa_phone: params.phone,
         titulo: params.contactName || params.phone,
         subject: params.contactName || params.phone,
-inbox: existingRes.data.assigned_to ? "vendedor" : "general",
+        inbox: existingRes.data.assigned_to ? "vendedor" : "general",
         status: "open",
         unread_count: unreadCount,
         last_message_at: getNowIso(),
@@ -1147,8 +1169,9 @@ inbox: existingRes.data.assigned_to ? "vendedor" : "general",
         archived_at: null,
         deleted_at: null,
         closed_at: null,
-        estado_gestion: existingRes.data.assigned_to ? "en_gestion" : "sin_atender",
-        estado_comercial: "nuevo",
+        estado_gestion: existingRes.data.assigned_to
+          ? "en_gestion"
+          : "sin_atender",
         metadata: {
           ...previousMetadata,
           whatsapp_phone_number_id: params.phoneNumberId,
@@ -1160,7 +1183,9 @@ inbox: existingRes.data.assigned_to ? "vendedor" : "general",
       .select("id")
       .single();
 
-    if (updateRes.error) throw updateRes.error;
+    if (updateRes.error) {
+      throw updateRes.error;
+    }
 
     return updateRes.data.id as string;
   }
@@ -1171,7 +1196,7 @@ inbox: existingRes.data.assigned_to ? "vendedor" : "general",
       contacto_id: params.contactoId,
       assigned_to: null,
       sucursal_id: null,
-     inbox: "general",
+      inbox: "general",
       status: "open",
       priority: 0,
       unread_count: 1,
@@ -1203,7 +1228,9 @@ inbox: existingRes.data.assigned_to ? "vendedor" : "general",
     .select("id")
     .single();
 
-  if (insertRes.error) throw insertRes.error;
+  if (insertRes.error) {
+    throw insertRes.error;
+  }
 
   return insertRes.data.id as string;
 }
