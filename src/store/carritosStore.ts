@@ -241,7 +241,6 @@ type CarritosState = {
 
  currentProfile: ProfileLite | null;
 canManageCarritos: boolean;
-sellerDefaultApplied: boolean;
 
   carritos: Carrito[];
   pagosComerciales: PagoComercial[];
@@ -521,7 +520,7 @@ export const useCarritosStore = create<CarritosState>((set, get) => ({
 
 currentProfile: null,
 canManageCarritos: false,
-sellerDefaultApplied: false,
+
 
   carritos: [],
   pagosComerciales: [],
@@ -595,26 +594,7 @@ sellerDefaultApplied: false,
       return;
     }
 
- const currentFilters = get().filters;
-const sellerDefaultApplied = get().sellerDefaultApplied;
-
-let effectiveFilters = currentFilters;
-
-if (!sellerDefaultApplied) {
-  const role = String(currentProfile?.rol || "").toLowerCase();
-
-  const defaultVendedorId = role === "vendedor" ? currentUserId : "todos";
-
-  effectiveFilters = {
-    ...currentFilters,
-    vendedorId: defaultVendedorId
-  };
-
-  set({
-    filters: effectiveFilters,
-    sellerDefaultApplied: true
-  });
-}
+    const effectiveFilters = get().filters;
 
 const periodRange =
   effectiveFilters.periodMode === "mes"
@@ -1436,8 +1416,7 @@ estado: input.carrito.visible_en_carritos ? "EN_CONTROL" : "CTA_CTE",
 
 resetFilters: () => {
   set({
-    filters: getDefaultFilters(),
-    sellerDefaultApplied: false
+    filters: getDefaultFilters()
   });
 },
   selectCarrito: (id) => {
