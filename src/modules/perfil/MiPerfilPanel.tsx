@@ -450,76 +450,67 @@ async function saveProfile() {
   setSavingProfile(false);
 }
 
-  async function uploadAvatar(file: File) {
-    if (!profile?.id) return;
+async function uploadAvatar(file: File) {
+  if (!profile?.id) return;
 
-    if (!file.type.startsWith("image/")) {
-      setError("Seleccioná una imagen válida.");
-      return;
-    }
-
-    setUploadingAvatar(true);
-    setError(null);
-    setStatus(null);
-
-    const ext = file.name.split(".").pop()?.toLowerCase() || "png";
-    const path = `${profile.id}/avatar.${ext}`;
-
-    const { error: uploadError } = await supabase.storage
-      .from("avatars")
-      .upload(path, file, {
-        cacheControl: "3600",
-        upsert: true,
-        contentType: file.type
-      });
-
-    if (uploadError) {
-      setError(uploadError.message || "No se pudo subir la imagen.");
-      setUploadingAvatar(false);
-      return;
-    }
-
-    const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
-    const publicUrl = publicUrlData.publicUrl;
-
-const nombreWhatsAppFinal =
-  nombrePublicoWhatsapp.trim() ||
-  displayName.trim() ||
-  [nombre, apellido].map(cleanText).filter(Boolean).join(" ");
-
-const { error: updateError } = await supabase
-  .from("profiles")
-  .update({
-    display_name: displayName.trim() || null,
-    nombre: nombre.trim() || null,
-    apellido: apellido.trim() || null,
-    nombre_publico_whatsapp: nombreWhatsAppFinal || null,
-    updated_at: new Date().toISOString()
-  })
-  .eq("id", profile.id);
-
-    if (updateError) {
-      setError(updateError.message || "La imagen subió, pero no se pudo guardar en el perfil.");
-      setUploadingAvatar(false);
-      return;
-    }
-
-   setProfile((current) =>
-  current
-    ? {
-        ...current,
-        display_name: displayName.trim() || null,
-        nombre: nombre.trim() || null,
-        apellido: apellido.trim() || null,
-        nombre_publico_whatsapp: nombreWhatsAppFinal || null
-      }
-    : current
-);
-
-    setStatus("Avatar actualizado correctamente.");
-    window.dispatchEvent(new CustomEvent("nostur:profile-updated"));
-    setUploadingAvatar(false);
+  if (!file.type.startsWith("image/")) {
+    setError("Seleccioná una imagen válida.");
+    return;
   }
+
+  setUploadingAvatar(true);
+  setError(null);
+  setStatus(null);
+
+  const ext = file.name.split(".").pop()?.toLowerCase() || "png";
+  const path = `${profile.id}/avatar.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("avatars")
+    .upload(path, file, {
+      cacheControl: "3600",
+      upsert: true,
+      contentType: file.type
+    });
+
+  if (uploadError) {
+    setError(uploadError.message || "No se pudo subir la imagen.");
+    setUploadingAvatar(false);
+    return;
+  }
+
+  const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
+  const publicUrl = publicUrlData.publicUrl;
+
+  const { error: updateError } = await supabase
+    .from("profiles")
+    .update({
+      avatar_url: publicUrl,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", profile.id);
+
+  if (updateError) {
+    setError(updateError.message || "La imagen subió, pero no se pudo guardar en el perfil.");
+    setUploadingAvatar(false);
+    return;
+  }
+
+  setProfile((current) =>
+    current
+      ? {
+          ...current,
+          avatar_url: publicUrl
+        }
+      : current
+  );
+
+  setStatus("Avatar actualizado correctamente.");
+  window.dispatchEvent(new CustomEvent("nostur:profile-updated"));
+  setUploadingAvatar(false);
+}
+
+
 
   async function changePassword() {
     setError(null);
