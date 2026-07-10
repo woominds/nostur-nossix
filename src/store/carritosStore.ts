@@ -941,11 +941,12 @@ if (effectiveFilters.activo === "inactivos") {
       riesgo_resuelto: false,
       riesgo_observaciones: null,
 
-      confirmado_vendedor: true,
-      confirmado_at: now,
-      enviado_control_at: input.carrito.visible_en_carritos ? now : null,
+   confirmado_vendedor: true,
+confirmado_at: now,
+derivado_control: input.carrito.visible_en_carritos ? true : false,
+enviado_control_at: input.carrito.visible_en_carritos ? now : null,
 
-      estado: input.carrito.visible_en_carritos ? "CARGADO" : "CTA_CTE",
+estado: input.carrito.visible_en_carritos ? "EN_CONTROL" : "CTA_CTE",
       observaciones: nullableText(input.carrito.observaciones),
       vendedor: vendedorNombre,
       vendedor_id: vendedorId,

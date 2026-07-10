@@ -11,6 +11,7 @@ import {
   Eye,
   FileText,
   Filter,
+  Pencil,
   Plus,
   RefreshCcw,
   Search,
@@ -22,8 +23,11 @@ import {
 } from "lucide-react";
 import {
   useCarritosStore,
+  type Caja,
   type Carrito,
+  type CarritoMobileUpdateInput,
   type CarritoWizardInput,
+  type CatalogItem,
   type Cliente,
   type MovimientoTesoreria,
   type PagoComercial,
@@ -162,8 +166,8 @@ const CARRITOS_RESPONSIVE_CSS = `
     justify-content: flex-end;
   }
 
- .carrito-row {
-  grid-template-columns: minmax(170px, 1.25fr) minmax(150px, 1fr) minmax(130px, 0.75fr) 118px 128px;
+.carrito-row {
+  grid-template-columns: minmax(170px, 1.2fr) minmax(150px, 1fr) minmax(130px, 0.75fr) 116px 174px;
 }
 
   .carrito-row-actions {
@@ -198,9 +202,9 @@ const CARRITOS_RESPONSIVE_CSS = `
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 
-  .carrito-row {
-    grid-template-columns: minmax(180px, 1.25fr) minmax(160px, 1fr) minmax(130px, 0.75fr) 126px 128px;
-  }
+.carrito-row {
+  grid-template-columns: minmax(180px, 1.2fr) minmax(160px, 1fr) minmax(130px, 0.75fr) 120px 174px;
+}
 }
 `;
 
@@ -2307,12 +2311,14 @@ function CarritoDetailModal({
   carrito,
   vendedores,
   sucursales,
-  onClose
+  onClose,
+  onEdit
 }: {
   carrito: Carrito;
   vendedores: ProfileLite[];
   sucursales: { id: string; nombre: string }[];
   onClose: () => void;
+  onEdit: () => void;
 }) {
   const abacoUrl = `https://abaco.almundo.com/bo/cart/${carrito.numero_carrito}`;
 
@@ -2471,18 +2477,892 @@ function CarritoDetailModal({
             <strong>Motivo riesgo:</strong> {carrito.riesgo_motivo || "Sin motivo cargado"}
           </div>
         ) : null}
+<div className="mt-4 flex justify-end gap-2">
+  <button
+    type="button"
+    onClick={onEdit}
+    className="inline-flex h-8 items-center gap-1.5 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white hover:bg-[#406b7d]"
+  >
+    <Pencil size={14} />
+    Editar carrito
+  </button>
 
-        <div className="mt-4 flex justify-end gap-2">
+  <button
+    type="button"
+    onClick={() => window.open(abacoUrl, "_blank")}
+    className="h-8 rounded-[10px] border border-black/10 bg-white px-4 text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
+  >
+    Abrir Ábaco
+  </button>
+</div>
+      </div>
+    </div>
+  );
+}
+
+
+type CarritoEditDraft = {
+  cliente: {
+    id: string;
+    nombre_completo: string;
+    telefono: string;
+    email: string;
+    origen: string;
+  };
+  carrito: {
+    numero_carrito: string;
+    fecha_venta: string;
+    fecha_in: string;
+    fecha_out: string;
+    solo_ida: boolean;
+    servicio: string;
+    metodo_contacto: string;
+    destino: string;
+    importe_bruto: string;
+    moneda: string;
+    promocode_aplicado: boolean;
+    promocode_importe: string;
+    observaciones: string;
+    riesgo: boolean;
+    importe_riesgo: string;
+    riesgo_motivo: string;
+    estado: string;
+    vendedor_id: string;
+    sucursal_id: string;
+    activo: boolean;
+  };
+  pagosComerciales: PagoComercial[];
+  movimientosTesoreria: MovimientoTesoreria[];
+};
+
+function createEditDraft(carrito: Carrito): CarritoEditDraft {
+  return {
+    cliente: {
+      id: carrito.cliente_id,
+      nombre_completo: carrito.clientes?.nombre_completo || "",
+      telefono: carrito.clientes?.telefono || "",
+      email: carrito.clientes?.email || "",
+      origen: carrito.clientes?.origen || carrito.metodo_contacto || ""
+    },
+    carrito: {
+      numero_carrito: carrito.numero_carrito || "",
+      fecha_venta: carrito.fecha_venta || getToday(),
+      fecha_in: carrito.fecha_in || getToday(),
+      fecha_out: carrito.fecha_out || getToday(),
+      solo_ida: Boolean(carrito.solo_ida),
+      servicio: carrito.servicio || "",
+      metodo_contacto: carrito.metodo_contacto || "",
+      destino: carrito.destino || "",
+      importe_bruto: String(carrito.importe_bruto ?? carrito.importe ?? "").replace(".", ","),
+      moneda: carrito.moneda || "ARS",
+      promocode_aplicado: Boolean(carrito.promocode_aplicado),
+      promocode_importe: String(carrito.promocode_importe ?? 0).replace(".", ","),
+      observaciones: carrito.observaciones || "",
+      riesgo: Boolean(carrito.riesgo),
+      importe_riesgo: String(carrito.importe_riesgo ?? 0).replace(".", ","),
+      riesgo_motivo: carrito.riesgo_motivo || "",
+      estado: carrito.estado || "CARGADO",
+      vendedor_id: carrito.vendedor_id || "",
+      sucursal_id: carrito.sucursal_id || "",
+      activo: carrito.activo !== false
+    },
+    pagosComerciales: [],
+    movimientosTesoreria: []
+  };
+}
+
+function CarritoEditModal({
+  carrito,
+  catalogos,
+  canManageCarritos,
+  onClose,
+  onSaved
+}: {
+  carrito: Carrito;
+  catalogos: {
+    metodosContacto: CatalogItem[];
+    servicios: CatalogItem[];
+    formasPago: CatalogItem[];
+    cajas: Caja[];
+    vendedores: ProfileLite[];
+    sucursales: CatalogItem[];
+  };
+  canManageCarritos: boolean;
+  onClose: () => void;
+  onSaved: (message: string) => void;
+}) {
+  const saving = useCarritosStore((state) => state.saving);
+  const loadCarritoPagos = useCarritosStore((state) => state.loadCarritoPagos);
+  const loadCarritoMovimientos = useCarritosStore((state) => state.loadCarritoMovimientos);
+  const updateCarritoMobile = useCarritosStore((state) => state.updateCarritoMobile);
+
+  const [loadingData, setLoadingData] = useState(true);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<CarritoEditDraft>(() => createEditDraft(carrito));
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadData() {
+      setLoadingData(true);
+
+      const [pagos, movimientos] = await Promise.all([
+        loadCarritoPagos(carrito.id),
+        loadCarritoMovimientos(carrito.id)
+      ]);
+
+      if (!alive) return;
+
+      setDraft((current) => ({
+        ...current,
+        pagosComerciales:
+          pagos.length > 0
+            ? pagos
+            : [
+                {
+                  importe: 0,
+                  moneda: current.carrito.moneda,
+                  forma_pago_id: null,
+                  forma_pago: ""
+                }
+              ],
+        movimientosTesoreria:
+          movimientos.length > 0
+            ? movimientos
+            : [
+                {
+                  importe: 0,
+                  moneda: current.carrito.moneda,
+                  forma_pago_id: null,
+                  forma_pago: "",
+                  caja_id: null,
+                  caja: "",
+                  fecha_movimiento: current.carrito.fecha_venta || getToday()
+                }
+              ]
+      }));
+
+      setLoadingData(false);
+    }
+
+    void loadData();
+
+    return () => {
+      alive = false;
+    };
+  }, [carrito.id, loadCarritoPagos, loadCarritoMovimientos]);
+
+  const bruto = parseMoney(draft.carrito.importe_bruto);
+  const promocode = draft.carrito.promocode_aplicado
+    ? parseMoney(draft.carrito.promocode_importe)
+    : 0;
+  const totalFinal = Math.max(0, bruto - promocode);
+
+  const totalTesoreria = draft.movimientosTesoreria.reduce(
+    (total, movimiento) => total + parseMoney(movimiento.importe),
+    0
+  );
+
+  const saldo = Math.max(0, totalFinal - totalTesoreria);
+  const pagoParcial = saldo > 0.009;
+
+  const metodoOptions: SelectOption[] = catalogos.metodosContacto.map((item) => ({
+    value: item.nombre,
+    label: item.nombre
+  }));
+
+  const servicioOptions: SelectOption[] = catalogos.servicios.map((item) => ({
+    value: item.nombre,
+    label: item.nombre
+  }));
+
+  const formaPagoOptions: SelectOption[] = catalogos.formasPago.map((item) => ({
+    value: item.id,
+    label: item.nombre
+  }));
+
+  const cajaOptions: SelectOption[] = catalogos.cajas.map((item) => ({
+    value: item.id,
+    label: item.moneda ? `${item.nombre} · ${item.moneda}` : item.nombre
+  }));
+
+  const vendedorOptions: SelectOption[] = catalogos.vendedores.map((item) => ({
+    value: item.id,
+    label: `${item.nombre} ${item.apellido}`.trim()
+  }));
+
+  const sucursalOptions: SelectOption[] = catalogos.sucursales.map((item) => ({
+    value: item.id,
+    label: item.nombre
+  }));
+
+  function setCliente<K extends keyof CarritoEditDraft["cliente"]>(
+    key: K,
+    value: CarritoEditDraft["cliente"][K]
+  ) {
+    setEditError(null);
+    setDraft((current) => ({
+      ...current,
+      cliente: {
+        ...current.cliente,
+        [key]: value
+      }
+    }));
+  }
+
+  function setCarrito<K extends keyof CarritoEditDraft["carrito"]>(
+    key: K,
+    value: CarritoEditDraft["carrito"][K]
+  ) {
+    setEditError(null);
+    setDraft((current) => ({
+      ...current,
+      carrito: {
+        ...current.carrito,
+        [key]: value
+      }
+    }));
+  }
+
+  function updatePago(index: number, patch: Partial<PagoComercial>) {
+    setEditError(null);
+    setDraft((current) => ({
+      ...current,
+      pagosComerciales: current.pagosComerciales.map((pago, itemIndex) =>
+        itemIndex === index ? { ...pago, ...patch } : pago
+      )
+    }));
+  }
+
+  function updateMovimiento(index: number, patch: Partial<MovimientoTesoreria>) {
+    setEditError(null);
+    setDraft((current) => ({
+      ...current,
+      movimientosTesoreria: current.movimientosTesoreria.map((movimiento, itemIndex) =>
+        itemIndex === index ? { ...movimiento, ...patch } : movimiento
+      )
+    }));
+  }
+
+  async function handleSave() {
+    setEditError(null);
+
+    if (!isValidCarrito(draft.carrito.numero_carrito)) {
+      setEditError("El número de carrito debe tener formato 000-000-000.");
+      return;
+    }
+
+    if (!draft.cliente.nombre_completo.trim()) {
+      setEditError("El cliente no puede quedar vacío.");
+      return;
+    }
+
+    if (totalFinal <= 0) {
+      setEditError("El importe final debe ser mayor a cero.");
+      return;
+    }
+
+    if (draft.carrito.riesgo && parseMoney(draft.carrito.importe_riesgo) <= 0) {
+      setEditError("Indicá el importe de riesgo.");
+      return;
+    }
+
+    const payload: CarritoMobileUpdateInput = {
+      carritoId: carrito.id,
+      cliente: {
+        id: draft.cliente.id,
+        nombre_completo: draft.cliente.nombre_completo,
+        telefono: draft.cliente.telefono,
+        email: draft.cliente.email || null,
+        origen: draft.cliente.origen || null
+      },
+      carrito: {
+        numero_carrito: draft.carrito.numero_carrito,
+        fecha_venta: draft.carrito.fecha_venta,
+        servicio: draft.carrito.servicio || null,
+        metodo_contacto: draft.carrito.metodo_contacto || null,
+        destino: draft.carrito.destino || null,
+        fecha_in: draft.carrito.fecha_in || null,
+        fecha_out: draft.carrito.solo_ida ? null : draft.carrito.fecha_out || null,
+        solo_ida: draft.carrito.solo_ida,
+        importe_bruto: bruto,
+        moneda: draft.carrito.moneda,
+        promocode_aplicado: draft.carrito.promocode_aplicado,
+        promocode_importe: promocode,
+        importe_final: totalFinal,
+        pago_parcial: pagoParcial,
+        fecha_ingreso_gastos: pagoParcial ? carrito.fecha_ingreso_gastos || getToday() : null,
+        total_pagado: totalTesoreria,
+        saldo_cta_cte: saldo,
+        visible_en_carritos: draft.carrito.estado !== "CTA_CTE",
+        riesgo: draft.carrito.riesgo,
+        importe_riesgo: draft.carrito.riesgo ? parseMoney(draft.carrito.importe_riesgo) : 0,
+        riesgo_motivo: draft.carrito.riesgo ? draft.carrito.riesgo_motivo || null : null,
+        estado: draft.carrito.estado,
+        observaciones: draft.carrito.observaciones || null,
+        vendedor_id: draft.carrito.vendedor_id || null,
+        sucursal_id: draft.carrito.sucursal_id || null,
+        activo: draft.carrito.activo
+      },
+      pagosComerciales: draft.pagosComerciales.filter((pago) => parseMoney(pago.importe) > 0),
+      movimientosTesoreria: draft.movimientosTesoreria.filter(
+        (movimiento) => parseMoney(movimiento.importe) > 0
+      )
+    };
+
+    const ok = await updateCarritoMobile(payload);
+
+    if (ok) {
+      onSaved("Carrito actualizado correctamente.");
+      onClose();
+    }
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[230] flex items-start justify-center bg-black/35 px-2 pt-3 backdrop-blur-sm sm:px-4 sm:pt-8">
+      <div className="max-h-[calc(100vh-24px)] w-full max-w-5xl overflow-hidden rounded-[18px] border border-black/10 bg-[#edf3f7] text-[#172033] shadow-2xl sm:max-h-[calc(100vh-64px)]">
+        <div className="flex items-start justify-between gap-3 border-b border-black/10 bg-white/85 px-4 py-3 backdrop-blur-xl">
+          <div className="min-w-0">
+            <h2 className="truncate text-[17px] font-semibold text-[#172033]">
+              Editar carrito {carrito.numero_carrito}
+            </h2>
+
+            <p className="mt-0.5 text-[12px] font-normal text-[#64748b]">
+              Se puede editar aunque esté en control, controlado, facturado o cobrado.
+            </p>
+          </div>
+
           <button
             type="button"
-            onClick={() => window.open(abacoUrl, "_blank")}
-            className="h-8 rounded-[10px] border border-black/10 bg-white px-4 text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#172033]"
           >
-            Abrir Ábaco
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(100vh-132px)] overflow-auto p-3 sm:p-4">
+          {editError ? (
+            <div className="mb-3 rounded-[12px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] font-medium text-red-700">
+              {editError}
+            </div>
+          ) : null}
+
+          {loadingData ? (
+            <div className="rounded-[16px] border border-black/10 bg-white p-5 text-center text-[12px] text-[#64748b]">
+              Cargando datos del carrito...
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              <section className="rounded-[16px] border border-black/10 bg-white p-3">
+                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Cliente</h3>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="md:col-span-2">
+                    <FieldLabel>Nombre completo</FieldLabel>
+                    <TextInput
+                      value={draft.cliente.nombre_completo}
+                      onChange={(value) => setCliente("nombre_completo", value)}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Teléfono</FieldLabel>
+                    <TextInput
+                      value={draft.cliente.telefono}
+                      onChange={(value) => setCliente("telefono", value)}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Email</FieldLabel>
+                    <TextInput
+                      value={draft.cliente.email}
+                      onChange={(value) => setCliente("email", value)}
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-[16px] border border-black/10 bg-white p-3">
+                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Venta</h3>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div>
+                    <FieldLabel>Número carrito</FieldLabel>
+                    <TextInput
+                      value={draft.carrito.numero_carrito}
+                      onChange={(value) => setCarrito("numero_carrito", maskCarrito(value))}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Fecha venta</FieldLabel>
+                    <NosturDateInput
+                      value={draft.carrito.fecha_venta}
+                      onChange={(value) => setCarrito("fecha_venta", value)}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Estado</FieldLabel>
+                    <NosturSelect
+                      value={draft.carrito.estado}
+                      onChange={(value) => setCarrito("estado", value)}
+                      options={ESTADO_OPTIONS.filter((item) => item.value !== "todos")}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Moneda</FieldLabel>
+                    <NosturSelect
+                      value={draft.carrito.moneda}
+                      onChange={(value) => {
+                        setCarrito("moneda", value);
+
+                        setDraft((current) => ({
+                          ...current,
+                          pagosComerciales: current.pagosComerciales.map((pago) => ({
+                            ...pago,
+                            moneda: value
+                          })),
+                          movimientosTesoreria: current.movimientosTesoreria.map((movimiento) => ({
+                            ...movimiento,
+                            moneda: value
+                          }))
+                        }));
+                      }}
+                      options={MONEDA_OPTIONS}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Fecha IN</FieldLabel>
+                    <NosturDateInput
+                      value={draft.carrito.fecha_in}
+                      onChange={(value) => setCarrito("fecha_in", value)}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Fecha OUT</FieldLabel>
+                    <NosturDateInput
+                      value={draft.carrito.fecha_out}
+                      onChange={(value) => setCarrito("fecha_out", value)}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Servicio</FieldLabel>
+                    <NosturSelect
+                      value={draft.carrito.servicio}
+                      onChange={(value) => setCarrito("servicio", value)}
+                      options={servicioOptions}
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Método contacto</FieldLabel>
+                    <NosturSelect
+                      value={draft.carrito.metodo_contacto}
+                      onChange={(value) => {
+                        setCarrito("metodo_contacto", value);
+                        setCliente("origen", value);
+                      }}
+                      options={metodoOptions}
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <FieldLabel>Destino</FieldLabel>
+                    <TextInput
+                      value={draft.carrito.destino}
+                      onChange={(value) => setCarrito("destino", value)}
+                    />
+                  </div>
+
+                  <div>
+                    <BooleanChip
+                      checked={draft.carrito.solo_ida}
+                      onChange={(value) => setCarrito("solo_ida", value)}
+                      label="Solo ida"
+                    />
+                  </div>
+
+                  <div>
+                    <BooleanChip
+                      checked={draft.carrito.activo}
+                      onChange={(value) => setCarrito("activo", value)}
+                      label={draft.carrito.activo ? "Activo" : "Inactivo"}
+                    />
+                  </div>
+
+                  {canManageCarritos ? (
+                    <>
+                      <div>
+                        <FieldLabel>Vendedor</FieldLabel>
+                        <NosturSelect
+                          value={draft.carrito.vendedor_id}
+                          onChange={(value) => setCarrito("vendedor_id", value)}
+                          options={vendedorOptions}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Sucursal</FieldLabel>
+                        <NosturSelect
+                          value={draft.carrito.sucursal_id}
+                          onChange={(value) => setCarrito("sucursal_id", value)}
+                          options={sucursalOptions}
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="rounded-[16px] border border-black/10 bg-white p-3">
+                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Importes</h3>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div>
+                    <FieldLabel>Importe bruto</FieldLabel>
+                    <TextInput
+                      value={draft.carrito.importe_bruto}
+                      onChange={(value) => setCarrito("importe_bruto", value)}
+                      inputMode="decimal"
+                    />
+                  </div>
+
+                  <div>
+  <FieldLabel>Promocode</FieldLabel>
+
+  <BooleanChip
+    checked={draft.carrito.promocode_aplicado}
+    onChange={(value) => setCarrito("promocode_aplicado", value)}
+    label="Tiene promocode"
+  />
+</div>
+
+                  <div>
+                    <FieldLabel>Importe promocode</FieldLabel>
+                    <TextInput
+                      value={draft.carrito.promocode_importe}
+                      onChange={(value) => setCarrito("promocode_importe", value)}
+                      inputMode="decimal"
+                    />
+                  </div>
+
+                  <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 text-[12px]">
+                    <div className="flex justify-between">
+                      <span>Total final</span>
+                      <strong>{formatMoneyAR(totalFinal, draft.carrito.moneda)}</strong>
+                    </div>
+
+                    <div className="flex justify-between">
+                      <span>Tesorería</span>
+                      <strong>{formatMoneyAR(totalTesoreria, draft.carrito.moneda)}</strong>
+                    </div>
+
+                    <div className="flex justify-between">
+                      <span>Saldo</span>
+                      <strong className={saldo > 0 ? "text-amber-700" : "text-emerald-700"}>
+                        {formatMoneyAR(saldo, draft.carrito.moneda)}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="rounded-[16px] border border-black/10 bg-white p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-[14px] font-semibold text-[#172033]">Pagos comerciales</h3>
+
+                  <LineButton
+                    onClick={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        pagosComerciales: [
+                          ...current.pagosComerciales,
+                          {
+                            importe: 0,
+                            moneda: current.carrito.moneda,
+                            forma_pago_id: null,
+                            forma_pago: ""
+                          }
+                        ]
+                      }))
+                    }
+                  >
+                    + Agregar
+                  </LineButton>
+                </div>
+
+                <div className="grid gap-2">
+                  {draft.pagosComerciales.map((pago, index) => (
+                    <div
+                      key={`edit-pago-${index}`}
+                      className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:grid-cols-[1fr_110px_1fr_auto]"
+                    >
+                      <div>
+                        <FieldLabel>Importe</FieldLabel>
+                        <TextInput
+                          value={pago.importe ? String(pago.importe).replace(".", ",") : ""}
+                          onChange={(value) => updatePago(index, { importe: parseMoney(value) })}
+                          inputMode="decimal"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Moneda</FieldLabel>
+                        <NosturSelect
+                          value={pago.moneda || draft.carrito.moneda}
+                          onChange={(value) => updatePago(index, { moneda: value })}
+                          options={MONEDA_OPTIONS}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Forma pago</FieldLabel>
+                        <NosturSelect
+                          value={pago.forma_pago_id || ""}
+                          onChange={(value) => {
+                            const forma = catalogos.formasPago.find((item) => item.id === value);
+
+                            updatePago(index, {
+                              forma_pago_id: forma?.id || null,
+                              forma_pago: forma?.nombre || null
+                            });
+                          }}
+                          options={formaPagoOptions}
+                        />
+                      </div>
+
+                      <div className="flex items-end">
+                        <LineButton
+                          onClick={() =>
+                            setDraft((current) => ({
+                              ...current,
+                              pagosComerciales:
+                                current.pagosComerciales.length > 1
+                                  ? current.pagosComerciales.filter((_, itemIndex) => itemIndex !== index)
+                                  : [
+                                      {
+                                        importe: 0,
+                                        moneda: current.carrito.moneda,
+                                        forma_pago_id: null,
+                                        forma_pago: ""
+                                      }
+                                    ]
+                            }))
+                          }
+                        >
+                          Eliminar
+                        </LineButton>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-[16px] border border-black/10 bg-white p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-[14px] font-semibold text-[#172033]">Tesorería</h3>
+
+                  <LineButton
+                    onClick={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        movimientosTesoreria: [
+                          ...current.movimientosTesoreria,
+                          {
+                            importe: 0,
+                            moneda: current.carrito.moneda,
+                            forma_pago_id: null,
+                            forma_pago: "",
+                            caja_id: null,
+                            caja: "",
+                            fecha_movimiento: current.carrito.fecha_venta || getToday()
+                          }
+                        ]
+                      }))
+                    }
+                  >
+                    + Agregar
+                  </LineButton>
+                </div>
+
+                <div className="grid gap-2">
+                  {draft.movimientosTesoreria.map((movimiento, index) => (
+                    <div
+                      key={`edit-movimiento-${index}`}
+                      className="grid gap-2 rounded-[14px] border border-black/10 bg-[#f8fafc] p-3 md:grid-cols-3"
+                    >
+                      <div>
+                        <FieldLabel>Caja</FieldLabel>
+                        <NosturSelect
+                          value={movimiento.caja_id || ""}
+                          onChange={(value) => {
+                            const caja = catalogos.cajas.find((item) => item.id === value);
+
+                            updateMovimiento(index, {
+                              caja_id: caja?.id || null,
+                              caja: caja?.nombre || null
+                            });
+                          }}
+                          options={cajaOptions}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Forma real</FieldLabel>
+                        <NosturSelect
+                          value={movimiento.forma_pago_id || ""}
+                          onChange={(value) => {
+                            const forma = catalogos.formasPago.find((item) => item.id === value);
+
+                            updateMovimiento(index, {
+                              forma_pago_id: forma?.id || null,
+                              forma_pago: forma?.nombre || null
+                            });
+                          }}
+                          options={formaPagoOptions}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Importe</FieldLabel>
+                        <TextInput
+                          value={movimiento.importe ? String(movimiento.importe).replace(".", ",") : ""}
+                          onChange={(value) =>
+                            updateMovimiento(index, { importe: parseMoney(value) })
+                          }
+                          inputMode="decimal"
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>Moneda</FieldLabel>
+                        <NosturSelect
+                          value={movimiento.moneda || draft.carrito.moneda}
+                          onChange={(value) => updateMovimiento(index, { moneda: value })}
+                          options={MONEDA_OPTIONS}
+                        />
+                      </div>
+
+                      <div>
+                        <FieldLabel>TC</FieldLabel>
+                        <TextInput
+                          value={
+                            movimiento.tipo_cambio
+                              ? String(movimiento.tipo_cambio).replace(".", ",")
+                              : ""
+                          }
+                          onChange={(value) =>
+                            updateMovimiento(index, { tipo_cambio: parseMoney(value) })
+                          }
+                          inputMode="decimal"
+                        />
+                      </div>
+
+                      <div className="flex items-end">
+                        <LineButton
+                          onClick={() =>
+                            setDraft((current) => ({
+                              ...current,
+                              movimientosTesoreria:
+                                current.movimientosTesoreria.length > 1
+                                  ? current.movimientosTesoreria.filter(
+                                      (_, itemIndex) => itemIndex !== index
+                                    )
+                                  : [
+                                      {
+                                        importe: 0,
+                                        moneda: current.carrito.moneda,
+                                        forma_pago_id: null,
+                                        forma_pago: "",
+                                        caja_id: null,
+                                        caja: "",
+                                        fecha_movimiento: current.carrito.fecha_venta || getToday()
+                                      }
+                                    ]
+                            }))
+                          }
+                        >
+                          Eliminar
+                        </LineButton>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-[16px] border border-black/10 bg-white p-3">
+                <h3 className="mb-3 text-[14px] font-semibold text-[#172033]">Riesgo y notas</h3>
+
+                <div className="grid gap-3 md:grid-cols-[180px_180px_1fr]">
+                 <div>
+  <FieldLabel>Riesgo</FieldLabel>
+
+  <BooleanChip
+    checked={draft.carrito.riesgo}
+    onChange={(value) => setCarrito("riesgo", value)}
+    label="Riesgo Almundo"
+  />
+</div>
+
+                  <div>
+                    <FieldLabel>Importe riesgo</FieldLabel>
+                    <TextInput
+                      value={draft.carrito.importe_riesgo}
+                      onChange={(value) => setCarrito("importe_riesgo", value)}
+                      inputMode="decimal"
+                    />
+                  </div>
+
+                  <div>
+                    <FieldLabel>Motivo riesgo</FieldLabel>
+                    <TextInput
+                      value={draft.carrito.riesgo_motivo}
+                      onChange={(value) => setCarrito("riesgo_motivo", value)}
+                    />
+                  </div>
+
+                  <div className="md:col-span-3">
+                    <FieldLabel>Observaciones</FieldLabel>
+                    <TextArea
+                      value={draft.carrito.observaciones}
+                      onChange={(value) => setCarrito("observaciones", value)}
+                    />
+                  </div>
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-black/10 bg-white/85 px-4 py-3 backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="h-8 rounded-[10px] border border-black/10 bg-white px-4 text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc] disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving || loadingData}
+            className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white hover:bg-[#406b7d] disabled:opacity-50"
+          >
+            {saving ? "Guardando..." : "Guardar cambios"}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -2493,6 +3373,7 @@ export function CarritosPanel() {
   const filters = useCarritosStore((state) => state.filters);
   const catalogos = useCarritosStore((state) => state.catalogos);
   const selectedCarritoId = useCarritosStore((state) => state.selectedCarritoId);
+  const canManageCarritos = useCarritosStore((state) => state.canManageCarritos);
 
   const loadCarritos = useCarritosStore((state) => state.loadCarritos);
   const setFilter = useCarritosStore((state) => state.setFilter);
@@ -2513,8 +3394,10 @@ export function CarritosPanel() {
 
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [detailCarrito, setDetailCarrito] = useState<Carrito | null>(null);
-  const [toast, setToast] = useState<ToastState>(null);
+const [detailCarrito, setDetailCarrito] = useState<Carrito | null>(null);
+const [editingCarrito, setEditingCarrito] = useState<Carrito | null>(null);
+const [toast, setToast] = useState<ToastState>(null);
+
 
   const selectedCarrito = useMemo(
     () => carritos.find((carrito) => carrito.id === selectedCarritoId) || carritos[0] || null,
@@ -3014,10 +3897,8 @@ export function CarritosPanel() {
                         ) : null}
                       </div>
 
-                      <div
-                   
-  className="grid grid-cols-2 gap-2 min-[980px]:flex min-[980px]:items-center min-[980px]:justify-end min-[980px]:gap-1"
-  onClick={(event) => event.stopPropagation()}
+                  <div
+className="grid grid-cols-5 gap-1 min-[980px]:flex min-[980px]:w-[174px] min-[980px]:items-center min-[980px]:justify-end min-[980px]:gap-1"  onClick={(event) => event.stopPropagation()}
 >
   <button
     type="button"
@@ -3025,11 +3906,22 @@ export function CarritosPanel() {
       selectCarrito(carrito.id);
       setDetailCarrito(carrito);
     }}
-    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0"
+    className="inline-flex h-8 w-full items-center justify-center rounded-[10px] bg-white text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7"
     title="Ver detalle"
   >
     <Eye size={14} />
-    <span className="min-[980px]:hidden">Ver detalle</span>
+  </button>
+
+  <button
+    type="button"
+    onClick={() => {
+      selectCarrito(carrito.id);
+      setEditingCarrito(carrito);
+    }}
+    className="inline-flex h-8 w-full items-center justify-center rounded-[10px] bg-white text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7"
+    title="Editar carrito"
+  >
+    <Pencil size={14} />
   </button>
 
   <button
@@ -3037,18 +3929,17 @@ export function CarritosPanel() {
     onClick={() =>
       window.open(`https://abaco.almundo.com/bo/cart/${carrito.numero_carrito}`, "_blank")
     }
-    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0"
+    className="inline-flex h-8 w-full items-center justify-center rounded-[10px] bg-white text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7"
     title="Abrir Ábaco"
   >
     <ShoppingCart size={14} />
-    <span className="min-[980px]:hidden">Ábaco</span>
   </button>
 
   <button
     type="button"
     onClick={() => handleSendToControl(carrito)}
     className={[
-      "inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] px-3 text-[12px] font-medium shadow-sm ring-1 ring-black/10 hover:bg-white min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0",
+      "inline-flex h-8 w-full items-center justify-center rounded-[10px] shadow-sm ring-1 ring-black/10 transition hover:bg-white min-[980px]:h-7 min-[980px]:w-7",
       ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(carrito.estado)
         ? "bg-emerald-50 text-emerald-600 opacity-60"
         : "bg-[#eef6f7] text-[#4f7c90]"
@@ -3060,19 +3951,15 @@ export function CarritosPanel() {
     }
   >
     <CheckCircle2 size={14} />
-    <span className="min-[980px]:hidden">Control</span>
   </button>
 
   <button
     type="button"
     onClick={() => handleToggle(carrito)}
-    className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7 min-[980px]:px-0"
+    className="inline-flex h-8 w-full items-center justify-center rounded-[10px] bg-white text-[#334155] shadow-sm ring-1 ring-black/10 transition hover:bg-[#f8fafc] min-[980px]:h-7 min-[980px]:w-7"
     title={carrito.activo ? "Desactivar" : "Activar"}
   >
     {carrito.activo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-    <span className="min-[980px]:hidden">
-      {carrito.activo ? "Desactivar" : "Activar"}
-    </span>
   </button>
 </div>
                     </article>
@@ -3211,51 +4098,57 @@ export function CarritosPanel() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setDetailCarrito(selectedCarrito)}
-                      className="h-8 rounded-[10px] border border-black/10 bg-white text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
-                    >
-                      Ver
-                    </button>
+               <div className="grid grid-cols-2 gap-2">
+  <button
+    type="button"
+    onClick={() => setEditingCarrito(selectedCarrito)}
+    className="h-8 rounded-[10px] border border-[#4f7c90]/25 bg-[#eef6f7] text-[12px] font-medium text-[#4f7c90] hover:bg-[#dfeff2]"
+  >
+    Editar
+  </button>
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        window.open(
-                          `https://abaco.almundo.com/bo/cart/${selectedCarrito.numero_carrito}`,
-                          "_blank"
-                        )
-                      }
-                      className="h-8 rounded-[10px] border border-black/10 bg-white text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
-                    >
-                      Ábaco
-                    </button>
+  <button
+    type="button"
+    onClick={() => setDetailCarrito(selectedCarrito)}
+    className="h-8 rounded-[10px] border border-black/10 bg-white text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
+  >
+    Ver
+  </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleSendToControl(selectedCarrito)}
-                      disabled={
-                        saving ||
-                        ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(
-                          selectedCarrito.estado
-                        )
-                      }
-                      className="h-8 rounded-[10px] border border-[#4f7c90]/25 bg-[#eef6f7] text-[12px] font-medium text-[#4f7c90] hover:bg-[#dfeff2] disabled:opacity-50"
-                    >
-                      Enviar a control
-                    </button>
+  <button
+    type="button"
+    onClick={() =>
+      window.open(
+        `https://abaco.almundo.com/bo/cart/${selectedCarrito.numero_carrito}`,
+        "_blank"
+      )
+    }
+    className="h-8 rounded-[10px] border border-black/10 bg-white text-[12px] font-medium text-[#334155] hover:bg-[#f8fafc]"
+  >
+    Ábaco
+  </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleToggle(selectedCarrito)}
-                      disabled={saving}
-                      className="h-8 rounded-[10px] border border-red-200 bg-red-50 text-[12px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-50"
-                    >
-                      {selectedCarrito.activo ? "Desactivar" : "Activar"}
-                    </button>
-                  </div>
+  <button
+    type="button"
+    onClick={() => handleSendToControl(selectedCarrito)}
+    disabled={
+      saving ||
+      ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(selectedCarrito.estado)
+    }
+    className="h-8 rounded-[10px] border border-[#4f7c90]/25 bg-[#eef6f7] text-[12px] font-medium text-[#4f7c90] hover:bg-[#dfeff2] disabled:opacity-50"
+  >
+    Enviar a control
+  </button>
+
+  <button
+    type="button"
+    onClick={() => handleToggle(selectedCarrito)}
+    disabled={saving}
+    className="col-span-2 h-8 rounded-[10px] border border-red-200 bg-red-50 text-[12px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-50"
+  >
+    {selectedCarrito.activo ? "Desactivar" : "Activar"}
+  </button>
+</div>
                 </div>
               </>
             ) : (
@@ -3276,13 +4169,33 @@ export function CarritosPanel() {
         />
       ) : null}
 
+ {editingCarrito ? (
+  <CarritoEditModal
+    carrito={editingCarrito}
+    catalogos={catalogos}
+    canManageCarritos={canManageCarritos}
+    onClose={() => setEditingCarrito(null)}
+    onSaved={(message) => {
+      showToast(message);
+      setEditingCarrito(null);
+    }}
+  />
+) : null}
+
+
+
+
       {detailCarrito ? (
-        <CarritoDetailModal
-          carrito={detailCarrito}
-          vendedores={catalogos.vendedores}
-          sucursales={catalogos.sucursales}
-          onClose={() => setDetailCarrito(null)}
-        />
+     <CarritoDetailModal
+  carrito={detailCarrito}
+  vendedores={catalogos.vendedores}
+  sucursales={catalogos.sucursales}
+  onClose={() => setDetailCarrito(null)}
+  onEdit={() => {
+    setEditingCarrito(detailCarrito);
+    setDetailCarrito(null);
+  }}
+/>
       ) : null}
     </div>
   );
