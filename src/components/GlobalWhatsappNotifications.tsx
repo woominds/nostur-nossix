@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type NotificationKind = "nuevo" | "gestion" | "cande_transfer";
+type NotificationKind = "nuevo" | "gestion" | "cande_transfer" | "internal";
 
 type ConversationLite = {
   id: string;
@@ -34,6 +34,15 @@ type IncomingMessagePayload = {
   text: string | null;
   created_at: string | null;
   wa_timestamp: string | null;
+};
+
+type InternalNotePayload = {
+  id: string;
+  conversacion_id: string;
+  autor_id: string | null;
+  contenido: string | null;
+  tipo: string | null;
+  created_at: string | null;
 };
 
 type InternalNotificationPayload = {
@@ -279,101 +288,126 @@ function playRendererTone(kind: NotificationKind) {
 
   if (kind === "cande_transfer") {
     /*
-      CANDE: alarma distinta, tipo ascendente + cierre grave.
+      CANDE: distinto y claro, pero menos agresivo que la alarma anterior.
     */
     playTone({
-      frequency: 740,
-      durationMs: 180,
-      volume: 0.72,
+      frequency: 660,
+      durationMs: 120,
+      volume: 0.34,
       repeat: 1,
       gapMs: 70,
-      type: "sawtooth"
+      type: "triangle"
     });
 
     window.setTimeout(() => {
       playTone({
-        frequency: 1040,
-        durationMs: 190,
-        volume: 0.82,
-        repeat: 2,
-        gapMs: 85,
-        type: "square"
+        frequency: 880,
+        durationMs: 150,
+        volume: 0.38,
+        repeat: 1,
+        gapMs: 80,
+        type: "sine"
       });
-    }, 230);
+    }, 170);
 
     window.setTimeout(() => {
       playTone({
-        frequency: 620,
-        durationMs: 260,
-        volume: 0.76,
+        frequency: 740,
+        durationMs: 180,
+        volume: 0.32,
         repeat: 1,
         type: "triangle"
       });
-    }, 720);
+    }, 390);
 
     return;
   }
 
   if (kind === "nuevo") {
     /*
-      NUEVO / SIN ATENDER: fuerte, urgente y reconocible.
-      Secuencia estilo doble alerta: alta-baja-alta, repetida.
+      NUEVO / SIN ATENDER: audible y reconocible, pero más amable.
+      Evitamos square/sawtooth fuertes porque cansan mucho el oído.
     */
     playTone({
-      frequency: 1180,
-      durationMs: 190,
-      volume: 0.88,
-      repeat: 2,
-      gapMs: 75,
-      type: "square"
+      frequency: 720,
+      durationMs: 120,
+      volume: 0.36,
+      repeat: 1,
+      gapMs: 70,
+      type: "triangle"
     });
 
     window.setTimeout(() => {
       playTone({
-        frequency: 860,
-        durationMs: 180,
-        volume: 0.82,
-        repeat: 2,
-        gapMs: 80,
-        type: "square"
+        frequency: 920,
+        durationMs: 140,
+        volume: 0.40,
+        repeat: 1,
+        gapMs: 70,
+        type: "sine"
       });
-    }, 470);
+    }, 170);
 
     window.setTimeout(() => {
       playTone({
-        frequency: 1320,
-        durationMs: 240,
-        volume: 0.92,
-        repeat: 2,
-        gapMs: 90,
-        type: "sawtooth"
+        frequency: 760,
+        durationMs: 170,
+        volume: 0.34,
+        repeat: 1,
+        type: "triangle"
       });
-    }, 930);
+    }, 370);
+
+    return;
+  }
+
+  if (kind === "internal") {
+    /*
+      MENSAJE INTERNO: corto, suave, distinto de WhatsApp.
+    */
+    playTone({
+      frequency: 620,
+      durationMs: 110,
+      volume: 0.28,
+      repeat: 1,
+      gapMs: 60,
+      type: "triangle"
+    });
+
+    window.setTimeout(() => {
+      playTone({
+        frequency: 780,
+        durationMs: 130,
+        volume: 0.30,
+        repeat: 1,
+        type: "sine"
+      });
+    }, 160);
 
     return;
   }
 
   /*
-    GESTIÓN / ya tomada: audible y distinto al sin atender, pero no tan alarma.
+    GESTIÓN / ya tomada: aviso suave.
   */
   playTone({
-    frequency: 760,
-    durationMs: 180,
-    volume: 0.58,
-    repeat: 2,
-    gapMs: 80,
-    type: "square"
+    frequency: 680,
+    durationMs: 110,
+    volume: 0.30,
+    repeat: 1,
+    gapMs: 70,
+    type: "triangle"
   });
 
   window.setTimeout(() => {
     playTone({
-      frequency: 940,
-      durationMs: 170,
-      volume: 0.52,
+      frequency: 840,
+      durationMs: 135,
+      volume: 0.28,
       repeat: 1,
-      type: "triangle"
+      type: "sine"
     });
-  }, 430);
+  }, 170);
 }
 
 async function playNotificationSound(kind: NotificationKind) {
@@ -903,6 +937,121 @@ export function GlobalWhatsappNotifications() {
       );
     }
 
+
+    async function handleInternalNote(note: InternalNotePayload) {
+  if (!mounted) return;
+
+  const tipo = cleanText(note.tipo).toLowerCase();
+
+  if (tipo !== "mensaje_interno") return;
+
+  if (!note?.id || !note.conversacion_id) {
+    logWarn("Nota interna ignorada: faltan datos", note);
+    return;
+  }
+
+  if (processedMessagesRef.current.has(`internal:${note.id}`)) {
+    logWarn("Ignorado: mensaje interno ya procesado", {
+      id: note.id
+    });
+
+    return;
+  }
+
+  processedMessagesRef.current.add(`internal:${note.id}`);
+
+  if (processedMessagesRef.current.size > 300) {
+    processedMessagesRef.current = new Set(
+      Array.from(processedMessagesRef.current).slice(-120)
+    );
+  }
+
+  const { data: authData } = await supabase.auth.getUser();
+  const currentUserId = authData.user?.id || null;
+
+  if (currentUserId && note.autor_id === currentUserId) {
+    logInfo("Mensaje interno propio ignorado", {
+      id: note.id,
+      autor_id: note.autor_id
+    });
+
+    return;
+  }
+
+  const conversationId = cleanText(note.conversacion_id);
+
+  const { conversation } = await loadNotificationContext(conversationId);
+
+  let authorName = "Un usuario";
+
+  if (note.autor_id) {
+    const { data: authorProfile } = await supabase
+      .from("profiles")
+      .select("nombre,apellido,email")
+      .eq("id", note.autor_id)
+      .maybeSingle();
+
+    if (authorProfile) {
+      authorName =
+        `${authorProfile.nombre || ""} ${authorProfile.apellido || ""}`.trim() ||
+        authorProfile.email ||
+        "Un usuario";
+    }
+  }
+
+  const passengerName = getConversationName(conversation);
+  const preview = truncateText(cleanText(note.contenido) || "Nuevo mensaje interno");
+
+  const title = `Mensaje interno · ${passengerName}`;
+  const body = `${authorName}: ${preview}`;
+
+  logInfo("Mensaje interno válido. Disparo sonido y notificación", {
+    noteId: note.id,
+    conversationId,
+    passengerName,
+    authorName,
+    preview
+  });
+
+  await playNotificationSound("internal");
+
+  const bridge = getNosturBridge();
+
+  try {
+    if (bridge?.notify) {
+      await bridge.notify({
+        title,
+        body,
+        conversationId,
+        messageId: note.id
+      });
+    }
+  } catch (error) {
+    logWarn("Error solicitando notificación interna a Electron", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  fireVisibleNotification({
+    title,
+    body,
+    conversationId,
+    messageId: note.id,
+    createdAt: note.created_at || new Date().toISOString()
+  });
+
+  window.dispatchEvent(
+    new CustomEvent("nostur:global-internal-message", {
+      detail: {
+        kind: "internal",
+        conversation_id: conversationId,
+        note_id: note.id
+      }
+    })
+  );
+}
+
+
     async function pollRecentInboundMessages() {
       if (!mounted) return;
 
@@ -948,7 +1097,7 @@ export function GlobalWhatsappNotifications() {
 
     void pollRecentInboundMessages();
 
-    const channel = supabase
+      const channel = supabase
       .channel(`global-whatsapp-notifications-${Date.now()}`)
       .on(
         "postgres_changes",
@@ -959,6 +1108,17 @@ export function GlobalWhatsappNotifications() {
         },
         (payload) => {
           void handleIncomingMessage(payload.new as IncomingMessagePayload);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notas_conversacion"
+        },
+        (payload) => {
+          void handleInternalNote(payload.new as InternalNotePayload);
         }
       )
       .on(

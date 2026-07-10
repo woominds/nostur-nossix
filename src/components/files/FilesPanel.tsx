@@ -1494,7 +1494,7 @@ function addVoucherServicio() {
         telefono: draft.cliente.telefono,
         email: draft.cliente.email,
         origen: draft.cliente.origen,
-        vendedor_id: draft.cliente.vendedor_id || currentProfile?.id || null,
+       vendedor_id: currentProfile?.id || draft.cliente.vendedor_id || null,
         sucursal_id: draft.cliente.sucursal_id || currentProfile?.sucursal_id || null
       },
       file: {
@@ -1521,7 +1521,7 @@ function addVoucherServicio() {
         riesgo_motivo: draft.riesgo_motivo,
         confirmado_vendedor: draft.confirmado,
         observaciones: draft.venta.observaciones,
-        vendedor_id: draft.cliente.vendedor_id || currentProfile?.id || null,
+      vendedor_id: currentProfile?.id || draft.cliente.vendedor_id || null,
         sucursal_id: draft.cliente.sucursal_id || currentProfile?.sucursal_id || null
       },
       pagosComerciales: draft.pagosComerciales.filter((pago) => parseMoney(pago.importe) > 0),

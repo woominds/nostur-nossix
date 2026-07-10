@@ -1093,15 +1093,19 @@ serve(async (req) => {
       cleanText(localMessage?.sender_profile_id) ||
       null;
 
-    if (text && shouldShowAgentName(payload) && !templateName && !isReaction) {
-      const senderName = await getSenderDisplayName({
-        supabase,
-        senderProfileId
-      });
+ if (text && shouldShowAgentName(payload) && !templateName && !isReaction) {
+  const senderName = await getSenderDisplayName({
+    supabase,
+    senderProfileId
+  });
 
-      text = `${senderName}:\n${text}`;
-    }
+  const safeSenderName = senderName
+    .replace(/\*/g, "")
+    .replace(/_/g, "")
+    .trim();
 
+  text = `*${senderName}:*\n${text}`;
+}
     const localMedia = isMediaMessageType(messageType)
       ? {
           url: mediaUrl,

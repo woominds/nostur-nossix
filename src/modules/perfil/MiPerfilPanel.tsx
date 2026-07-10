@@ -290,9 +290,10 @@ export function MiPerfilPanel() {
   const [profile, setProfile] = useState<ProfileRecord | null>(null);
   const [sucursalNombre, setSucursalNombre] = useState<string>("—");
 
-  const [displayName, setDisplayName] = useState("");
-  const [nombre, setNombre] = useState("");
-  const [apellido, setApellido] = useState("");
+const [displayName, setDisplayName] = useState("");
+const [nombre, setNombre] = useState("");
+const [apellido, setApellido] = useState("");
+const [nombrePublicoWhatsapp, setNombrePublicoWhatsapp] = useState("");
 
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
@@ -356,9 +357,10 @@ const [showCredentialPassword, setShowCredentialPassword] = useState(false);
     } as ProfileRecord;
 
     setProfile(nextProfile);
-    setDisplayName(cleanText(nextProfile.display_name));
-    setNombre(cleanText(nextProfile.nombre));
-    setApellido(cleanText(nextProfile.apellido));
+setDisplayName(cleanText(nextProfile.display_name));
+setNombre(cleanText(nextProfile.nombre));
+setApellido(cleanText(nextProfile.apellido));
+setNombrePublicoWhatsapp(cleanText(nextProfile.nombre_publico_whatsapp));
 
     if (nextProfile.sucursal_id) {
       const { data: sucursalData } = await supabase
@@ -404,44 +406,49 @@ const [showCredentialPassword, setShowCredentialPassword] = useState(false);
     setVentasLoading(false);
   }
 
-  async function saveProfile() {
-    if (!profile?.id) return;
+async function saveProfile() {
+  if (!profile?.id) return;
 
-    setSavingProfile(true);
-    setError(null);
-    setStatus(null);
+  setSavingProfile(true);
+  setError(null);
+  setStatus(null);
 
-    const { error: updateError } = await supabase
-      .from("profiles")
-      .update({
-        display_name: displayName.trim() || null,
-        nombre: nombre.trim() || null,
-        apellido: apellido.trim() || null,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", profile.id);
+  const nombreWhatsAppFinal =
+    nombrePublicoWhatsapp.trim() ||
+    displayName.trim() ||
+    [nombre, apellido].map(cleanText).filter(Boolean).join(" ");
 
-    if (updateError) {
-      setError(updateError.message || "No se pudo guardar el perfil.");
-      setSavingProfile(false);
-      return;
-    }
+  const { data, error: updateError } = await supabase.rpc("update_mi_perfil", {
+    p_display_name: displayName.trim() || null,
+    p_nombre: nombre.trim() || null,
+    p_apellido: apellido.trim() || null,
+    p_nombre_publico_whatsapp: nombreWhatsAppFinal || null
+  });
 
-    setProfile((current) =>
-      current
-        ? {
-            ...current,
-            display_name: displayName.trim() || null,
-            nombre: nombre.trim() || null,
-            apellido: apellido.trim() || null
-          }
-        : current
-    );
-
-    setStatus("Perfil actualizado correctamente.");
-    window.dispatchEvent(new CustomEvent("nostur:profile-updated"));
+  if (updateError) {
+    setError(updateError.message || "No se pudo guardar el perfil.");
     setSavingProfile(false);
+    return;
   }
+
+  if (!data) {
+    setError("La actualización no devolvió datos del perfil.");
+    setSavingProfile(false);
+    return;
+  }
+
+  const nextProfile = data as ProfileRecord;
+
+  setProfile(nextProfile);
+  setDisplayName(cleanText(nextProfile.display_name));
+  setNombre(cleanText(nextProfile.nombre));
+  setApellido(cleanText(nextProfile.apellido));
+  setNombrePublicoWhatsapp(cleanText(nextProfile.nombre_publico_whatsapp));
+
+  setStatus("Perfil actualizado correctamente.");
+  window.dispatchEvent(new CustomEvent("nostur:profile-updated"));
+  setSavingProfile(false);
+}
 
   async function uploadAvatar(file: File) {
     if (!profile?.id) return;
@@ -475,13 +482,21 @@ const [showCredentialPassword, setShowCredentialPassword] = useState(false);
     const { data: publicUrlData } = supabase.storage.from("avatars").getPublicUrl(path);
     const publicUrl = publicUrlData.publicUrl;
 
-    const { error: updateError } = await supabase
-      .from("profiles")
-      .update({
-        avatar_url: publicUrl,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", profile.id);
+const nombreWhatsAppFinal =
+  nombrePublicoWhatsapp.trim() ||
+  displayName.trim() ||
+  [nombre, apellido].map(cleanText).filter(Boolean).join(" ");
+
+const { error: updateError } = await supabase
+  .from("profiles")
+  .update({
+    display_name: displayName.trim() || null,
+    nombre: nombre.trim() || null,
+    apellido: apellido.trim() || null,
+    nombre_publico_whatsapp: nombreWhatsAppFinal || null,
+    updated_at: new Date().toISOString()
+  })
+  .eq("id", profile.id);
 
     if (updateError) {
       setError(updateError.message || "La imagen subió, pero no se pudo guardar en el perfil.");
@@ -489,14 +504,17 @@ const [showCredentialPassword, setShowCredentialPassword] = useState(false);
       return;
     }
 
-    setProfile((current) =>
-      current
-        ? {
-            ...current,
-            avatar_url: publicUrl
-          }
-        : current
-    );
+   setProfile((current) =>
+  current
+    ? {
+        ...current,
+        display_name: displayName.trim() || null,
+        nombre: nombre.trim() || null,
+        apellido: apellido.trim() || null,
+        nombre_publico_whatsapp: nombreWhatsAppFinal || null
+      }
+    : current
+);
 
     setStatus("Avatar actualizado correctamente.");
     window.dispatchEvent(new CustomEvent("nostur:profile-updated"));
@@ -874,6 +892,15 @@ disabled={loading || ventasLoading || credentialsLoading}
                     placeholder="Ej: Jorge"
                   />
                 </div>
+
+                <div>
+  <FieldLabel>Nombre visible en WhatsApp</FieldLabel>
+  <SoftInput
+    value={nombrePublicoWhatsapp}
+    onChange={setNombrePublicoWhatsapp}
+    placeholder="Ej: Jorge de NOSSIX"
+  />
+</div>
 
                 <div>
                   <FieldLabel>Email</FieldLabel>

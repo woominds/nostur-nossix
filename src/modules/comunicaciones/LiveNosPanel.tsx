@@ -399,7 +399,9 @@ export function LiveNosPanel() {
   const [quickReplyTitle, setQuickReplyTitle] = useState("");
   const [quickReplyContent, setQuickReplyContent] = useState("");
   const [quickReplyCategory, setQuickReplyCategory] = useState("");
-  const [showAgentName, setShowAgentName] = useState(true);
+  const [showAgentName, setShowAgentName] = useState(() => {
+  return window.localStorage.getItem("nostur_livenos_show_agent_name") !== "0";
+});
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [audioRecording, setAudioRecording] = useState(false);
@@ -417,7 +419,10 @@ export function LiveNosPanel() {
 const [windowTicker, setWindowTicker] = useState(Date.now());
 
 const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+const [liveNosWidth, setLiveNosWidth] = useState(1400);
 
+const compactLiveNos = liveNosWidth < 980;
+const liveNosRootRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
@@ -991,6 +996,34 @@ if (
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
+
+  useEffect(() => {
+  window.localStorage.setItem("nostur_livenos_show_agent_name", showAgentName ? "1" : "0");
+}, [showAgentName]);
+
+
+useEffect(() => {
+  const element = liveNosRootRef.current;
+
+  if (!element) return;
+
+  const updateWidth = () => {
+    setLiveNosWidth(Math.round(element.getBoundingClientRect().width));
+  };
+
+  updateWidth();
+
+  const observer = new ResizeObserver(updateWidth);
+
+  observer.observe(element);
+
+  window.addEventListener("resize", updateWidth);
+
+  return () => {
+    observer.disconnect();
+    window.removeEventListener("resize", updateWidth);
+  };
+}, []);
 
   useEffect(() => {
     async function initialLoad() {
@@ -2957,15 +2990,29 @@ async function setAttachmentFromFile(file: File | null) {
     }
   }
 
-  function getSafeStorageName(file: File): string {
-    const cleanName = file.name
-      .replace(/[^\w.\-áéíóúÁÉÍÓÚñÑ ]/g, "")
-      .replace(/\s+/g, "-")
-      .trim()
-      .slice(0, 120);
+function getSafeStorageName(file: File): string {
+  const extension = file.name.includes(".")
+    ? file.name.split(".").pop()?.toLowerCase() || ""
+    : "";
 
-    return cleanName || `archivo-${Date.now()}`;
-  }
+  const baseName = file.name.includes(".")
+    ? file.name.split(".").slice(0, -1).join(".")
+    : file.name;
+
+  const cleanBaseName = baseName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ñ/g, "n")
+    .replace(/Ñ/g, "N")
+    .replace(/[^\w.-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^\-+|\-+$/g, "")
+    .slice(0, 110);
+
+  const safeBaseName = cleanBaseName || `archivo-${Date.now()}`;
+
+  return extension ? `${safeBaseName}.${extension}` : safeBaseName;
+}
 
   async function uploadAttachmentToStorage(params: {
     conversationId: string;
@@ -3996,7 +4043,10 @@ function renderWhatsappWindowCountdown() {
       >
         <div
           className={[
-            "group relative max-w-[66%] rounded-2xl px-3.5 py-2.5 text-[13px] font-normal leading-relaxed shadow-sm ring-1 transition",
+[
+  "group relative rounded-2xl px-3.5 py-2.5 text-[13px] font-normal leading-relaxed shadow-sm ring-1 transition",
+  compactLiveNos ? "max-w-[88%]" : "max-w-[66%]"
+].join(" "),
             bubbleClass,
             message.status === "failed" ? "ring-red-200" : ""
           ].join(" ")}
@@ -4155,10 +4205,11 @@ function renderWhatsappWindowCountdown() {
     return (
       <article key={nota.id} className="flex w-full justify-center px-1">
         <div
-          className={[
-            "max-w-[68%] rounded-xl border px-3 py-2 text-[12px] font-normal leading-relaxed shadow-sm",
-            visual.bubbleClass
-          ].join(" ")}
+        className={[
+  "rounded-xl border px-3 py-2 text-[12px] font-normal leading-relaxed shadow-sm",
+  compactLiveNos ? "max-w-[88%]" : "max-w-[68%]",
+  visual.bubbleClass
+].join(" ")}
         >
           <div className="mb-1 flex items-center gap-2">
             <span
@@ -4514,6 +4565,55 @@ function renderWhatsappWindowCountdown() {
       </div>
     );
   }
+
+  function renderCompactInboxTabs() {
+  const tabs: Array<{ key: InboxKey; label: string }> = [
+    { key: "sin_atender", label: "Sin atender" },
+    { key: "en_gestion", label: "En gestión" },
+    { key: "cande", label: "CANDE" },
+    { key: "colaboracion", label: "Colab." },
+    { key: "cerradas", label: "Cerradas" },
+    { key: "archivadas", label: "Archiv." },
+    { key: "eliminadas", label: "Elim." }
+  ];
+
+  return (
+    <div className="flex min-w-0 gap-1 overflow-x-auto rounded-2xl border border-black/10 bg-white/90 p-1 shadow-sm">
+      {tabs.map((tab) => {
+        const active = activeInbox === tab.key;
+        const count = inboxCounts[tab.key] || 0;
+
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => {
+              setActiveInbox(tab.key);
+              setSelectedId(null);
+            }}
+            className={[
+              "flex shrink-0 items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-medium transition",
+              active
+                ? "bg-[#4f7c90] text-white shadow-sm"
+                : "bg-transparent text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#142033]"
+            ].join(" ")}
+          >
+            <span>{tab.label}</span>
+
+            <span
+              className={[
+                "rounded-full px-1.5 py-0.5 text-[10px]",
+                active ? "bg-white/20 text-white" : "bg-[#f1f5f9] text-[#64748b]"
+              ].join(" ")}
+            >
+              {count}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
   function renderRightPanelContent() {
     if (!selectedConversation) return null;
@@ -5009,12 +5109,27 @@ function renderWhatsappWindowCountdown() {
         }}
       />
 
-      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[#eef3f6] text-[#142033]">
-        <header className="shrink-0 border-b border-black/10 bg-white/86 px-5 py-3 backdrop-blur-xl">
+     <div
+  ref={liveNosRootRef}
+  className="flex h-full min-h-0 flex-col overflow-hidden bg-[#eef3f6] text-[#142033]"
+>
+      <header
+  className={[
+    "shrink-0 border-b border-black/10 bg-white/86 backdrop-blur-xl",
+    compactLiveNos ? "px-3 py-2" : "px-5 py-3"
+  ].join(" ")}
+>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-[18px] font-semibold tracking-tight text-[#142033]">LiveNos</h1>
+          <h1
+  className={[
+    "font-semibold tracking-tight text-[#142033]",
+    compactLiveNos ? "text-[16px]" : "text-[18px]"
+  ].join(" ")}
+>
+  LiveNos
+</h1>
                 <Pill>WhatsApp</Pill>
               </div>
             </div>
@@ -5069,8 +5184,20 @@ function renderWhatsappWindowCountdown() {
           ) : null}
         </header>
 
-        <main className="grid min-h-0 flex-1 grid-cols-[255px_325px_minmax(0,1fr)] gap-3 overflow-hidden p-3">
-          <aside className="flex min-h-0 flex-col gap-3 overflow-hidden">
+       <main
+  className={[
+    "grid min-h-0 flex-1 overflow-hidden",
+    compactLiveNos
+      ? "grid-cols-[minmax(235px,36%)_minmax(0,1fr)] gap-2 p-2"
+      : "grid-cols-[255px_325px_minmax(0,1fr)] gap-3 p-3"
+  ].join(" ")}
+>
+  <aside
+    className={[
+      "min-h-0 flex-col gap-3 overflow-hidden",
+      compactLiveNos ? "hidden" : "flex"
+    ].join(" ")}
+  >
             <LiveNosSidebar
   activeInbox={activeInbox}
   inboxCounts={inboxCounts}
@@ -5091,16 +5218,19 @@ function renderWhatsappWindowCountdown() {
   onClearSellerFilter={() => setSellerFilterId(null)}
 />
           </aside>
+<div className="flex min-h-0 flex-col gap-2 overflow-hidden">
+  {compactLiveNos ? renderCompactInboxTabs() : null}
 
-          <ConversationsColumn
-            loading={loading}
-            search={search}
-            activeInbox={activeInbox}
-            selectedId={selectedId}
-            filteredConversations={filteredConversations}
-            onSearchChange={setSearch}
-            onSelectConversation={selectConversation}
-          />
+  <ConversationsColumn
+    loading={loading}
+    search={search}
+    activeInbox={activeInbox}
+    selectedId={selectedId}
+    filteredConversations={filteredConversations}
+    onSearchChange={setSearch}
+    onSelectConversation={selectConversation}
+  />
+</div>
 
           <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-black/10 bg-white/86 shadow-sm">
             {niaInternalSelected ? (
@@ -5301,7 +5431,12 @@ function renderWhatsappWindowCountdown() {
 </div>
                 </div>
 
-                <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_330px] overflow-hidden">
+              <div
+  className={[
+    "grid min-h-0 flex-1 overflow-hidden",
+    compactLiveNos ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_330px]"
+  ].join(" ")}
+>
                   <div
                     className="relative flex min-h-0 flex-col overflow-hidden"
                     onDragOver={handleChatDragOver}
@@ -5740,7 +5875,12 @@ function renderWhatsappWindowCountdown() {
                     </div>
                   </div>
 
-                  <aside className="min-h-0 overflow-auto border-l border-black/10 bg-white p-3">
+            <aside
+  className={[
+    "min-h-0 overflow-auto border-l border-black/10 bg-white p-3",
+    compactLiveNos ? "hidden" : "block"
+  ].join(" ")}
+>
                     <RightPanelTabs rightTab={rightTab} onChangeTab={setRightTab} />
 
                     <div className="mt-3">{renderRightPanelContent()}</div>

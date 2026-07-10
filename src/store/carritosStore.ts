@@ -1335,11 +1335,14 @@ if (effectiveFilters.activo === "inactivos") {
       .from("carritos")
       .update({
         estado: "EN_CONTROL",
+        derivado_control: true,
+        controlado: false,
         enviado_control_at: now,
         visible_en_carritos: true,
         confirmado_vendedor: true,
         confirmado_at: carrito.confirmado_at || now,
-        fecha_visible_carritos: carrito.fecha_visible_carritos || getToday()
+        fecha_visible_carritos: carrito.fecha_visible_carritos || getToday(),
+        updated_at: now
       })
       .eq("id", carrito.id)
       .not("estado", "in", '("EN_CONTROL","CONTROLADO","FACTURADO","COBRADO")');

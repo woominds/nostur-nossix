@@ -812,9 +812,10 @@ export const useFilesStore = create<FilesState>((set, get) => ({
       return false;
     }
 
-    const vendedorId = canManageFiles
-      ? input.file.vendedor_id || input.cliente.vendedor_id || currentUserId
-      : currentUserId;
+   const vendedorId =
+  canManageFiles
+    ? input.file.vendedor_id || input.cliente.vendedor_id || currentUserId
+    : currentUserId;
 
     const vendedorProfile = get().catalogos.vendedores.find(
       (vendedor) => vendedor.id === vendedorId
@@ -844,7 +845,7 @@ export const useFilesStore = create<FilesState>((set, get) => ({
           origen: metodoContacto,
           vendedor: vendedorNombre,
           vendedor_id: vendedorId,
-          sucursal_id: sucursalId,
+          sucursal_id: input.file.sucursal_id || input.cliente.sucursal_id || currentProfile?.sucursal_id || null,
           activo: true
         })
         .select("id")
