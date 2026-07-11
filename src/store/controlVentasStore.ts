@@ -10,6 +10,8 @@ export type ProfileLite = {
   rol: string;
   color: string;
   activo: boolean;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
 };
 
 export type Cliente = {
@@ -365,18 +367,24 @@ async function getCurrentUserId(): Promise<string | null> {
 function canProfileManage(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
         profile.rol === "gerencia" ||
-        profile.rol === "administracion")
+        profile.rol === "administracion" ||
+        profile.rol === "soporte")
   );
 }
 
 function canProfileUse(profile: ProfileLite | null): boolean {
   return Boolean(
     profile?.activo &&
-      (profile.rol === "admin_general" ||
+      (profile.is_super_admin ||
+        profile.is_support_user ||
+        profile.rol === "admin_general" ||
         profile.rol === "gerencia" ||
         profile.rol === "administracion" ||
+        profile.rol === "soporte" ||
         profile.rol === "vendedor")
   );
 }
@@ -600,6 +608,17 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
 
     const filters = get().filters;
 
+console.log("[CONTROL VENTAS] Diagnóstico previo", {
+  currentUserId,
+  currentProfile,
+  canManageControlVentas,
+  filters,
+  carritoBuscado: "215-721-384",
+  vendedorEsperado: "4146b2b3-a1ed-4e57-b323-a9f56a2baf0a",
+  sucursalEsperada: "25fae54d-2ea6-4d57-8875-1e31ec486636"
+});
+
+
   let carritosQuery = supabase
   .from("carritos")
   .select("*, clientes:cliente_id(*)")
@@ -635,6 +654,18 @@ export const useControlVentasStore = create<ControlVentasState>((set, get) => ({
         .order("nombre"),
       supabase.from("sucursales").select("*").order("nombre")
     ]);
+
+
+    console.log("[CONTROL VENTAS] Resultado Supabase", {
+  errorCarritos: carritosRes.error,
+  cantidadCarritos: carritosRes.data?.length || 0,
+  carritoEncontrado: (carritosRes.data || []).find(
+    (item: any) => item.numero_carrito === "215-721-384"
+  ),
+  numerosRecibidos: (carritosRes.data || []).map(
+    (item: any) => item.numero_carrito
+  )
+});
 
     const firstError = carritosRes.error || vendedoresRes.error || sucursalesRes.error;
 

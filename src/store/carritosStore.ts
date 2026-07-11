@@ -92,11 +92,18 @@ export type Carrito = {
   riesgo_resuelto_at?: string | null;
   riesgo_resuelto_by?: string | null;
   riesgo_observaciones?: string | null;
-  confirmado_vendedor?: boolean;
-  confirmado_at?: string | null;
-  enviado_control_at?: string | null;
+confirmado_vendedor?: boolean;
+confirmado_at?: string | null;
+enviado_control_at?: string | null;
 
-  clientes?: Cliente | null;
+derivado_control?: boolean;
+controlado?: boolean;
+controlado_at?: string | null;
+controlado_by?: string | null;
+facturado?: boolean;
+cobrado?: boolean;
+
+clientes?: Cliente | null;
 };
 
 export type PagoComercial = {
@@ -1179,14 +1186,38 @@ estado: input.carrito.visible_en_carritos ? "EN_CONTROL" : "CTA_CTE",
       importe_riesgo: input.carrito.riesgo ? getNumber(input.carrito.importe_riesgo) : 0,
       riesgo_motivo: input.carrito.riesgo ? nullableText(input.carrito.riesgo_motivo) : null,
 
-      estado: input.carrito.estado || carritoActual.estado || "CARGADO",
-      observaciones: nullableText(
-        input.carrito.observaciones !== undefined
-          ? input.carrito.observaciones
-          : carritoActual.observaciones
-      ),
+ estado: input.carrito.estado || carritoActual.estado || "CARGADO",
 
-      vendedor: vendedorNombre,
+derivado_control:
+  input.carrito.estado === "EN_CONTROL"
+    ? true
+    : Boolean(carritoActual.derivado_control),
+
+controlado:
+  input.carrito.estado === "CONTROLADO"
+    ? true
+    : Boolean(carritoActual.controlado),
+
+enviado_control_at:
+  input.carrito.estado === "EN_CONTROL"
+    ? carritoActual.enviado_control_at || now
+    : carritoActual.enviado_control_at || null,
+
+confirmado_vendedor:
+  carritoActual.confirmado_vendedor !== undefined
+    ? Boolean(carritoActual.confirmado_vendedor)
+    : true,
+
+confirmado_at:
+  carritoActual.confirmado_at || now,
+
+observaciones: nullableText(
+  input.carrito.observaciones !== undefined
+    ? input.carrito.observaciones
+    : carritoActual.observaciones
+),
+
+vendedor: vendedorNombre,
       vendedor_id: vendedorId,
       sucursal_id: sucursalId,
 
