@@ -300,6 +300,85 @@ function isInternalAppUrl(url) {
    DETECCIÓN DE DOMINIOS
 ========================================================= */
 
+function isExpertsUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "experts.almundo.com.ar" ||
+    hostname.endsWith(".experts.almundo.com.ar")
+  );
+}
+
+function isAbacoUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "abaco.almundo.com" ||
+    hostname.endsWith(".abaco.almundo.com")
+  );
+}
+
+function isKroozeUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "almundo.krooze.com.br" ||
+    hostname.endsWith(".krooze.com.br")
+  );
+}
+
+function isLiveConnectUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "liveconnect.chat" ||
+    hostname.endsWith(".liveconnect.chat")
+  );
+}
+
+function isAivoUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "my.aivo.co" ||
+    hostname.endsWith(".my.aivo.co") ||
+    hostname === "live-us.aivo.co" ||
+    hostname.endsWith(".live-us.aivo.co") ||
+    hostname === "aivo.co" ||
+    hostname.endsWith(".aivo.co")
+  );
+}
+
+function isAmadeusUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "sellingplatformconnect.amadeus.com" ||
+    hostname === "www.sellingplatformconnect.amadeus.com" ||
+    hostname.endsWith(".amadeus.com")
+  );
+}
+
+function isSabreUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "srw.sabre.com" ||
+    hostname.endsWith(".sabre.com")
+  );
+}
+
+function isCrmUrl(url) {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === "gestion.nossix.com.ar" ||
+    hostname.endsWith(".gestion.nossix.com.ar")
+  );
+}
+
+
+
 function isChatGptUrl(url) {
   const hostname = getHostname(url);
 
@@ -429,6 +508,15 @@ function shouldOpenInsideNosturTab(url) {
 ========================================================= */
 
 function getBasePartitionByUrl(url) {
+  if (isExpertsUrl(url)) return "persist:experts";
+  if (isAbacoUrl(url)) return "persist:abaco";
+  if (isKroozeUrl(url)) return "persist:krooze";
+  if (isLiveConnectUrl(url)) return "persist:liveconnect";
+  if (isAivoUrl(url)) return "persist:nostur-aivo";
+  if (isAmadeusUrl(url)) return "persist:amadeus";
+  if (isSabreUrl(url)) return "persist:sabre";
+  if (isCrmUrl(url)) return "persist:crm";
+
   if (isChatGptUrl(url)) return "persist:chatgpt";
   if (isMicrosoftAppUrl(url) || isMicrosoftAuthUrl(url)) return "persist:office";
   if (isGoogleUrl(url) || isGoogleAuthUrl(url)) return "persist:web";
@@ -441,23 +529,54 @@ function getPartitionForContents(contents, targetUrl) {
   const openerPartition = getBasePartitionByUrl(openerUrl);
   const targetPartition = getBasePartitionByUrl(targetUrl);
 
-  if (openerPartition === "persist:chatgpt") return "persist:chatgpt";
-  if (openerPartition === "persist:office") return "persist:office";
-  if (targetPartition === "persist:office") return "persist:office";
-  if (targetPartition === "persist:chatgpt") return "persist:chatgpt";
+  const knownPartitions = new Set([
+    "persist:experts",
+    "persist:abaco",
+    "persist:krooze",
+    "persist:liveconnect",
+    "persist:nostur-aivo",
+    "persist:amadeus",
+    "persist:sabre",
+    "persist:office",
+    "persist:chatgpt",
+    "persist:crm"
+  ]);
+
+  if (knownPartitions.has(openerPartition)) return openerPartition;
+  if (knownPartitions.has(targetPartition)) return targetPartition;
 
   return "persist:web";
 }
 
 function getAppIdByUrl(url) {
+  if (isExpertsUrl(url)) return "experts";
+  if (isAbacoUrl(url)) return "abaco";
+  if (isKroozeUrl(url)) return "krooze";
+  if (isLiveConnectUrl(url)) return "liveconnect";
+  if (isAivoUrl(url)) return "aivo";
+  if (isAmadeusUrl(url)) return "amadeus";
+  if (isSabreUrl(url)) return "sabre";
+  if (isCrmUrl(url)) return "crm";
+
   if (isMicrosoftAppUrl(url) || isMicrosoftAuthUrl(url)) return "office";
   if (isChatGptUrl(url)) return "chatgpt";
+
   return "web";
 }
 
 function getTitleByUrl(url) {
+  if (isExpertsUrl(url)) return "Experts";
+  if (isAbacoUrl(url)) return "Ábaco";
+  if (isKroozeUrl(url)) return "Krooze";
+  if (isLiveConnectUrl(url)) return "Live Connect";
+  if (isAivoUrl(url)) return "Aivo";
+  if (isAmadeusUrl(url)) return "Amadeus";
+  if (isSabreUrl(url)) return "Sabre";
+  if (isCrmUrl(url)) return "CRM NOSSIX";
+
   if (isMicrosoftAppUrl(url) || isMicrosoftAuthUrl(url)) return "Microsoft 365";
   if (isChatGptUrl(url)) return "ChatGPT";
+
   return "Web";
 }
 
@@ -1193,6 +1312,17 @@ function configureOneSession(ses, partitionName) {
 
   ses.setUserAgent(CHROME_USER_AGENT);
 
+  try {
+  ses.cookies.set({
+    url: "https://my.aivo.co",
+    name: "nostur_partition_marker",
+    value: partitionName,
+    expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 365
+  }).catch(() => {});
+} catch {
+  // Ignorar.
+}
+
   ses.setPermissionRequestHandler((_webContents, permission, callback) => {
     const allowed = [
       "notifications",
@@ -1248,7 +1378,7 @@ function configureSessions() {
     "persist:abaco",
     "persist:krooze",
     "persist:liveconnect",
-    "persist:aivo",
+    "persist:nostur-aivo",
     "persist:amadeus",
     "persist:sabre",
     "persist:office",
@@ -1986,7 +2116,7 @@ ipcMain.handle("nostur:clear-cache", async (_event, partitionName) => {
         "persist:abaco",
         "persist:krooze",
         "persist:liveconnect",
-        "persist:aivo",
+        "persist:nostur-aivo",
         "persist:amadeus",
         "persist:sabre",
         "persist:office",

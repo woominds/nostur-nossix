@@ -497,12 +497,7 @@ function buildVirtualControl(carrito: CarritoControlItem): ControlVenta | null {
   };
 }
 
-function isCarritoAlreadyControlled(
-  carrito: CarritoControlItem,
-  control?: ControlVenta | null
-): boolean {
-  return Boolean(control?.controlado || carrito.controlado || carrito.estado === "CONTROLADO");
-}
+
 
 function buildResumen(carritos: CarritoControlItem[], controles: ControlVenta[]): ControlResumen[] {
   return carritos.map((carrito) => {
@@ -714,17 +709,7 @@ console.log("[CONTROL VENTAS] Diagnóstico previo", {
       return false;
     }
 
-    const existing = get().controles.find((control) => control.carrito_id === carrito.id);
 
-    if (isCarritoAlreadyControlled(carrito, existing)) {
-      set({
-        saving: false,
-     error:
-  "Este carrito ya está controlado. No se puede volver a controlar desde esta acción."
-      });
-
-      return false;
-    }
 
     const utilidadNeta = parseMoney(draft.utilidad_almundo);
 
@@ -740,19 +725,29 @@ console.log("[CONTROL VENTAS] Diagnóstico previo", {
     const importeRegalia = parseMoney(draft.importe_regalia || String(utilidadNeta * 0.36));
     const calculated = calculateControl(utilidadNeta, importeRegalia);
 
-    const { error } = await supabase
-      .from("carritos")
-      .update({
-        utilidad_neta: utilidadNeta,
-        regalias: Number(calculated.importeRegalia.toFixed(2)),
-        utilidad_bruta: Number(calculated.utilidadNossix.toFixed(2)),
-        importe_facturar: Number(calculated.importeAFacturar.toFixed(2)),
-        controlado: true,
-        estado: "CONTROLADO",
-        observaciones: draft.observaciones || null,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", carrito.id);
+     const now = new Date().toISOString();
+
+
+
+   const { error } = await supabase
+  .from("carritos")
+  .update({
+    utilidad_neta: utilidadNeta,
+    regalias: Number(calculated.importeRegalia.toFixed(2)),
+    utilidad_bruta: Number(calculated.utilidadNossix.toFixed(2)),
+    importe_facturar: Number(calculated.importeAFacturar.toFixed(2)),
+
+    controlado: Boolean(draft.controlado),
+    facturado: Boolean(draft.facturado),
+    cobrado: Boolean(draft.cobrado),
+
+    fecha_factura: draft.facturado ? carrito.fecha_factura || now.slice(0, 10) : null,
+    fecha_cobro: draft.cobrado ? carrito.fecha_cobro || now.slice(0, 10) : null,
+
+    observaciones: draft.observaciones || null,
+    updated_at: now
+  })
+  .eq("id", carrito.id);
 
     if (error) {
       set({ saving: false, error: normalizeError(error) });

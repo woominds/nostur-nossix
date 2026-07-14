@@ -247,6 +247,51 @@ function TextArea({
   );
 }
 
+function ToggleChip({
+  label,
+  checked,
+  onChange,
+  disabled = false,
+  tone = "default"
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+  disabled?: boolean;
+  tone?: "default" | "green" | "blue" | "orange";
+}) {
+  const activeClass = {
+    default: "border-[#4f7c90]/30 bg-[#eef6f7] text-[#4f7c90]",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    blue: "border-sky-200 bg-sky-50 text-sky-700",
+    orange: "border-orange-200 bg-orange-50 text-orange-700"
+  }[tone];
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={[
+        "flex h-8 items-center justify-between gap-2 rounded-[10px] border px-3 text-[12px] font-medium transition disabled:opacity-50",
+        checked
+          ? activeClass
+          : "border-black/10 bg-white text-[#64748b] hover:bg-[#f8fafc]"
+      ].join(" ")}
+    >
+      <span>{label}</span>
+      <span
+        className={[
+          "flex h-4 w-4 items-center justify-center rounded-full text-[10px]",
+          checked ? "bg-white/80" : "bg-[#f1f5f9]"
+        ].join(" ")}
+      >
+        {checked ? "✓" : ""}
+      </span>
+    </button>
+  );
+}
+
 function NosturSelect({
   value,
   onChange,
@@ -601,7 +646,7 @@ function ControlSidePanel({
   const carrito = selected.carrito;
   const cliente = carrito.clientes;
   const preview = calculatePreview(draft.utilidad_almundo, draft.importe_regalia);
-  const locked = selected.controlado || selected.facturado || selected.cobrado || selected.anulado;
+  const locked = selected.anulado;
 
   function setField<K extends keyof ControlDraft>(key: K, value: ControlDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -636,10 +681,16 @@ function ControlSidePanel({
       </div>
 
       <div className="grid gap-2.5 text-[12px]">
-        {locked ? (
-          <div className="rounded-[14px] border border-emerald-200 bg-emerald-50 p-3 text-[12px] font-medium text-emerald-700">
-            Este carrito ya está controlado/cerrado. No se puede volver a controlar ni
-            descontrolar.
+            {selected.controlado || selected.facturado || selected.cobrado ? (
+          <div className="rounded-[14px] border border-sky-200 bg-sky-50 p-3 text-[12px] font-medium text-sky-700">
+            Este control ya tiene movimientos guardados. Podés editarlo para corregir
+            errores administrativos.
+          </div>
+        ) : null}
+
+        {selected.anulado ? (
+          <div className="rounded-[14px] border border-red-200 bg-red-50 p-3 text-[12px] font-medium text-red-700">
+            Este control está anulado. Para modificarlo primero habría que restaurarlo.
           </div>
         ) : null}
 
@@ -769,6 +820,57 @@ function ControlSidePanel({
                 {formatMoneyAR(preview.aFacturar, carrito.moneda)}
               </strong>
             </div>
+                    <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+          <FieldLabel>Estado administrativo</FieldLabel>
+
+          <div className="grid grid-cols-3 gap-2">
+            <ToggleChip
+              label="Controlado"
+              checked={draft.controlado}
+              disabled={locked}
+              tone="blue"
+              onChange={(value) => setField("controlado", value)}
+            />
+
+            <ToggleChip
+              label="Facturado"
+              checked={draft.facturado}
+              disabled={locked}
+              tone="orange"
+              onChange={(value) => {
+                setField("facturado", value);
+
+                if (value) {
+                  setField("controlado", true);
+                }
+
+                if (!value) {
+                  setField("cobrado", false);
+                }
+              }}
+            />
+
+            <ToggleChip
+              label="Cobrado"
+              checked={draft.cobrado}
+              disabled={locked}
+              tone="green"
+              onChange={(value) => {
+                setField("cobrado", value);
+
+                if (value) {
+                  setField("controlado", true);
+                  setField("facturado", true);
+                }
+              }}
+            />
+          </div>
+
+          <p className="mt-2 text-[11px] font-normal leading-relaxed text-[#64748b]">
+            Si marcás cobrado, también queda facturado y controlado. Si desmarcás facturado,
+            se desmarca cobrado.
+          </p>
+        </div>
           </div>
         </div>
 
@@ -794,7 +896,7 @@ function ControlSidePanel({
           onClick={() => onSave(draft)}
           className="h-8 rounded-[10px] bg-[#4f7c90] px-4 text-[12px] font-medium text-white shadow-sm hover:bg-[#406b7d] disabled:opacity-50"
         >
-          {saving ? "Guardando..." : locked ? "Control cerrado" : "Guardar control"}
+          {saving ? "Guardando..." : locked ? "Control anulado" : "Guardar cambios"}
         </button>
 
         {selected.control && !selected.controlado ? (
@@ -1353,8 +1455,8 @@ export function ControlVentasPanel() {
 
                         <IconButton
                           icon={FilePenLine}
-                          label={item.controlado ? "Control cerrado" : "Editar control"}
-                          className={item.controlado ? "text-emerald-600" : "text-[#4f7c90]"}
+                          label="Editar control"
+                          className="text-[#4f7c90]"
                           onClick={(event) => {
                             event.stopPropagation();
                             selectCarrito(carrito.id);

@@ -6,7 +6,9 @@ import {
   Archive,
   ChevronDown,
   ChevronsUpDown,
+  Download,
   Eye,
+  Paperclip,
   Plus,
   ReceiptText,
   RefreshCcw,
@@ -412,7 +414,8 @@ function createInitialDocumentDraft(): DocumentoDraft {
     exento: "0",
     total: "",
     observaciones: "",
-    selectedCarritoIds: []
+    selectedCarritoIds: [],
+    archivo: null
   };
 }
 
@@ -513,15 +516,19 @@ function DocumentoModal({
         selectedCarritoIds.includes(item.id)
       );
 
-      const suggestedNeto = nextSelected.reduce((total, item) => {
-        const control = item.carritos_control?.[0];
-        return total + parseMoney(control?.importe_a_facturar);
-      }, 0);
+   const suggestedTotal = nextSelected.reduce((total, item) => {
+  const control = item.carritos_control?.[0];
+  return total + parseMoney(control?.importe_a_facturar);
+}, 0);
 
-      return recalculateDraftMoney(current, {
-        selectedCarritoIds,
-        neto_gravado: suggestedNeto > 0 ? moneyInput(suggestedNeto) : ""
-      });
+const alicuota = parseMoney(current.alicuota_iva || "21");
+const divisorIva = 1 + alicuota / 100;
+const suggestedNeto = divisorIva > 0 ? suggestedTotal / divisorIva : suggestedTotal;
+
+return recalculateDraftMoney(current, {
+  selectedCarritoIds,
+  neto_gravado: suggestedNeto > 0 ? moneyInput(suggestedNeto) : ""
+});
     });
   }
 
@@ -763,7 +770,7 @@ function DocumentoModal({
                 />
               </div>
 
-              <div className="md:col-span-2 xl:col-span-5">
+                        <div className="md:col-span-2 xl:col-span-3">
                 <FieldLabel>Observaciones / motivo</FieldLabel>
 
                 <TextArea
@@ -771,6 +778,46 @@ function DocumentoModal({
                   onChange={(value) => setField("observaciones", value)}
                   placeholder="Motivo de nota, referencia de postventa o comentarios..."
                 />
+              </div>
+
+              <div className="md:col-span-2 xl:col-span-2">
+                <FieldLabel>Documento adjunto</FieldLabel>
+
+                <label className="flex min-h-[78px] cursor-pointer flex-col justify-center rounded-[10px] border border-dashed border-black/15 bg-[#f8fafc] px-3 py-2 text-[12px] transition hover:border-[#4f7c90]/40 hover:bg-[#eef6f7]">
+                  <input
+                    type="file"
+                    accept="application/pdf,image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      setField("archivo", file);
+                    }}
+                  />
+
+                  <div className="flex items-center gap-2 font-semibold text-[#172033]">
+                    <Paperclip size={14} className="text-[#4f7c90]" />
+                    {draft.archivo ? "Archivo cargado" : "Adjuntar PDF / imagen"}
+                  </div>
+
+                  <div className="mt-1 truncate font-normal text-[#64748b]">
+                    {draft.archivo
+                      ? `${draft.archivo.name} · ${(draft.archivo.size / 1024 / 1024).toFixed(2)} MB`
+                      : "Factura, nota de crédito, nota de débito o comprobante."}
+                  </div>
+
+                  {draft.archivo ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setField("archivo", null);
+                      }}
+                      className="mt-2 h-7 self-start rounded-[9px] bg-white px-2.5 text-[11px] font-medium text-red-600 ring-1 ring-red-100 hover:bg-red-50"
+                    >
+                      Quitar archivo
+                    </button>
+                  ) : null}
+                </label>
               </div>
             </div>
 
@@ -790,7 +837,7 @@ function DocumentoModal({
 
                   <div className="rounded-[14px] border border-[#4f7c90]/20 bg-[#eef6f7] px-3 py-2 text-right">
                     <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#4f7c90]">
-                      Sugerido carritos
+                     Total carritos c/IVA
                     </div>
 
                     <div className="text-[14px] font-semibold text-[#172033]">
@@ -949,6 +996,13 @@ function DocumentoModal({
                 </div>
 
                 <div className="text-[#64748b]">{draft.moneda}</div>
+              </div>
+
+                            <div>
+                <FieldLabel>Adjunto</FieldLabel>
+                <div className="font-semibold text-[#172033]">
+                  {draft.archivo ? draft.archivo.name : "Sin archivo"}
+                </div>
               </div>
 
               <div className="rounded-[14px] border border-black/10 bg-white p-3">
@@ -1233,10 +1287,14 @@ function CobroMultipleModal({
 
 function FacturaDetailPanel({
   factura,
-  onCobrar
+  saving,
+  onCobrar,
+  onAdjuntarArchivo
 }: {
   factura: FacturaCobrar | null;
+  saving: boolean;
   onCobrar: (factura: FacturaCobrar) => void;
+  onAdjuntarArchivo: (factura: FacturaCobrar, archivo: File) => Promise<void>;
 }) {
   if (!factura) {
     return (
@@ -1280,11 +1338,62 @@ function FacturaDetailPanel({
         <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
           <FieldLabel>Documento</FieldLabel>
 
-          <div className="font-semibold text-[#172033]">{getTipoLabel(factura.tipo_documento)}</div>
+          <div className="font-semibold text-[#172033]">
+            {getTipoLabel(factura.tipo_documento)}
+          </div>
+
           <div className="mt-0.5 text-[#64748b]">A: {factura.razon_social}</div>
+
           <div className="text-[#64748b]">
             Período: {getMonthName(factura.mes)} {factura.anio || ""}
           </div>
+        </div>
+
+              <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
+          <FieldLabel>Documento adjunto</FieldLabel>
+
+          {factura.archivo_url ? (
+            <a
+              href={factura.archivo_url}
+              target="_blank"
+              rel="noreferrer"
+              className="mb-2 flex items-center justify-between gap-3 rounded-[12px] border border-[#4f7c90]/20 bg-[#eef6f7] px-3 py-2 text-[12px] font-medium text-[#4f7c90] hover:bg-[#e3f0f2]"
+            >
+              <span className="min-w-0">
+                <span className="block font-semibold text-[#172033]">Ver archivo</span>
+                <span className="block truncate font-normal text-[#64748b]">
+                  {factura.archivo_nombre || "Documento"}
+                </span>
+              </span>
+
+              <Download size={15} className="shrink-0" />
+            </a>
+          ) : (
+            <div className="mb-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-700">
+              No hay PDF/archivo adjunto para este documento.
+            </div>
+          )}
+
+          <label className="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-[10px] bg-white px-3 text-[12px] font-medium text-[#334155] shadow-sm ring-1 ring-black/10 hover:bg-[#eef6f7]">
+            <Paperclip size={13} className="text-[#4f7c90]" />
+
+            {factura.archivo_url ? "Reemplazar archivo" : "Adjuntar archivo"}
+
+            <input
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,image/webp"
+              className="hidden"
+              disabled={saving}
+              onChange={(event) => {
+                const archivo = event.target.files?.[0] || null;
+                event.target.value = "";
+
+                if (!archivo) return;
+
+                void onAdjuntarArchivo(factura, archivo);
+              }}
+            />
+          </label>
         </div>
 
         <div className="rounded-[14px] border border-black/10 bg-[#f8fafc] p-3">
@@ -1318,7 +1427,10 @@ function FacturaDetailPanel({
 
             <div className="grid max-h-[260px] gap-1.5 overflow-auto pr-1">
               {factura.facturas_cobrar_carritos.map((item) => (
-                <div key={item.id} className="rounded-[12px] border border-black/10 bg-white px-2.5 py-2">
+                <div
+                  key={item.id}
+                  className="rounded-[12px] border border-black/10 bg-white px-2.5 py-2"
+                >
                   <div className="text-[12px] font-semibold text-[#172033]">
                     {item.numero_carrito}
                   </div>
@@ -1349,10 +1461,13 @@ function FacturaDetailPanel({
             <FieldLabel>Detalle cobro</FieldLabel>
 
             <div className="font-semibold">{factura.forma_cobro || "Cobrado"}</div>
+
             <div className="mt-0.5">
               {factura.no_impacta_caja ? "Cashflow · no impacta caja" : factura.caja || "Sin caja"}
             </div>
+
             <div>{factura.referencia_cobro || "Sin referencia"}</div>
+
             <div className="mt-1 text-[11px] font-medium">
               Fecha cobro: {formatDateAR(factura.cobrado_at)}
             </div>
@@ -1511,7 +1626,8 @@ function GrupoMonedaCard({
 
 export function FacturasCobrarPanel() {
   const loading = useFacturasCobrarStore((state) => state.loading);
-  
+  const saving = useFacturasCobrarStore((state) => state.saving);
+
   const error = useFacturasCobrarStore((state) => state.error);
   const filters = useFacturasCobrarStore((state) => state.filters);
   const selectedTab = useFacturasCobrarStore((state) => state.selectedTab);
@@ -1519,8 +1635,11 @@ export function FacturasCobrarPanel() {
   const selectedFacturaIds = useFacturasCobrarStore((state) => state.selectedFacturaIds);
   const catalogos = useFacturasCobrarStore((state) => state.catalogos);
   const retenciones = useFacturasCobrarStore((state) => state.retenciones);
+    const loadFacturas = useFacturasCobrarStore((state) => state.loadFacturas);
 
-  const loadFacturas = useFacturasCobrarStore((state) => state.loadFacturas);
+   const adjuntarArchivoFactura = useFacturasCobrarStore(
+    (state) => state.adjuntarArchivoFactura
+  );
   const setTab = useFacturasCobrarStore((state) => state.setTab);
   const setFilter = useFacturasCobrarStore((state) => state.setFilter);
   const clearError = useFacturasCobrarStore((state) => state.clearError);
@@ -1572,6 +1691,14 @@ export function FacturasCobrarPanel() {
   function openCobroForFactura(factura: FacturaCobrar) {
     selectOnlyFactura(factura.id);
     setCobroModalOpen(true);
+  }
+
+    async function handleAdjuntarArchivoFactura(factura: FacturaCobrar, archivo: File) {
+    const ok = await adjuntarArchivoFactura(factura, archivo);
+
+    if (ok) {
+      showToast("Archivo adjuntado correctamente.");
+    }
   }
 
   useEffect(() => {
@@ -1987,7 +2114,12 @@ export function FacturasCobrarPanel() {
               )}
             </section>
 
-            <FacturaDetailPanel factura={selectedFactura} onCobrar={openCobroForFactura} />
+           <FacturaDetailPanel
+  factura={selectedFactura}
+  saving={saving}
+  onCobrar={openCobroForFactura}
+  onAdjuntarArchivo={handleAdjuntarArchivoFactura}
+/>
           </div>
         )}
       </main>

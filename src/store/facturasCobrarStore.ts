@@ -58,6 +58,7 @@ export type CarritoDisponible = {
 
   clientes?: ClienteLite | null;
   carritos_control?: ControlCarritoDisponible[] | null;
+ facturas_cobrar_carritos?: FacturaCobrarCarrito[] | null;
 };
 
 export type ControlCarritoDisponible = {
@@ -110,7 +111,14 @@ export type FacturaCobrar = {
   arca_estado?: string | null;
   arca_error?: string | null;
   arca_payload?: unknown;
-  arca_response?: unknown;
+   arca_response?: unknown;
+
+  archivo_url?: string | null;
+  archivo_path?: string | null;
+  archivo_nombre?: string | null;
+  archivo_tipo?: string | null;
+  archivo_size?: number | null;
+
   facturas_cobrar_carritos?: FacturaCobrarCarrito[];
   facturas_cobrar_retenciones?: FacturaCobrarRetencion[];
 };
@@ -183,6 +191,7 @@ export type DocumentoDraft = {
   total: string;
   observaciones: string;
   selectedCarritoIds: string[];
+  archivo: File | null;
 };
 
 export type CobroDraft = {
@@ -247,6 +256,7 @@ type FacturasCobrarState = {
 
   loadFacturas: () => Promise<void>;
   createDocumento: (draft: DocumentoDraft) => Promise<boolean>;
+  adjuntarArchivoFactura: (factura: FacturaCobrar, archivo: File) => Promise<boolean>;
   cobrarFactura: (factura: FacturaCobrar, draft: CobroDraft) => Promise<boolean>;
   cobrarFacturasSeleccionadas: (draft: CobroDraft) => Promise<boolean>;
 
@@ -487,6 +497,54 @@ function buildVirtualControlFromCarrito(carrito: CarritoDisponible): ControlCarr
   };
 }
 
+
+function safeStorageFileName(name: string): string {
+  const clean = String(name || "documento")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 120);
+
+  return clean || "documento";
+}
+
+async function uploadDocumentoArchivo(
+  file: File,
+  currentUserId: string,
+  numeroDocumento: string
+): Promise<{
+  archivo_url: string;
+  archivo_path: string;
+  archivo_nombre: string;
+  archivo_tipo: string;
+  archivo_size: number;
+}> {
+  const fileName = safeStorageFileName(file.name);
+  const numero = safeStorageFileName(numeroDocumento || "sin-numero");
+  const path = `${currentUserId}/${Date.now()}-${numero}-${fileName}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("facturas-cobrar")
+    .upload(path, file, {
+      cacheControl: "3600",
+      upsert: false,
+      contentType: file.type || "application/octet-stream"
+    });
+
+  if (uploadError) throw uploadError;
+
+  const { data } = supabase.storage.from("facturas-cobrar").getPublicUrl(path);
+
+  return {
+    archivo_url: data.publicUrl,
+    archivo_path: path,
+    archivo_nombre: file.name,
+    archivo_tipo: file.type || "application/octet-stream",
+    archivo_size: file.size
+  };
+}
+
 export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => ({
   loading: false,
   saving: false,
@@ -607,19 +665,15 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       retencionesQuery = retencionesQuery.eq("sucursal_id", filters.sucursalId);
     }
 
-   let carritosDisponiblesQuery = supabase
+let carritosDisponiblesQuery = supabase
   .from("carritos")
-  .select("*, clientes:cliente_id(*)")
-  .neq("estado", "ANULADO")
+  .select("*, clientes:cliente_id(*), facturas_cobrar_carritos(*)")
   .order("fecha_venta", { ascending: false });
 
     if (filters.moneda !== "todos") {
       carritosDisponiblesQuery = carritosDisponiblesQuery.eq("moneda", filters.moneda);
     }
 
-    if (filters.sucursalId !== "todos") {
-      carritosDisponiblesQuery = carritosDisponiblesQuery.eq("sucursal_id", filters.sucursalId);
-    }
 
     const [facturasRes, retencionesRes, carritosDisponiblesRes, sucursalesRes, cajasRes] =
       await Promise.all([
@@ -647,12 +701,27 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       return;
     }
 
-    const carritosDisponibles = ((carritosDisponiblesRes.data || []) as CarritoDisponible[]).map(
-      (carrito) => ({
-        ...carrito,
-        carritos_control: [buildVirtualControlFromCarrito(carrito)]
-      })
-    );
+  const carritosDisponibles = ((carritosDisponiblesRes.data || []) as CarritoDisponible[])
+  .filter((carrito) => {
+    const estado = String((carrito as { estado?: string }).estado || "").toUpperCase();
+
+    const yaTieneFacturaVinculada =
+      Array.isArray(carrito.facturas_cobrar_carritos) &&
+      carrito.facturas_cobrar_carritos.length > 0;
+
+    const facturado = Boolean(carrito.facturado) || yaTieneFacturaVinculada;
+    const cobrado = Boolean(carrito.cobrado);
+    const cancelado = Boolean(carrito.cancelado) || estado === "ANULADO";
+    const controlado = Boolean(carrito.controlado) || estado === "CONTROLADO";
+
+    const importeAFacturar = getNumber(carrito.importe_facturar);
+
+    return controlado && !facturado && !cobrado && !cancelado && importeAFacturar !== 0;
+  })
+  .map((carrito) => ({
+    ...carrito,
+    carritos_control: [buildVirtualControlFromCarrito(carrito)]
+  }));
 
     set({
       loading: false,
@@ -705,17 +774,21 @@ export const useFacturasCobrarStore = create<FacturasCobrarState>((set, get) => 
       }
     }
 
-const suggestedNetoCarritos = selectedCarritos.reduce((total, carrito) => {
+const suggestedTotalCarritos = selectedCarritos.reduce((total, carrito) => {
   const control = carrito.carritos_control?.[0];
   return total + getNumber(control?.importe_a_facturar);
 }, 0);
 
+const draftAlicuota = parseMoney(draft.alicuota_iva || "21");
+const divisorIva = 1 + draftAlicuota / 100;
+const suggestedNetoCarritos =
+  isFacturaCarritos && divisorIva > 0 ? suggestedTotalCarritos / divisorIva : suggestedTotalCarritos;
+
+const draftNeto = draft.neto_gravado.trim();
+
 const draftForTotals: DocumentoDraft = {
   ...draft,
-  neto_gravado:
-    draft.neto_gravado.trim() || isFacturaCarritos
-      ? draft.neto_gravado.trim() || String(suggestedNetoCarritos)
-      : draft.neto_gravado
+  neto_gravado: draftNeto || (isFacturaCarritos ? String(suggestedNetoCarritos) : "")
 };
 
 const totals = calculateDocumentTotalsFromDraft(draftForTotals);
@@ -725,12 +798,28 @@ if (totals.total === 0) {
   return false;
 }
 
+    let archivoPayload: {
+      archivo_url: string;
+      archivo_path: string;
+      archivo_nombre: string;
+      archivo_tipo: string;
+      archivo_size: number;
+    } | null = null;
+
+    if (draft.archivo) {
+      archivoPayload = await uploadDocumentoArchivo(
+        draft.archivo,
+        currentUserId,
+        draft.numero_documento.trim()
+      );
+    }
+
     const payload = {
       tipo_documento: draft.tipo_documento,
       numero_documento: draft.numero_documento.trim(),
       razon_social: draft.razon_social.trim() || "ALMUNDO.COM",
       moneda: draft.moneda,
-      sucursal_id: draft.sucursal_id,
+      sucursal_id: draft.sucursal_id || null,
       sucursal,
       mes: draft.mes ? Number(draft.mes) : null,
       anio: draft.anio ? Number(draft.anio) : null,
@@ -748,7 +837,12 @@ total: Number(totals.total.toFixed(2)),
       referencia_cobro: null,
       no_impacta_caja: false,
       observaciones: draft.observaciones || null,
-      created_by: currentUserId
+            archivo_url: archivoPayload?.archivo_url || null,
+      archivo_path: archivoPayload?.archivo_path || null,
+      archivo_nombre: archivoPayload?.archivo_nombre || null,
+      archivo_tipo: archivoPayload?.archivo_tipo || null,
+      archivo_size: archivoPayload?.archivo_size || null,
+                created_by: currentUserId
     };
 
     const facturaRes = await supabase
@@ -790,16 +884,15 @@ total: Number(totals.total.toFixed(2)),
       const carritoIds = relaciones.map((item) => item.carrito_id).filter(Boolean);
 
       if (carritoIds.length > 0) {
-        const carritosRes = await supabase
-          .from("carritos")
-          .update({
-            facturado: true,
-            fecha_factura: getArgentinaStorageDate(),
-            numero_factura: factura.numero_documento,
-            estado: "FACTURADO",
-            updated_at: new Date().toISOString()
-          })
-          .in("id", carritoIds);
+      const carritosRes = await supabase
+  .from("carritos")
+  .update({
+    facturado: true,
+    fecha_factura: getArgentinaStorageDate(),
+    numero_factura: factura.numero_documento,
+    updated_at: new Date().toISOString()
+  })
+  .in("id", carritoIds);
 
         if (carritosRes.error) {
           set({ saving: false, error: normalizeError(carritosRes.error) });
@@ -814,7 +907,61 @@ total: Number(totals.total.toFixed(2)),
     return true;
   },
 
+  adjuntarArchivoFactura: async (factura, archivo) => {
+    set({ saving: true, error: null });
+
+    const currentUserId = await getCurrentUserId();
+
+    if (!currentUserId) {
+      set({ saving: false, error: "No hay usuario autenticado." });
+      return false;
+    }
+
+    try {
+      const archivoPayload = await uploadDocumentoArchivo(
+        archivo,
+        currentUserId,
+        factura.numero_documento || factura.id
+      );
+
+      const { error } = await supabase
+        .from("facturas_cobrar")
+        .update({
+          archivo_url: archivoPayload.archivo_url,
+          archivo_path: archivoPayload.archivo_path,
+          archivo_nombre: archivoPayload.archivo_nombre,
+          archivo_tipo: archivoPayload.archivo_tipo,
+          archivo_size: archivoPayload.archivo_size,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", factura.id);
+
+      if (error) {
+        set({ saving: false, error: normalizeError(error) });
+        return false;
+      }
+
+      await get().loadFacturas();
+
+      set({
+        saving: false,
+        selectedFacturaId: factura.id
+      });
+
+      return true;
+    } catch (error) {
+      set({
+        saving: false,
+        error: normalizeError(error)
+      });
+
+      return false;
+    }
+  },
+
   cobrarFactura: async (factura, draft) => {
+
+
     get().selectOnlyFactura(factura.id);
     return get().cobrarFacturasSeleccionadas(draft);
   },
@@ -994,15 +1141,14 @@ total: Number(totals.total.toFixed(2)),
       .filter(Boolean) as string[];
 
     if (carritoIds.length > 0) {
-      const carritosRes = await supabase
-        .from("carritos")
-        .update({
-          cobrado: true,
-          fecha_cobro: fechaCobro,
-          estado: "COBRADO",
-          updated_at: new Date().toISOString()
-        })
-        .in("id", carritoIds);
+    const carritosRes = await supabase
+  .from("carritos")
+  .update({
+    cobrado: true,
+    fecha_cobro: fechaCobro,
+    updated_at: new Date().toISOString()
+  })
+  .in("id", carritoIds);
 
       if (carritosRes.error) {
         set({ saving: false, error: normalizeError(carritosRes.error) });
@@ -1205,19 +1351,27 @@ getCarritosDisponiblesForDraft: (draft) => {
     const controles = Array.isArray(carrito.carritos_control) ? carrito.carritos_control : [];
     const estado = String((carrito as { estado?: string }).estado || "").toUpperCase();
 
-    const carritoFacturado = Boolean(carrito.facturado);
-    const carritoCancelado = Boolean(carrito.cancelado) || estado === "ANULADO";
-    const carritoControlado = Boolean(carrito.controlado) || estado === "CONTROLADO";
 
-    const tieneControlFacturable = controles.some(
-      (control) =>
-        (control.controlado || carritoControlado) &&
-        !control.facturado &&
-        !control.anulado &&
-        !carritoFacturado &&
-        !carritoCancelado &&
-        getNumber(control.importe_a_facturar) !== 0
-    );
+
+const yaTieneFacturaVinculada =
+  Array.isArray(carrito.facturas_cobrar_carritos) &&
+  carrito.facturas_cobrar_carritos.length > 0;
+
+const carritoFacturado = Boolean(carrito.facturado) || yaTieneFacturaVinculada;
+const carritoCobrado = Boolean(carrito.cobrado);
+const carritoCancelado = Boolean(carrito.cancelado) || estado === "ANULADO";
+const carritoControlado = Boolean(carrito.controlado) || estado === "CONTROLADO";
+
+const tieneControlFacturable = controles.some(
+  (control) =>
+    (control.controlado || carritoControlado) &&
+    !control.facturado &&
+    !control.anulado &&
+    !carritoFacturado &&
+    !carritoCobrado &&
+    !carritoCancelado &&
+    getNumber(control.importe_a_facturar) !== 0
+);
 
     if (!tieneControlFacturable) return false;
     if (draft.moneda !== carrito.moneda) return false;
