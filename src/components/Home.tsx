@@ -894,6 +894,13 @@ const adminResumen = useTableroDeControlStore((state) => state.adminResumen) as 
 
   const [currentTime, setCurrentTime] = useState(getCurrentTimeLabel());
 
+const [updateChecking, setUpdateChecking] = useState(false);
+const [updateDownloading, setUpdateDownloading] = useState(false);
+const [updateInstalling, setUpdateInstalling] = useState(false);
+const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+const [updateReady, setUpdateReady] = useState(false);
+
   const notificacionesStore = useNotificacionesStore((state) => state as any);
   const notificaciones = Array.isArray(notificacionesStore.notificaciones)
     ? (notificacionesStore.notificaciones as NotificacionAny[])
@@ -912,24 +919,21 @@ const adminResumen = useTableroDeControlStore((state) => state.adminResumen) as 
   const [tcObservaciones, setTcObservaciones] = useState("");
   const [tcResumen, setTcResumen] = useState<TipoCambioResumen | null>(null);
 
-  const internalApps = useMemo(() => {
-    const seen = new Set<string>();
+const internalApps = useMemo(() => {
+  const seen = new Set<string>();
 
+  return appRegistry
+    .filter((app) => app.url.startsWith("internal://"))
+    .filter((app) => {
+      const key = normalizeAppKey(app.id);
 
+      if (seen.has(key)) return false;
 
+      seen.add(key);
 
-    return appRegistry
-      .filter((app) => app.url.startsWith("internal://"))
-      .filter((app) => {
-        const key = normalizeAppKey(app.id);
-
-        if (seen.has(key)) return false;
-
-        seen.add(key);
-
-        return !["presupuestos", "contactos", "importador-catalogos"].includes(app.id);
-      });
-  }, []);
+      return !["presupuestos", "contactos", "importador-catalogos"].includes(app.id);
+    });
+}, []);
 
   const chatModules = useMemo(() => {
     return internalApps.filter((app) =>
@@ -1139,6 +1143,158 @@ const rankingSemanalActual = useMemo(() => {
     }, 0);
   }
 
+  async function handleCheckForUpdates() {
+  if (updateChecking || updateDownloading || updateInstalling) return;
+
+  setUpdateChecking(true);
+  setUpdateMessage(null);
+  setUpdateVersion(null);
+  setUpdateReady(false);
+
+  try {
+    const nosturApi = (window as any).nostur;
+
+    if (!nosturApi?.checkForUpdates) {
+      setUpdateMessage(
+        "La búsqueda de actualizaciones solo está disponible en la aplicación instalada."
+      );
+      return;
+    }
+
+    const result = await nosturApi.checkForUpdates();
+
+    if (!result?.ok) {
+      if (result?.reason === "dev_mode") {
+        setUpdateMessage("Las actualizaciones están desactivadas en modo desarrollo.");
+        return;
+      }
+
+      if (result?.reason === "mac_autoupdate_disabled_until_codesign") {
+        setUpdateMessage(
+          "Las actualizaciones automáticas están desactivadas temporalmente en macOS."
+        );
+        return;
+      }
+
+      if (result?.reason === "already_checking") {
+        setUpdateMessage("Ya hay una búsqueda de actualizaciones en curso.");
+        return;
+      }
+
+      setUpdateMessage(
+        result?.error || "No se pudo verificar si existe una actualización."
+      );
+      return;
+    }
+
+    if (result.updateAvailable) {
+      setUpdateVersion(result.nextVersion || null);
+
+      setUpdateMessage(
+        result.nextVersion
+          ? `Nueva versión ${result.nextVersion} disponible.`
+          : "Hay una nueva versión disponible."
+      );
+
+      return;
+    }
+
+    setUpdateMessage(
+      result.currentVersion
+        ? `NOSTUR ${result.currentVersion} ya está actualizado.`
+        : "Ya tenés la última versión disponible."
+    );
+  } catch (error) {
+    setUpdateMessage(
+      error instanceof Error
+        ? error.message
+        : "No se pudo buscar una actualización."
+    );
+  } finally {
+    setUpdateChecking(false);
+  }
+}
+
+async function handleDownloadUpdate() {
+  if (updateDownloading || updateInstalling) return;
+
+  setUpdateDownloading(true);
+
+  setUpdateMessage(
+    updateVersion
+      ? `Descargando NOSTUR ${updateVersion}...`
+      : "Descargando actualización..."
+  );
+
+  try {
+    const nosturApi = (window as any).nostur;
+
+    if (!nosturApi?.downloadUpdate) {
+      setUpdateMessage("La descarga de actualizaciones no está disponible.");
+      return;
+    }
+
+    const result = await nosturApi.downloadUpdate();
+
+    if (!result?.ok) {
+      if (result?.reason === "update_not_available") {
+        setUpdateMessage(
+          "No hay una actualización detectada. Volvé a buscar actualizaciones."
+        );
+        return;
+      }
+
+      setUpdateMessage(
+        result?.error || "No se pudo descargar la actualización."
+      );
+    }
+  } catch (error) {
+    setUpdateMessage(
+      error instanceof Error
+        ? error.message
+        : "No se pudo descargar la actualización."
+    );
+  } finally {
+    setUpdateDownloading(false);
+  }
+}
+
+async function handleInstallUpdate() {
+  if (updateInstalling) return;
+
+  setUpdateInstalling(true);
+  setUpdateMessage("Cerrando NOSTUR para instalar la actualización...");
+
+  try {
+    const nosturApi = (window as any).nostur;
+
+    if (!nosturApi?.installUpdate) {
+      setUpdateMessage("La instalación automática no está disponible.");
+      setUpdateInstalling(false);
+      return;
+    }
+
+    const result = await nosturApi.installUpdate();
+
+    if (!result?.ok) {
+      setUpdateMessage(
+        result?.error ||
+          "La actualización todavía no está lista para instalar."
+      );
+
+      setUpdateInstalling(false);
+    }
+  } catch (error) {
+    setUpdateMessage(
+      error instanceof Error
+        ? error.message
+        : "No se pudo instalar la actualización."
+    );
+
+    setUpdateInstalling(false);
+  }
+}
+
   useEffect(() => {
     void loadTipoCambio(tcFecha);
   }, [tcFecha]);
@@ -1158,6 +1314,96 @@ const rankingSemanalActual = useMemo(() => {
   useEffect(() => {
     void loadNotificacionesHome();
   }, []);
+
+  useEffect(() => {
+  const nosturApi = (window as any).nostur;
+
+  if (!nosturApi?.onUpdateEvent) return;
+
+  const unsubscribe = nosturApi.onUpdateEvent((event: any) => {
+    const type = String(event?.type || "");
+    const payload = event?.payload || {};
+
+    if (type === "checking-for-update") {
+      setUpdateChecking(true);
+      setUpdateMessage("Buscando actualizaciones...");
+      return;
+    }
+
+    if (type === "update-available") {
+      setUpdateChecking(false);
+      setUpdateVersion(payload.nextVersion || null);
+      setUpdateReady(false);
+
+      setUpdateMessage(
+        payload.nextVersion
+          ? `Nueva versión ${payload.nextVersion} disponible.`
+          : "Hay una nueva versión disponible."
+      );
+
+      return;
+    }
+
+    if (type === "update-not-available") {
+      setUpdateChecking(false);
+      setUpdateVersion(null);
+      setUpdateReady(false);
+
+      setUpdateMessage(
+        payload.currentVersion
+          ? `NOSTUR ${payload.currentVersion} ya está actualizado.`
+          : "Ya tenés la última versión disponible."
+      );
+
+      return;
+    }
+
+    if (type === "download-progress") {
+      const percent = Math.round(Number(payload.percent || 0));
+
+      setUpdateDownloading(true);
+      setUpdateMessage(`Descargando actualización... ${percent}%`);
+      return;
+    }
+
+    if (type === "update-downloaded") {
+      setUpdateChecking(false);
+      setUpdateDownloading(false);
+      setUpdateReady(true);
+      setUpdateVersion(payload.nextVersion || null);
+
+      setUpdateMessage(
+        payload.nextVersion
+          ? `NOSTUR ${payload.nextVersion} está lista para instalar.`
+          : "La actualización está lista para instalar."
+      );
+
+      return;
+    }
+
+    if (type === "installing-update") {
+      setUpdateInstalling(true);
+      setUpdateMessage("Reiniciando NOSTUR para instalar...");
+      return;
+    }
+
+    if (type === "error") {
+      setUpdateChecking(false);
+      setUpdateDownloading(false);
+      setUpdateInstalling(false);
+
+      setUpdateMessage(
+        payload.message || "Ocurrió un error con la actualización."
+      );
+    }
+  });
+
+  return () => {
+    if (typeof unsubscribe === "function") {
+      unsubscribe();
+    }
+  };
+}, []);
 
   const friendlyDate = getFriendlyDate();
 
@@ -1283,12 +1529,85 @@ const rankingSemanalActual = useMemo(() => {
               <span>Córdoba · {currentTime}</span>
             </div>
 
-            {renderTipoCambioWidget()}
+          {renderTipoCambioWidget()}
 
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setNotificacionesOpen((current) => !current)}
+<div className="relative">
+  <button
+    type="button"
+    onClick={() => void handleCheckForUpdates()}
+    disabled={updateChecking || updateDownloading || updateInstalling}
+    className="inline-flex h-9 items-center gap-2 rounded-2xl bg-white/55 px-3 text-[11px] font-medium text-[#334155] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-50"
+    title="Buscar actualización de NOSTUR"
+  >
+    <RefreshCcw
+      size={14}
+      strokeWidth={1.8}
+      className={
+        updateChecking || updateDownloading ? "animate-spin" : ""
+      }
+    />
+
+    {updateChecking
+      ? "Buscando..."
+      : updateDownloading
+        ? "Descargando..."
+        : updateInstalling
+          ? "Instalando..."
+          : "Buscar actualización"}
+  </button>
+
+  {updateMessage ? (
+    <>
+      <button
+        type="button"
+        className="fixed inset-0 z-[130] cursor-default bg-transparent"
+        onClick={() => setUpdateMessage(null)}
+        tabIndex={-1}
+      />
+
+      <div className="absolute right-0 top-11 z-[150] w-[320px] rounded-2xl border border-black/10 bg-white p-3 text-[11.5px] font-medium leading-relaxed text-[#475569] shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <span>{updateMessage}</span>
+
+          <button
+            type="button"
+            onClick={() => setUpdateMessage(null)}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[#64748b] hover:bg-black/5 hover:text-[#172033]"
+            title="Cerrar"
+          >
+            <X size={13} />
+          </button>
+        </div>
+
+        {updateVersion && !updateReady && !updateDownloading ? (
+          <button
+            type="button"
+            onClick={() => void handleDownloadUpdate()}
+            className="mt-3 h-8 w-full rounded-xl bg-gradient-to-r from-[#ff7a1a] to-[#ff2f76] px-3 text-[10.5px] font-semibold text-white transition hover:brightness-105"
+          >
+            Descargar versión {updateVersion}
+          </button>
+        ) : null}
+
+        {updateReady ? (
+          <button
+            type="button"
+            onClick={() => void handleInstallUpdate()}
+            disabled={updateInstalling}
+            className="mt-3 h-8 w-full rounded-xl bg-gradient-to-r from-[#ff7a1a] to-[#ff2f76] px-3 text-[10.5px] font-semibold text-white transition hover:brightness-105 disabled:opacity-50"
+          >
+            {updateInstalling ? "Instalando..." : "Reiniciar e instalar"}
+          </button>
+        ) : null}
+      </div>
+    </>
+  ) : null}
+</div>
+
+<div className="relative">
+  <button
+    type="button"
+    onClick={() => setNotificacionesOpen((current) => !current)}
                 className="relative flex h-9 w-9 items-center justify-center rounded-2xl bg-white/55 text-[#334155] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85"
                 title="Notificaciones"
               >
@@ -1305,6 +1624,9 @@ const rankingSemanalActual = useMemo(() => {
 
               {notificacionesOpen ? (
                 <>
+
+
+                
                   <button
                     type="button"
                     className="fixed inset-0 z-[80] cursor-default bg-transparent"

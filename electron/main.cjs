@@ -1552,6 +1552,45 @@ function createWindow() {
     }
   });
 
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+  const isRecoveryShortcut =
+    input.type === "keyDown" &&
+    input.control &&
+    input.shift &&
+    input.key === "F12";
+
+  if (!isRecoveryShortcut) return;
+
+  event.preventDefault();
+
+  mainWindow.webContents
+    .executeJavaScript(`
+      try {
+        const keysToRemove = Object.keys(localStorage).filter((key) => {
+          const normalized = key.toLowerCase();
+
+          return (
+            normalized.includes("browser") ||
+            normalized.includes("tabs") ||
+            normalized.includes("active-tab") ||
+            normalized.includes("nostur-browser")
+          );
+        });
+
+        keysToRemove.forEach((key) => localStorage.removeItem(key));
+        sessionStorage.clear();
+        window.location.reload();
+      } catch (error) {
+        console.error("No se pudo recuperar el estado visual:", error);
+      }
+
+      true;
+    `)
+    .catch((err) => {
+      errorLog("Falló la recuperación visual:", err);
+    });
+});
+
   mainWindow.webContents.setUserAgent(CHROME_USER_AGENT);
 
   if (process.platform !== "darwin") {
@@ -1628,11 +1667,7 @@ function createWindow() {
     mainWindow.focus();
     mainWindow.webContents.setZoomFactor(1);
 
-    if (!isDev && !isMacAutoUpdateDisabled()) {
-      setTimeout(() => {
-        void checkForUpdatesSafe();
-      }, 3500);
-    }
+   
   });
 
   mainWindow.on("focus", () => {
@@ -1752,7 +1787,7 @@ function setupAutoUpdater() {
       return;
     }
 
-    autoUpdater.autoDownload = true;
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.allowDowngrade = false;
     autoUpdater.allowPrerelease = false;
@@ -1904,14 +1939,92 @@ async function checkForUpdatesSafe() {
       currentVersion: app.getVersion()
     });
 
-    const result = await autoUpdater.checkForUpdates();
+
+    async function downloadUpdateSafe() {
+  if (isDev) {
+    return {
+      ok: false,
+      reason: "dev_mode"
+    };
+  }
+
+  if (isMacAutoUpdateDisabled()) {
+    return {
+      ok: false,
+      reason: "mac_autoupdate_disabled_until_codesign"
+    };
+  }
+
+  if (!autoUpdater) {
+    setupAutoUpdater();
+  }
+
+  if (!autoUpdater) {
+    return {
+      ok: false,
+      reason: "autoUpdater_not_available"
+    };
+  }
+
+  if (!updateInfoCache?.version) {
+    return {
+      ok: false,
+      reason: "update_not_available"
+    };
+  }
+
+  if (updateDownloaded) {
+    return {
+      ok: true,
+      alreadyDownloaded: true,
+      nextVersion: updateInfoCache?.version || null
+    };
+  }
+
+  try {
+    log("Descarga manual de actualización iniciada:", {
+      currentVersion: app.getVersion(),
+      nextVersion: updateInfoCache?.version || null
+    });
+
+    await autoUpdater.downloadUpdate();
 
     return {
       ok: true,
-      result: result || null,
+      nextVersion: updateInfoCache?.version || null
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    errorLog("No se pudo descargar actualización:", message);
+
+    sendUpdateEvent("error", {
+      message,
       currentVersion: app.getVersion(),
       feedUrl: getUpdateFeedUrl()
+    });
+
+    return {
+      ok: false,
+      error: message
     };
+  }
+}
+
+const result = await autoUpdater.checkForUpdates();
+
+const nextVersion = result?.updateInfo?.version || null;
+const currentVersion = app.getVersion();
+
+return {
+  ok: true,
+  updateAvailable: Boolean(nextVersion && nextVersion !== currentVersion),
+  currentVersion,
+  nextVersion,
+  updateInfo: result?.updateInfo || null,
+  feedUrl: getUpdateFeedUrl()
+};
+  
   } catch (err) {
     updateCheckInProgress = false;
 
@@ -2053,11 +2166,6 @@ app.whenReady().then(() => {
 
   handleInitialDeepLinkFromArgs();
 
-  if (!isMacAutoUpdateDisabled()) {
-    setTimeout(() => {
-      void checkForUpdatesSafe();
-    }, 8000);
-  }
 
   app.on("activate", () => {
     showMainWindow();
@@ -2096,6 +2204,10 @@ ipcMain.handle("nostur:check-for-updates", async () => {
   return checkForUpdatesSafe();
 });
 
+ipcMain.handle("nostur:download-update", async () => {
+  return downloadUpdateSafe();
+});
+
 ipcMain.handle("nostur:install-update", async () => {
   return installDownloadedUpdate();
 });
@@ -2103,7 +2215,6 @@ ipcMain.handle("nostur:install-update", async () => {
 ipcMain.handle("nostur:get-update-status", async () => {
   return getUpdateStatus();
 });
-
 ipcMain.handle("nostur:clear-cache", async (_event, partitionName) => {
   log("IPC nostur:clear-cache recibido:", partitionName);
 

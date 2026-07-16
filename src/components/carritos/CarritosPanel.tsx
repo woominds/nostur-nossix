@@ -285,6 +285,20 @@ function normalizeText(value: unknown): string {
     .trim();
 }
 
+function getEstadoVisualCarrito(carrito: Carrito): string {
+  const estadoBase = String(carrito.estado || "CARGADO").toUpperCase();
+
+  if (estadoBase === "CANCELADO" || estadoBase === "ANULADO") {
+    return "CANCELADO";
+  }
+
+  if (carrito.cobrado) return "COBRADO";
+  if (carrito.facturado) return "FACTURADO";
+  if (carrito.controlado) return "CONTROLADO";
+
+  return estadoBase;
+}
+
 function getInitials(name: string): string {
   const initials = name
     .split(" ")
@@ -2494,7 +2508,9 @@ function CarritoDetailModal({
               {formatMoneyAR(carrito.importe_final ?? carrito.importe, carrito.moneda)}
             </div>
 
-            <div className="text-[12px] font-normal text-[#64748b]">{carrito.estado}</div>
+           <div className="text-[12px] font-normal text-[#64748b]">
+  {getEstadoVisualCarrito(carrito)}
+</div>
 
             {carrito.riesgo ? (
               <div className="mt-2 inline-flex rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
@@ -3577,6 +3593,11 @@ const [toast, setToast] = useState<ToastState>(null);
   const selectedVendedorFilterLabel =
     vendedorOptions.find((option) => option.value === filters.vendedorId)?.label || "Todos";
 
+
+    const selectedEstadoVisual = selectedCarrito
+  ? getEstadoVisualCarrito(selectedCarrito)
+  : "";
+
   return (
     <div className="carritos-panel-root flex h-full min-h-0 flex-col overflow-hidden bg-[#edf3f7] text-[#172033]">
       <style>{CARRITOS_RESPONSIVE_CSS}</style>
@@ -3875,6 +3896,7 @@ const [toast, setToast] = useState<ToastState>(null);
                   const cliente = carrito.clientes;
                   const tieneSaldo = parseMoney(carrito.saldo_cta_cte) > 0.009;
                   const estaInactivo = carrito.activo === false;
+                  const estadoVisual = getEstadoVisualCarrito(carrito);
 
  return (
   <article
@@ -3984,7 +4006,7 @@ const [toast, setToast] = useState<ToastState>(null);
 
                       <div className="flex flex-wrap items-center gap-1">
                         <span className="rounded-md border border-black/10 bg-white px-1.5 py-0.5 text-[10px] font-medium text-[#334155]">
-                          {carrito.estado}
+                         {estadoVisual}
                         </span>
 
                         {tieneSaldo ? (
@@ -4054,7 +4076,7 @@ className="grid grid-cols-5 gap-1 min-[980px]:flex min-[980px]:w-[174px] min-[98
         : "bg-[#eef6f7] text-[#4f7c90]"
     ].join(" ")}
     title={
-      ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(carrito.estado)
+["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(estadoVisual)
         ? "Ya fue enviado a control o ya fue controlado"
         : "Enviar a control"
     }
@@ -4242,7 +4264,7 @@ className="grid grid-cols-5 gap-1 min-[980px]:flex min-[980px]:w-[174px] min-[98
     onClick={() => handleSendToControl(selectedCarrito)}
     disabled={
       saving ||
-      ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(selectedCarrito.estado)
+     ["EN_CONTROL", "CONTROLADO", "FACTURADO", "COBRADO"].includes(selectedEstadoVisual)
     }
     className="h-8 rounded-[10px] border border-[#4f7c90]/25 bg-[#eef6f7] text-[12px] font-medium text-[#4f7c90] hover:bg-[#dfeff2] disabled:opacity-50"
   >

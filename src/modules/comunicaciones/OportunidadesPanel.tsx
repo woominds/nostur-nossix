@@ -1199,77 +1199,122 @@ function canActOnOpportunity(item: OportunidadVM) {
   return opportunityBelongsToSeller(item, currentUserId);
 }
 
-  async function moveOpportunityToEstado(item: OportunidadVM, estado: PipelineEstado) {
-    if (item.estado_id === estado.id || actionLoading) return;
+async function moveOpportunityToEstado(
+  item: OportunidadVM,
+  estado: PipelineEstado
+) {
+  if (item.estado_id === estado.id || actionLoading) return;
 
-    if (!canActOnOpportunity(item)) {
-      setError("No tenés permiso para modificar esta oportunidad.");
-      return;
-    }
+  if (!canActOnOpportunity(item)) {
+    setError("No tenés permiso para modificar esta oportunidad.");
+    return;
+  }
 
-    setActionLoading(true);
-    setError(null);
-    setStatus(null);
+  setActionLoading(true);
+  setError(null);
+  setStatus(null);
 
-    const previous = oportunidades;
+  const previous = oportunidades;
+  const now = new Date().toISOString();
 
-    const nextOptimistic = oportunidades.map((opp) =>
-      opp.id === item.id
-        ? {
-            ...opp,
-            estado_id: estado.id,
-            datos: enrichDatos(opp),
-            updated_at: new Date().toISOString()
-          }
-        : opp
+  const nextOptimistic = oportunidades.map((opp) =>
+    opp.id === item.id
+      ? {
+          ...opp,
+          estado_id: estado.id,
+          datos: enrichDatos(opp),
+          updated_at: now
+        }
+      : opp
+  );
+
+  setOportunidades(nextOptimistic);
+
+  const updatePayload: Record<string, unknown> = {
+    estado_id: estado.id,
+    datos: enrichDatos(item),
+    updated_at: now
+  };
+
+  /*
+   * Si el vendedor tiene asignada la conversación pero la oportunidad
+   * todavía no tiene assigned_to, sincronizamos ambos registros.
+   */
+  if (
+    !item.assigned_to &&
+    item.conversacion?.assigned_to &&
+    item.conversacion.assigned_to === currentUserId
+  ) {
+    updatePayload.assigned_to = currentUserId;
+  }
+
+  const { data: updatedOpportunity, error: updateOppError } = await supabase
+    .from("lead_oportunidades")
+    .update(updatePayload)
+    .eq("id", item.id)
+    .select("id,estado_id,assigned_to,updated_at")
+    .maybeSingle();
+
+  if (updateOppError) {
+    setOportunidades(previous);
+    setError(updateOppError.message || "No se pudo mover la oportunidad.");
+    setActionLoading(false);
+    return;
+  }
+
+  /*
+   * Supabase puede devolver éxito con cero filas modificadas.
+   * Por eso es obligatorio comprobar que exista data.
+   */
+  if (!updatedOpportunity) {
+    setOportunidades(previous);
+    setError(
+      "La oportunidad no fue actualizada. Verificá que siga asignada a tu usuario."
     );
+    setActionLoading(false);
+    await loadData({ silent: true });
+    return;
+  }
 
-    setOportunidades(nextOptimistic);
+  if (updatedOpportunity.estado_id !== estado.id) {
+    setOportunidades(previous);
+    setError("El servidor no confirmó el nuevo estado de la oportunidad.");
+    setActionLoading(false);
+    await loadData({ silent: true });
+    return;
+  }
 
-    let updateQuery = supabase
-      .from("lead_oportunidades")
+  if (item.conversacion_id) {
+    const estadoGestion = estado.es_sin_atender
+      ? "sin_atender"
+      : estado.es_final
+        ? "resuelta"
+        : "en_gestion";
+
+    const { error: updateConvError } = await supabase
+      .from("conversaciones")
       .update({
-        estado_id: estado.id,
-        datos: enrichDatos(item),
-        updated_at: new Date().toISOString()
+        estado_gestion: estadoGestion,
+        estado_comercial: estado.nombre,
+        updated_at: now
       })
-      .eq("id", item.id);
+      .eq("id", item.conversacion_id);
 
-    if (!canSeeAll && currentUserId) {
-      updateQuery = updateQuery.eq("assigned_to", currentUserId);
-    }
-
-    const { error: updateOppError } = await updateQuery;
-
-    if (updateOppError) {
-      setOportunidades(previous);
-      setError(updateOppError.message || "No se pudo mover la oportunidad.");
-      setActionLoading(false);
-      return;
-    }
-
-    if (item.conversacion_id) {
-      const { error: updateConvError } = await supabase
-        .from("conversaciones")
-        .update({
-          estado_gestion: estado.es_sin_atender ? "sin_atender" : "en_gestion",
-          estado_comercial: estado.nombre,
-          updated_at: new Date().toISOString()
-        })
-        .eq("id", item.conversacion_id);
-
-      if (updateConvError) {
-        setError(updateConvError.message || "Se movió la oportunidad, pero no se pudo actualizar la conversación.");
-      } else {
-        setStatus(`Oportunidad movida a ${estado.nombre}.`);
-      }
+    if (updateConvError) {
+      setError(
+        updateConvError.message ||
+          "La oportunidad cambió de estado, pero no se pudo actualizar la conversación."
+      );
     } else {
       setStatus(`Oportunidad movida a ${estado.nombre}.`);
     }
-
-    await loadData({ silent: true });
-    setActionLoading(false);
+  } else {
+    setStatus(`Oportunidad movida a ${estado.nombre}.`);
   }
+
+  await loadData({ silent: true });
+  setActionLoading(false);
+}
 
   function handleDragStart(item: OportunidadVM) {
     if (!canActOnOpportunity(item)) {

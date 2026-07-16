@@ -89,6 +89,35 @@ type OpportunityLite = {
   notas?: string | null;
 };
 
+type OpportunityConversationLite = {
+  id: string;
+  contacto_id: string | null;
+  wa_phone: string | null;
+  titulo: string | null;
+  subject: string | null;
+  assigned_to: string | null;
+  deleted_at: string | null;
+};
+
+type OpportunityContactLite = {
+  id: string;
+  wa_phone: string | null;
+  display_name: string | null;
+  profile_name: string | null;
+};
+
+type OpportunityProfileLite = {
+  id: string;
+  rol: string | null;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
+};
+
+type OpportunityOption = OpportunityLite & {
+  conversacion?: OpportunityConversationLite | null;
+  contacto?: OpportunityContactLite | null;
+};
+
 type PipelineEstadoLite = {
   id: string;
   nombre: string;
@@ -363,6 +392,25 @@ function getOpportunityData(opportunity: OpportunityLite | null | undefined) {
   };
 }
 
+function canProfileSeeAllOpportunities(
+  profile: OpportunityProfileLite | null | undefined
+) {
+  return (
+    profile?.rol === "gerencia" ||
+    profile?.rol === "admin_general" ||
+    profile?.is_support_user === true ||
+    profile?.is_super_admin === true
+  );
+}
+
+function getEffectiveOpportunitySellerId(opportunity: OpportunityOption) {
+  return (
+    opportunity.assigned_to ||
+    opportunity.conversacion?.assigned_to ||
+    null
+  );
+}
+
 function getOpportunityValue(opportunity: OpportunityLite, keys: string[], fallback = "") {
   const data = getOpportunityData(opportunity);
 
@@ -378,7 +426,7 @@ function getOpportunityValue(opportunity: OpportunityLite, keys: string[], fallb
   return fallback;
 }
 
-function getOpportunityName(opportunity: OpportunityLite) {
+function getOpportunityName(opportunity: OpportunityOption) {
   return (
     cleanText(opportunity.nombre_contacto) ||
     getOpportunityValue(opportunity, [
@@ -390,15 +438,29 @@ function getOpportunityName(opportunity: OpportunityLite) {
       "display_name",
       "profile_name"
     ]) ||
+    cleanText(opportunity.contacto?.display_name) ||
+    cleanText(opportunity.contacto?.profile_name) ||
+    cleanText(opportunity.conversacion?.titulo) ||
+    cleanText(opportunity.conversacion?.subject) ||
     cleanText(opportunity.telefono) ||
+    cleanText(opportunity.contacto?.wa_phone) ||
+    cleanText(opportunity.conversacion?.wa_phone) ||
     "Sin nombre"
   );
 }
 
-function getOpportunityPhone(opportunity: OpportunityLite) {
+function getOpportunityPhone(opportunity: OpportunityOption) {
   return (
     cleanText(opportunity.telefono) ||
-    getOpportunityValue(opportunity, ["telefono", "wa_phone", "phone", "celular", "whatsapp"]) ||
+    getOpportunityValue(opportunity, [
+      "telefono",
+      "wa_phone",
+      "phone",
+      "celular",
+      "whatsapp"
+    ]) ||
+    cleanText(opportunity.contacto?.wa_phone) ||
+    cleanText(opportunity.conversacion?.wa_phone) ||
     ""
   );
 }
@@ -428,7 +490,7 @@ function getOpportunityFechas(opportunity: OpportunityLite) {
 }
 
 function buildContextFromOpportunity(
-  opportunity: OpportunityLite,
+  opportunity: OpportunityOption,
   estados: PipelineEstadoLite[]
 ): NiaContext {
   const name = getOpportunityName(opportunity);
@@ -439,6 +501,14 @@ function buildContextFromOpportunity(
     source: "nia_widget_selector",
     module: "oportunidades",
     action: "context_update_from_selector",
+
+    vendedor_id: getEffectiveOpportunitySellerId(opportunity),
+
+last_message_preview:
+  cleanText(opportunity.conversacion?.subject) ||
+  cleanText(opportunity.notas) ||
+  getOpportunityValue(opportunity, ["ultimo_mensaje"]) ||
+  null,
 
     conversation_id: opportunity.conversacion_id || null,
     conversacion_id: opportunity.conversacion_id || null,
@@ -586,7 +656,7 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
   const [feedbackSaving, setFeedbackSaving] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
-  const [opportunityOptions, setOpportunityOptions] = useState<OpportunityLite[]>([]);
+  const [opportunityOptions, setOpportunityOptions] = useState<OpportunityOption[]>([]);  
   const [pipelineEstados, setPipelineEstados] = useState<PipelineEstadoLite[]>([]);
   const [opportunitiesLoading, setOpportunitiesLoading] = useState(false);
   const [opportunitySelectOpen, setOpportunitySelectOpen] = useState(false);
@@ -639,10 +709,35 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
     });
   }
 
-  async function loadOpportunityOptions() {
-    setOpportunitiesLoading(true);
+async function loadOpportunityOptions() {
+  setOpportunitiesLoading(true);
 
-    const [oppRes, estadosRes] = await Promise.all([
+  try {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    const userId = authData.user?.id || null;
+
+    if (authError || !userId) {
+      console.error(
+        "[NIA] No se pudo identificar el usuario:",
+        authError
+      );
+      setOpportunityOptions([]);
+      return;
+    }
+
+    const [
+      profileRes,
+      oppRes,
+      estadosRes,
+      conversacionesRes,
+      contactosRes
+    ] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id,rol,is_support_user,is_super_admin")
+        .eq("id", userId)
+        .maybeSingle(),
+
       supabase
         .from("lead_oportunidades")
         .select(
@@ -664,25 +759,150 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
             "notas"
           ].join(",")
         )
-        .order("updated_at", { ascending: false, nullsFirst: false })
-        .limit(300),
+        .order("updated_at", {
+          ascending: false,
+          nullsFirst: false
+        })
+        .limit(1000),
 
       supabase
         .from("pipeline_estados")
         .select("id,nombre,color,orden")
-        .order("orden", { ascending: true })
+        .order("orden", { ascending: true }),
+
+      supabase
+        .from("conversaciones")
+        .select(
+          [
+            "id",
+            "contacto_id",
+            "wa_phone",
+            "titulo",
+            "subject",
+            "assigned_to",
+            "deleted_at"
+          ].join(",")
+        )
+        .limit(1500),
+
+      supabase
+        .from("contactos_wa")
+        .select("id,wa_phone,display_name,profile_name")
+        .limit(1500)
     ]);
 
-    if (!oppRes.error) {
-      setOpportunityOptions((oppRes.data || []) as unknown as OpportunityLite[]);
+    const firstError =
+      profileRes.error ||
+      oppRes.error ||
+      estadosRes.error ||
+      conversacionesRes.error ||
+      contactosRes.error;
+
+    if (firstError) {
+      console.error(
+        "[NIA] Error cargando oportunidades:",
+        firstError
+      );
+      setOpportunityOptions([]);
+      return;
     }
 
-    if (!estadosRes.error) {
-      setPipelineEstados((estadosRes.data || []) as unknown as PipelineEstadoLite[]);
-    }
+    const currentProfile =
+      (profileRes.data || null) as OpportunityProfileLite | null;
 
+    const canSeeAll =
+      canProfileSeeAllOpportunities(currentProfile);
+
+    const conversacionesMap = new Map<
+      string,
+      OpportunityConversationLite
+    >();
+
+    (
+     (conversacionesRes.data || []) as unknown as OpportunityConversationLite[]
+    ).forEach((conversation) => {
+      conversacionesMap.set(conversation.id, conversation);
+    });
+
+    const contactosMap = new Map<string, OpportunityContactLite>();
+
+    (
+      (contactosRes.data || []) as OpportunityContactLite[]
+    ).forEach((contact) => {
+      contactosMap.set(contact.id, contact);
+    });
+
+    const enrichedOptions = (
+      (oppRes.data || []) as unknown as OpportunityLite[]
+    )
+      .map<OpportunityOption | null>((opportunity) => {
+        const conversation = opportunity.conversacion_id
+          ? conversacionesMap.get(opportunity.conversacion_id) || null
+          : null;
+
+        /*
+         * Si la oportunidad tenía una conversación vinculada,
+         * pero esa conversación ya no existe o está eliminada,
+         * no debe aparecer en el selector de NIA.
+         */
+        if (
+          opportunity.conversacion_id &&
+          (!conversation || conversation.deleted_at)
+        ) {
+          return null;
+        }
+
+        const contact = conversation?.contacto_id
+          ? contactosMap.get(conversation.contacto_id) || null
+          : null;
+
+        return {
+          ...opportunity,
+          conversacion: conversation,
+          contacto: contact
+        };
+      })
+      .filter(
+        (opportunity): opportunity is OpportunityOption =>
+          opportunity !== null
+      )
+      .filter((opportunity) => {
+        /*
+         * Gerencia y administradores ven todas.
+         * Los vendedores ven las asignadas directamente
+         * o las asignadas mediante la conversación.
+         */
+        if (canSeeAll) return true;
+
+        return (
+          getEffectiveOpportunitySellerId(opportunity) === userId
+        );
+      })
+      .filter((opportunity) => {
+        /*
+         * Evita mostrar registros totalmente vacíos.
+         * Las oportunidades manuales siguen apareciendo
+         * cuando tengan nombre, teléfono o datos útiles.
+         */
+        const name = getOpportunityName(opportunity);
+        const phone = getOpportunityPhone(opportunity);
+        const destination = getOpportunityDestino(opportunity);
+
+        return Boolean(
+          (name && name !== "Sin nombre") ||
+          phone ||
+          destination
+        );
+      });
+
+    setOpportunityOptions(enrichedOptions);
+    setPipelineEstados(
+      (estadosRes.data || []) as PipelineEstadoLite[]
+    );
+  } finally {
     setOpportunitiesLoading(false);
   }
+}
 
   useEffect(() => {
     return () => {
@@ -804,7 +1024,7 @@ export function NiaFloatingWidget({ activeUrl }: NiaFloatingWidgetProps) {
     }
   }
 
-  function selectOpportunityContext(opportunity: OpportunityLite) {
+function selectOpportunityContext(opportunity: OpportunityOption) {
     const nextContext = buildContextFromOpportunity(opportunity, pipelineEstados);
 
     updateNiaContext(nextContext, {

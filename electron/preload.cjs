@@ -2,9 +2,6 @@
 
 const { contextBridge, ipcRenderer } = require("electron");
 
-
-
-
 /* =========================================================
    NOSTUR PRELOAD
    Puente seguro entre MAIN y RENDERER
@@ -23,7 +20,10 @@ function createSafeListener(channel, callback) {
     try {
       callback(payload);
     } catch (error) {
-      console.error(`[NOSTUR PRELOAD] Error en listener ${channel}:`, error);
+      console.error(
+        `[NOSTUR PRELOAD] Error en listener ${channel}:`,
+        error
+      );
     }
   };
 
@@ -63,39 +63,51 @@ function normalizeNotificationPayload(payload) {
     title: String(raw.title || "Nuevo mensaje"),
     subtitle: String(raw.subtitle || "NOSTUR"),
     body: String(raw.body || raw.message || "Nuevo mensaje"),
-    conversationId: raw.conversationId ? String(raw.conversationId) : "",
-    messageId: raw.messageId ? String(raw.messageId) : "",
+    conversationId: raw.conversationId
+      ? String(raw.conversationId)
+      : "",
+    messageId: raw.messageId
+      ? String(raw.messageId)
+      : "",
     badgeCount: raw.badgeCount
   };
 }
 
 contextBridge.exposeInMainWorld("nostur", {
-
-
-  
   /* =========================================================
      SISTEMA / CACHE / ZOOM
   ========================================================= */
 
-  ping: () => safeInvoke("nostur:ping"),
+  ping: () =>
+    safeInvoke("nostur:ping"),
 
-  clearCache: (partitionName) => safeInvoke("nostur:clear-cache", partitionName),
+  clearCache: (partitionName) =>
+    safeInvoke("nostur:clear-cache", partitionName),
 
-  clearAllCache: () => safeInvoke("nostur:clear-cache", null),
+  clearAllCache: () =>
+    safeInvoke("nostur:clear-cache", null),
 
-  setMainZoom: (zoomFactor) => safeInvoke("nostur:set-main-zoom", zoomFactor),
+  setMainZoom: (zoomFactor) =>
+    safeInvoke("nostur:set-main-zoom", zoomFactor),
 
-  openExternal: (url) => safeInvoke("nostur:open-external", url),
+  openExternal: (url) =>
+    safeInvoke("nostur:open-external", url),
 
   /* =========================================================
      AUTOUPDATE
   ========================================================= */
 
-  checkForUpdates: () => safeInvoke("nostur:check-for-updates"),
+  checkForUpdates: () =>
+    safeInvoke("nostur:check-for-updates"),
 
-  installUpdate: () => safeInvoke("nostur:install-update"),
+  downloadUpdate: () =>
+    safeInvoke("nostur:download-update"),
 
-  getUpdateStatus: () => safeInvoke("nostur:get-update-status"),
+  installUpdate: () =>
+    safeInvoke("nostur:install-update"),
+
+  getUpdateStatus: () =>
+    safeInvoke("nostur:get-update-status"),
 
   onUpdateEvent: (callback) =>
     createSafeListener("nostur:update-event", callback),
@@ -115,13 +127,22 @@ contextBridge.exposeInMainWorld("nostur", {
   ========================================================= */
 
   notify: (payload) =>
-    safeInvoke("nostur:notify", normalizeNotificationPayload(payload)),
+    safeInvoke(
+      "nostur:notify",
+      normalizeNotificationPayload(payload)
+    ),
 
   notifyNewMessage: (payload) =>
-    safeInvoke("nostur:notify-new-message", normalizeNotificationPayload(payload)),
+    safeInvoke(
+      "nostur:notify-new-message",
+      normalizeNotificationPayload(payload)
+    ),
 
   playNotificationSound: (payload) =>
-    safeInvoke("nostur:play-notification-sound", payload || { kind: "gestion" }),
+    safeInvoke(
+      "nostur:play-notification-sound",
+      payload || { kind: "gestion" }
+    ),
 
   setDockBadge: (count) =>
     safeInvoke("nostur:set-dock-badge", count),
@@ -130,7 +151,10 @@ contextBridge.exposeInMainWorld("nostur", {
     safeInvoke("nostur:clear-dock-badge"),
 
   onInternalNotification: (callback) =>
-    createSafeListener("nostur:internal-notification", callback),
+    createSafeListener(
+      "nostur:internal-notification",
+      callback
+    ),
 
   /* =========================================================
      NUEVA PESTAÑA DESDE MAIN
@@ -146,20 +170,33 @@ contextBridge.exposeInMainWorld("nostur", {
         const normalized = normalizeNewTabPayload(payload);
 
         if (!normalized) {
-          console.warn("[NOSTUR PRELOAD] new-tab ignorado: payload inválido", payload);
+          console.warn(
+            "[NOSTUR PRELOAD] new-tab ignorado: payload inválido",
+            payload
+          );
+
           return;
         }
 
         callback(normalized);
       } catch (error) {
-        console.error("[NOSTUR PRELOAD] Error procesando nostur:new-tab-from-main:", error);
+        console.error(
+          "[NOSTUR PRELOAD] Error procesando nostur:new-tab-from-main:",
+          error
+        );
       }
     };
 
-    ipcRenderer.on("nostur:new-tab-from-main", handler);
+    ipcRenderer.on(
+      "nostur:new-tab-from-main",
+      handler
+    );
 
     return () => {
-      ipcRenderer.removeListener("nostur:new-tab-from-main", handler);
+      ipcRenderer.removeListener(
+        "nostur:new-tab-from-main",
+        handler
+      );
     };
   },
 
@@ -168,30 +205,40 @@ contextBridge.exposeInMainWorld("nostur", {
   ========================================================= */
 
   onOpenConversationFromNotification: (callback) =>
-    createSafeListener("nostur:open-conversation-from-notification", callback),
+    createSafeListener(
+      "nostur:open-conversation-from-notification",
+      callback
+    ),
+
+  /* =========================================================
+     RESET DE CONTRASEÑA
+  ========================================================= */
+
+  onPasswordResetLink: (callback) =>
+    createSafeListener(
+      "nostur:password-reset-link",
+      callback
+    ),
 
   /* =========================================================
      DESCARGAS
   ========================================================= */
 
   onDownloadStarted: (callback) =>
-    createSafeListener("nostur:download-started", callback),
+    createSafeListener(
+      "nostur:download-started",
+      callback
+    ),
 
   onDownloadUpdated: (callback) =>
-    createSafeListener("nostur:download-updated", callback),
+    createSafeListener(
+      "nostur:download-updated",
+      callback
+    ),
 
   onDownloadDone: (callback) =>
-    createSafeListener("nostur:download-done", callback)
+    createSafeListener(
+      "nostur:download-done",
+      callback
+    )
 });
-
-onPasswordResetLink: (callback) => {
-  const listener = (_event, payload) => {
-    callback(payload);
-  };
-
-  ipcRenderer.on("nostur:password-reset-link", listener);
-
-  return () => {
-    ipcRenderer.removeListener("nostur:password-reset-link", listener);
-  };
-}

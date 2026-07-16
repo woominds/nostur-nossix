@@ -9,7 +9,6 @@ import { WebviewArea } from "./WebviewArea";
 import { useBrowserStore, type BrowserTab } from "../store/browserStore";
 import { getAppById } from "../registry/appRegistry";
 import { DownloadToast } from "./DownloadToast";
-import { NosturUpdateBanner } from "./updates/NosturUpdateBanner";
 import GlobalWhatsappNotifications from "./GlobalWhatsappNotifications";
 
 import { ContactosPanel } from "./contactos/ContactosPanel";
@@ -543,7 +542,7 @@ export function Shell() {
     <div className="h-screen w-screen overflow-hidden bg-[#e9edf4] text-[#1f2937]">
       <GlobalWhatsappNotifications />
       <DownloadToast />
-      <NosturUpdateBanner />
+      
 
       <div className="flex h-screen w-screen overflow-hidden">
         <Sidebar />
