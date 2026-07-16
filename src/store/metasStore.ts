@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type MetaTipo =
   | "VENDEDOR_SEMANAL"
@@ -639,7 +640,7 @@ export const useMetasStore = create<MetasState>((set, get) => ({
       canManageMetas,
       metas,
       catalogos: {
-        sucursales: (sucursalesRes.data || []) as SucursalLite[],
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
         vendedores: (vendedoresRes.data || []) as ProfileLite[]
       }
     });

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 
+
 export type AppRole = "vendedor" | "administracion" | "gerencia" | "admin_general";
 export type CategoriaTipo = "ingreso" | "egreso";
 export type CajaTipo = "CAJA" | "BANCO" | "BILLETERA" | "TARJETA" | "ALMUNDO" | "OTRA";
@@ -510,7 +511,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       error: null,
       currentProfile,
       canManageConfig,
-      sucursales: (sucursalesRes.data || []) as Sucursal[],
+     sucursales: (sucursalesRes.data || []) as Sucursal[],
       profiles: (profilesRes.data || []) as Profile[],
       metodosContacto: (metodosContactoRes.data || []) as MetodoContacto[],
       destinos: (destinosRes.data || []) as Destino[],

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -387,7 +388,7 @@ export const useHorariosStore = create<HorariosState>((set, get) => ({
 
     const horariosRaw = (horariosRes.data || []) as HorarioVendedor[];
     const vendedoresRaw = (vendedoresRes.data || []) as ProfileLite[];
-    const sucursalesRaw = (sucursalesRes.data || []) as SucursalLite[];
+    const sucursalesRaw = filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]);
 
     const horarios = horariosRaw.filter((item) => {
       if (filters.sucursalId !== "todas" && item.sucursal_id !== filters.sucursalId) return false;

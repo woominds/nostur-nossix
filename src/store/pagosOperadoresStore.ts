@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -484,12 +485,12 @@ export const usePagosOperadoresStore = create<PagosOperadoresState>((set, get) =
         cajas: (cajasRes.data || []) as Caja[],
         operadores: (operadoresRes.data || []) as Operador[],
         vendedores: (vendedoresRes.data || []) as ProfileLite[],
-        sucursales: (sucursalesRes.data || []) as {
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as {
           id: string;
           nombre: string;
           activo?: boolean;
           activa?: boolean;
-        }[]
+        }[])
       }
     });
   },

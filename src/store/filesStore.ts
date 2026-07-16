@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -720,7 +721,7 @@ export const useFilesStore = create<FilesState>((set, get) => ({
         formasPago: (formasPagoRes.data || []) as CatalogItem[],
         metodosContacto: (metodosContactoRes.data || []) as CatalogItem[],
         cajas: (cajasRes.data || []) as Caja[],
-        sucursales: (sucursalesRes.data || []) as CatalogItem[],
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as CatalogItem[]),
         vendedores: (vendedoresRes.data || []) as ProfileLite[]
       }
     });

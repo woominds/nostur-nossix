@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 /* =========================================================
    TIPOS BASE
@@ -546,7 +547,7 @@ export const useDocumentosStore = create<DocumentosState>((set, get) => ({
       folders,
       files,
       catalogos: {
-        sucursales: (sucursalesRes.data || []) as SucursalLite[]
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
       },
       selectedFolderId: get().selectedFolderId || folders[0]?.id || null,
       selectedFileId: get().selectedFileId || files[0]?.id || null

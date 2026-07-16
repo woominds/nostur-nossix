@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -168,6 +169,17 @@ export type AdminHomeResumen = {
     totalUsd: number;
     cantidad: number;
   };
+};
+
+
+type CarritoRankingRow = {
+  id: string;
+  fecha_venta: string | null;
+  servicio: string | null;
+  destino: string | null;
+  estado: string | null;
+  activo: boolean | null;
+  cancelado: boolean | null;
 };
 
 export type PaxDebugInfo = {
@@ -724,27 +736,33 @@ function getCurrentCommercialWeekRange(): { desde: string; hasta: string } {
   };
 }
 
-function buildRankingSimpleFromVentas(
-  ventas: VentaBase[],
-  field: "destino" | "servicio",
-  limit = 7
+
+
+function buildRankingSimpleFromCarritos(
+  rows: CarritoRankingRow[],
+  field: "destino" | "servicio"
 ): RankingSimple[] {
-  const map = new Map<string, number>();
+  const rankingMap = new Map<string, number>();
 
-  ventas.forEach((venta) => {
-    const record = venta as unknown as Record<string, unknown>;
-    const raw = record[field];
-    const key = String(raw || "").trim();
+  rows.forEach((row) => {
+    const rawValue = row[field];
+    const value = String(rawValue || "").trim();
 
-    if (!key || key === "null" || key === "undefined") return;
+    if (!value) return;
 
-    map.set(key, (map.get(key) || 0) + 1);
+    const current = rankingMap.get(value) || 0;
+    rankingMap.set(value, current + 1);
   });
 
-  return Array.from(map.entries())
-    .map(([nombre, valor]) => ({ nombre, valor }))
-    .sort((a, b) => b.valor - a.valor)
-    .slice(0, limit);
+  return Array.from(rankingMap.entries())
+    .map(([nombre, valor]) => ({
+      nombre,
+      valor
+    }))
+    .sort((a, b) => {
+      if (b.valor !== a.valor) return b.valor - a.valor;
+      return a.nombre.localeCompare(b.nombre, "es");
+    });
 }
 
 function isSameMonthMeta(meta: MetaRow, mes: number, anio: number): boolean {
@@ -955,6 +973,8 @@ const [
   ventasMesRes,
   ventasSemanaActualRes,
   ventasHistoricoRes,
+  carritosRankingMesRes,
+  carritosRankingHistoricoRes,
   metasRes,
   sucursalesRes,
   paxCalendarioRes,
@@ -989,6 +1009,26 @@ const [
     .select("*")
     .order("fecha", { ascending: false })
     .limit(2500),
+
+
+    supabase
+  .from("carritos")
+  .select("id,fecha_venta,servicio,destino,estado,activo,cancelado")
+  .gte("fecha_venta", desde)
+  .lte("fecha_venta", hasta)
+  .eq("activo", true)
+  .eq("cancelado", false)
+  .in("estado", ["EN_CONTROL", "CONTROLADO"])
+  .order("fecha_venta", { ascending: false }),
+
+supabase
+  .from("carritos")
+  .select("id,fecha_venta,servicio,destino,estado,activo,cancelado")
+  .eq("activo", true)
+  .eq("cancelado", false)
+  .in("estado", ["EN_CONTROL", "CONTROLADO"])
+  .order("fecha_venta", { ascending: false })
+  .limit(5000),
 
   supabase.from("metas").select("*").eq("activa", true),
 
@@ -1031,11 +1071,13 @@ const [
     : Promise.resolve({ data: [], error: null })
 ]);
 
- const firstError =
+const firstError =
   mensualRes.error ||
   ventasMesRes.error ||
   ventasSemanaActualRes.error ||
   ventasHistoricoRes.error ||
+  carritosRankingMesRes.error ||
+  carritosRankingHistoricoRes.error ||
   metasRes.error ||
   sucursalesRes.error ||
   deudaOperadoresRes.error ||
@@ -1059,7 +1101,12 @@ const [
 const ventasMes = (ventasMesRes.data || []) as VentaBase[];
 const ventasSemanaActual = (ventasSemanaActualRes.data || []) as VentaBase[];
 const ventasHistorico = (ventasHistoricoRes.data || []) as VentaBase[];
-const sucursales = (sucursalesRes.data || []) as SucursalLite[];
+const carritosRankingMes =
+  (carritosRankingMesRes.data || []) as unknown as CarritoRankingRow[];
+
+const carritosRankingHistorico =
+  (carritosRankingHistoricoRes.data || []) as unknown as CarritoRankingRow[];
+const sucursales = filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]);
 const paxCalendario = (paxCalendarioRes.data || []) as CalendarioPaxEventoHome[];
 const deudaOperadoresRows = (deudaOperadoresRes.data || []) as Record<string, unknown>[];
 const facturasPagarRows = (facturasPagarRes.data || []) as Record<string, unknown>[];
@@ -1553,10 +1600,25 @@ const ventasSemanaActualDelVendedor = ventasSemanaDelVendedor.filter(
       };
     });
 
-    const destinosMensual = buildRankingSimpleFromVentas(ventasMes, "destino");
-    const destinosHistorico = buildRankingSimpleFromVentas(ventasHistorico, "destino");
-    const serviciosMensual = buildRankingSimpleFromVentas(ventasMes, "servicio");
-    const serviciosHistorico = buildRankingSimpleFromVentas(ventasHistorico, "servicio");
+const destinosMensual = buildRankingSimpleFromCarritos(
+  carritosRankingMes,
+  "destino"
+);
+
+const destinosHistorico = buildRankingSimpleFromCarritos(
+  carritosRankingHistorico,
+  "destino"
+);
+
+const serviciosMensual = buildRankingSimpleFromCarritos(
+  carritosRankingMes,
+  "servicio"
+);
+
+const serviciosHistorico = buildRankingSimpleFromCarritos(
+  carritosRankingHistorico,
+  "servicio"
+);
 
     const paxSaliendo: PaxMovimiento[] = paxCalendario
       .filter((evento) => evento.tipo_evento === "IN")

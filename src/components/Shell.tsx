@@ -119,7 +119,8 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
   const isClientes = activeUrl === "internal://clientes";
 
   const isPresupuestosV2 =
-    activeUrl === "internal://presupuestos-v2" || activeUrl === "internal://presupuestos";
+    activeUrl === "internal://presupuestos-v2" ||
+    activeUrl === "internal://presupuestos";
 
   const isCarritos = activeUrl === "internal://carritos";
   const isFiles = activeUrl === "internal://files";
@@ -147,7 +148,8 @@ function renderInternalOrHome(tab: BrowserTab | null | undefined) {
     activeUrl === "internal://config" ||
     activeUrl === "internal://settings";
 
-  const isImportadorCatalogos = activeUrl === "internal://importador-catalogos";
+  const isImportadorCatalogos =
+    activeUrl === "internal://importador-catalogos";
 
   const isLiveNos = activeUrl === "internal://livenos";
   const isContactosLive = activeUrl === "internal://contactos-live";
@@ -255,7 +257,9 @@ function SplitPane({
   visibleWebTabIds: string[];
   active: boolean;
 }) {
-  const setSplitActivePane = useBrowserStore((state) => state.setSplitActivePane);
+  const setSplitActivePane = useBrowserStore(
+    (state) => state.setSplitActivePane
+  );
 
   const web = isWebTab(tab);
   const internalContent = renderInternalOrHome(tab);
@@ -291,19 +295,33 @@ export function Shell() {
   const tabs = useBrowserStore((state) => state.tabs);
   const activeTabId = useBrowserStore((state) => state.activeTabId);
   const createTab = useBrowserStore((state) => state.createTab);
-  const activateNextTab = useBrowserStore((state) => state.activateNextTab);
-  const activatePreviousTab = useBrowserStore((state) => state.activatePreviousTab);
+  const activateNextTab = useBrowserStore(
+    (state) => state.activateNextTab
+  );
+  const activatePreviousTab = useBrowserStore(
+    (state) => state.activatePreviousTab
+  );
 
-  const splitViewEnabled = useBrowserStore((state) => state.splitViewEnabled);
-  const splitLeftTabId = useBrowserStore((state) => state.splitLeftTabId);
-  const splitRightTabId = useBrowserStore((state) => state.splitRightTabId);
-  const splitActivePane = useBrowserStore((state) => state.splitActivePane);
+  const splitViewEnabled = useBrowserStore(
+    (state) => state.splitViewEnabled
+  );
+  const splitLeftTabId = useBrowserStore(
+    (state) => state.splitLeftTabId
+  );
+  const splitRightTabId = useBrowserStore(
+    (state) => state.splitRightTabId
+  );
+  const splitActivePane = useBrowserStore(
+    (state) => state.splitActivePane
+  );
 
   const stopSplitDragging = useCallback(() => {
     splitDragPointerIdRef.current = null;
     setIsDraggingSplit(false);
 
-    document.documentElement.classList.remove("nostur-split-resizing");
+    document.documentElement.classList.remove(
+      "nostur-split-resizing"
+    );
     document.body.classList.remove("nostur-split-resizing");
 
     document.documentElement.style.cursor = "";
@@ -312,20 +330,28 @@ export function Shell() {
     document.body.style.userSelect = "";
   }, []);
 
-  const updateSplitWidthFromClientX = useCallback((clientX: number) => {
-    const container = splitContainerRef.current;
+  const updateSplitWidthFromClientX = useCallback(
+    (clientX: number) => {
+      const container = splitContainerRef.current;
 
-    if (!container) return;
+      if (!container) return;
 
-    const rect = container.getBoundingClientRect();
+      const rect = container.getBoundingClientRect();
 
-    if (rect.width <= 0) return;
+      if (rect.width <= 0) return;
 
-    const rawPercent = ((clientX - rect.left) / rect.width) * 100;
-    const limitedPercent = Math.min(75, Math.max(30, rawPercent));
+      const rawPercent =
+        ((clientX - rect.left) / rect.width) * 100;
 
-    setSplitLeftWidth(limitedPercent);
-  }, []);
+      const limitedPercent = Math.min(
+        75,
+        Math.max(30, rawPercent)
+      );
+
+      setSplitLeftWidth(limitedPercent);
+    },
+    []
+  );
 
   useEffect(() => {
     if (initializedRef.current) return;
@@ -343,7 +369,9 @@ export function Shell() {
   }, [tabs.length, createTab]);
 
   useEffect(() => {
-    function handleKeyboardNavigation(event: globalThis.KeyboardEvent) {
+    function handleKeyboardNavigation(
+      event: globalThis.KeyboardEvent
+    ) {
       const isTabShortcut =
         event.ctrlKey &&
         !event.metaKey &&
@@ -363,24 +391,41 @@ export function Shell() {
       activateNextTab();
     }
 
-    window.addEventListener("keydown", handleKeyboardNavigation, true);
+    window.addEventListener(
+      "keydown",
+      handleKeyboardNavigation,
+      true
+    );
 
     return () => {
-      window.removeEventListener("keydown", handleKeyboardNavigation, true);
+      window.removeEventListener(
+        "keydown",
+        handleKeyboardNavigation,
+        true
+      );
     };
   }, [activateNextTab, activatePreviousTab]);
 
   useEffect(() => {
     function handleOpenInternal(event: Event) {
-      const customEvent = event as CustomEvent<InternalOpenEventDetail>;
+      const customEvent =
+        event as CustomEvent<InternalOpenEventDetail>;
+
       const detail = customEvent.detail || {};
 
-      const rawModuleId = detail.moduleId || detail.appId || "";
+      const rawModuleId =
+        detail.moduleId || detail.appId || "";
+
       const appId = normalizeInternalAppId(rawModuleId);
 
       if (!appId) return;
 
-      const url = getInternalUrl(appId, detail.route, detail.url);
+      const url = getInternalUrl(
+        appId,
+        detail.route,
+        detail.url
+      );
+
       const title = getInternalTitle(appId, detail.title);
 
       createTab({
@@ -391,40 +436,61 @@ export function Shell() {
       });
     }
 
-    window.addEventListener("nostur:open-internal", handleOpenInternal);
-    window.addEventListener("nostur:navigate", handleOpenInternal);
+    window.addEventListener(
+      "nostur:open-internal",
+      handleOpenInternal
+    );
+
+    window.addEventListener(
+      "nostur:navigate",
+      handleOpenInternal
+    );
 
     return () => {
-      window.removeEventListener("nostur:open-internal", handleOpenInternal);
-      window.removeEventListener("nostur:navigate", handleOpenInternal);
+      window.removeEventListener(
+        "nostur:open-internal",
+        handleOpenInternal
+      );
+
+      window.removeEventListener(
+        "nostur:navigate",
+        handleOpenInternal
+      );
     };
   }, [createTab]);
 
   useEffect(() => {
-    const unsubscribe = window.nostur?.onOpenConversationFromNotification?.(
-      ({ conversationId }) => {
-        if (!conversationId) return;
+    const unsubscribe =
+      window.nostur?.onOpenConversationFromNotification?.(
+        ({ conversationId }) => {
+          if (!conversationId) return;
 
-        window.localStorage.setItem("nostur_open_livenos_conversation_id", conversationId);
-
-        createTab({
-          appId: "livenos",
-          url: "internal://livenos",
-          title: "LiveNos",
-          activate: true
-        });
-
-        window.setTimeout(() => {
-          window.dispatchEvent(
-            new CustomEvent("nostur:open-livenos-conversation", {
-              detail: {
-                conversationId
-              }
-            })
+          window.localStorage.setItem(
+            "nostur_open_livenos_conversation_id",
+            conversationId
           );
-        }, 350);
-      }
-    );
+
+          createTab({
+            appId: "livenos",
+            url: "internal://livenos",
+            title: "LiveNos",
+            activate: true
+          });
+
+          window.setTimeout(() => {
+            window.dispatchEvent(
+              new CustomEvent(
+                "nostur:open-livenos-conversation",
+                {
+                  detail: {
+                    conversationId
+                  }
+                }
+              )
+            );
+          }, 350);
+        }
+      );
 
     return () => {
       unsubscribe?.();
@@ -458,44 +524,118 @@ export function Shell() {
       stopSplitDragging();
     }
 
-    document.documentElement.classList.add("nostur-split-resizing");
-    document.body.classList.add("nostur-split-resizing");
+    document.documentElement.classList.add(
+      "nostur-split-resizing"
+    );
+
+    document.body.classList.add(
+      "nostur-split-resizing"
+    );
 
     document.documentElement.style.cursor = "col-resize";
     document.documentElement.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
 
-    window.addEventListener("pointermove", handlePointerMove, true);
-    window.addEventListener("pointerup", handlePointerUp, true);
-    window.addEventListener("pointercancel", handlePointerCancel, true);
-    window.addEventListener("blur", handleWindowBlur, true);
-    window.addEventListener("keyup", handleEscape, true);
-    window.addEventListener("nostur:force-stop-resize", stopSplitDragging);
+    window.addEventListener(
+      "pointermove",
+      handlePointerMove,
+      true
+    );
+
+    window.addEventListener(
+      "pointerup",
+      handlePointerUp,
+      true
+    );
+
+    window.addEventListener(
+      "pointercancel",
+      handlePointerCancel,
+      true
+    );
+
+    window.addEventListener(
+      "blur",
+      handleWindowBlur,
+      true
+    );
+
+    window.addEventListener(
+      "keyup",
+      handleEscape,
+      true
+    );
+
+    window.addEventListener(
+      "nostur:force-stop-resize",
+      stopSplitDragging
+    );
 
     return () => {
-      window.removeEventListener("pointermove", handlePointerMove, true);
-      window.removeEventListener("pointerup", handlePointerUp, true);
-      window.removeEventListener("pointercancel", handlePointerCancel, true);
-      window.removeEventListener("blur", handleWindowBlur, true);
-      window.removeEventListener("keyup", handleEscape, true);
-      window.removeEventListener("nostur:force-stop-resize", stopSplitDragging);
+      window.removeEventListener(
+        "pointermove",
+        handlePointerMove,
+        true
+      );
 
-      document.documentElement.classList.remove("nostur-split-resizing");
-      document.body.classList.remove("nostur-split-resizing");
+      window.removeEventListener(
+        "pointerup",
+        handlePointerUp,
+        true
+      );
+
+      window.removeEventListener(
+        "pointercancel",
+        handlePointerCancel,
+        true
+      );
+
+      window.removeEventListener(
+        "blur",
+        handleWindowBlur,
+        true
+      );
+
+      window.removeEventListener(
+        "keyup",
+        handleEscape,
+        true
+      );
+
+      window.removeEventListener(
+        "nostur:force-stop-resize",
+        stopSplitDragging
+      );
+
+      document.documentElement.classList.remove(
+        "nostur-split-resizing"
+      );
+
+      document.body.classList.remove(
+        "nostur-split-resizing"
+      );
 
       document.documentElement.style.cursor = "";
       document.documentElement.style.userSelect = "";
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isDraggingSplit, stopSplitDragging, updateSplitWidthFromClientX]);
+  }, [
+    isDraggingSplit,
+    stopSplitDragging,
+    updateSplitWidthFromClientX
+  ]);
 
   useEffect(() => {
     if (!splitViewEnabled && isDraggingSplit) {
       stopSplitDragging();
     }
-  }, [splitViewEnabled, isDraggingSplit, stopSplitDragging]);
+  }, [
+    splitViewEnabled,
+    isDraggingSplit,
+    stopSplitDragging
+  ]);
 
   useEffect(() => {
     return () => {
@@ -511,7 +651,8 @@ export function Shell() {
     );
   }, [tabs, activeTabId]);
 
-  const activeUrl = activeTab?.url || "nostur://home";
+  const activeUrl =
+    activeTab?.url || "nostur://home";
 
   const leftTab = useMemo(() => {
     return (
@@ -524,25 +665,32 @@ export function Shell() {
   const rightTab = useMemo(() => {
     return (
       tabs.find((tab) => tab.id === splitRightTabId) ||
-      tabs.find((tab) => tab.id !== leftTab?.id && tab.url !== "nostur://home") ||
+      tabs.find(
+        (tab) =>
+          tab.id !== leftTab?.id &&
+          tab.url !== "nostur://home"
+      ) ||
       null
     );
   }, [tabs, splitRightTabId, leftTab?.id]);
 
   const visibleWebTabIds = useMemo(() => {
     return [leftTab, rightTab]
-      .filter((tab): tab is BrowserTab => Boolean(tab && isWebTab(tab)))
+      .filter(
+        (tab): tab is BrowserTab =>
+          Boolean(tab && isWebTab(tab))
+      )
       .map((tab) => tab.id);
   }, [leftTab, rightTab]);
 
   const activeSingleIsWeb = isWebTab(activeTab);
-  const activeSingleContent = renderInternalOrHome(activeTab);
+  const activeSingleContent =
+    renderInternalOrHome(activeTab);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#e9edf4] text-[#1f2937]">
       <GlobalWhatsappNotifications />
       <DownloadToast />
-      
 
       <div className="flex h-screen w-screen overflow-hidden">
         <Sidebar />
@@ -562,7 +710,10 @@ export function Shell() {
                     className="absolute inset-0 z-[80] cursor-col-resize select-none bg-transparent"
                     onPointerMove={(event) => {
                       event.preventDefault();
-                      updateSplitWidthFromClientX(event.clientX);
+
+                      updateSplitWidthFromClientX(
+                        event.clientX
+                      );
                     }}
                     onPointerUp={(event) => {
                       event.preventDefault();
@@ -584,7 +735,9 @@ export function Shell() {
                     pane="left"
                     tab={leftTab}
                     visibleWebTabIds={visibleWebTabIds}
-                    active={splitActivePane === "left"}
+                    active={
+                      splitActivePane === "left"
+                    }
                   />
                 </div>
 
@@ -596,19 +749,29 @@ export function Shell() {
                     event.preventDefault();
                     event.stopPropagation();
 
-                    splitDragPointerIdRef.current = event.pointerId;
+                    splitDragPointerIdRef.current =
+                      event.pointerId;
+
                     setIsDraggingSplit(true);
-                    updateSplitWidthFromClientX(event.clientX);
+
+                    updateSplitWidthFromClientX(
+                      event.clientX
+                    );
 
                     try {
-                      event.currentTarget.setPointerCapture(event.pointerId);
+                      event.currentTarget.setPointerCapture(
+                        event.pointerId
+                      );
                     } catch {
-                      // Algunos entornos Electron/WebView pueden no permitir capture.
+                      // Algunos entornos Electron/WebView
+                      // pueden no permitir capture.
                     }
                   }}
                   className={[
                     "group relative z-[90] flex w-3 shrink-0 touch-none cursor-col-resize items-center justify-center",
-                    isDraggingSplit ? "bg-[#ff7a1a]/10" : "hover:bg-[#ff7a1a]/10"
+                    isDraggingSplit
+                      ? "bg-[#ff7a1a]/10"
+                      : "hover:bg-[#ff7a1a]/10"
                   ].join(" ")}
                 >
                   <div
@@ -631,14 +794,55 @@ export function Shell() {
                     pane="right"
                     tab={rightTab}
                     visibleWebTabIds={visibleWebTabIds}
-                    active={splitActivePane === "right"}
+                    active={
+                      splitActivePane === "right"
+                    }
                   />
                 </div>
               </div>
-            ) : activeSingleIsWeb ? (
-              <WebviewArea visibleTabIds={activeTab ? [activeTab.id] : []} />
             ) : (
-              activeSingleContent
+              <div className="relative h-full min-h-0 w-full min-w-0 overflow-hidden">
+                {/*
+                  El área web queda siempre montada.
+
+                  Cuando abrimos Home o un módulo interno,
+                  solo se oculta visualmente.
+
+                  Esto evita destruir el webview y mantiene
+                  funcionando la página, la sesión, el estado,
+                  formularios y navegación.
+                */}
+                <div
+                  className={[
+                    "absolute inset-0 overflow-hidden",
+                    activeSingleIsWeb
+                      ? "visible z-20 opacity-100"
+                      : "invisible z-0 pointer-events-none opacity-0"
+                  ].join(" ")}
+                >
+                  <WebviewArea
+                    visibleTabIds={
+                      activeTab && activeSingleIsWeb
+                        ? [activeTab.id]
+                        : []
+                    }
+                  />
+                </div>
+
+                {/*
+                  Home o módulo interno activo.
+                */}
+                <div
+                  className={[
+                    "absolute inset-0 overflow-hidden",
+                    activeSingleIsWeb
+                      ? "invisible z-0 pointer-events-none opacity-0"
+                      : "visible z-20 opacity-100"
+                  ].join(" ")}
+                >
+                  {activeSingleContent}
+                </div>
+              </div>
             )}
 
             <NiaFloatingWidget activeUrl={activeUrl} />

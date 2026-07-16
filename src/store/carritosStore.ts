@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -744,7 +745,7 @@ if (effectiveFilters.activo === "inactivos") {
         servicios: (serviciosRes.data || []) as CatalogItem[],
         formasPago: (formasPagoRes.data || []) as CatalogItem[],
         cajas: (cajasRes.data || []) as Caja[],
-        sucursales: (sucursalesRes.data || []) as CatalogItem[],
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as CatalogItem[]),
         vendedores: (vendedoresRes.data || []) as ProfileLite[]
       }
     });

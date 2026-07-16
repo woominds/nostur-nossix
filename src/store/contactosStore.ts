@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 import type { MetodoContacto, Profile, Sucursal } from "./configStore";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 import {
   type ContactoEstado,
   getMonthStart,
@@ -381,7 +382,7 @@ if (filters.activo === "inactivos") {
         return;
       }
 
-      sucursales = (sucursalesRes.data || []) as Sucursal[];
+      sucursales = filtrarSucursalesActivas((sucursalesRes.data || []) as Sucursal[]);
       vendedores = (vendedoresRes.data || []) as Profile[];
     } else {
       vendedores = currentProfile ? [currentProfile] : [];

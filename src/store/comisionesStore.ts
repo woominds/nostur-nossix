@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -497,7 +498,7 @@ export const useComisionesStore = create<ComisionesState>((set, get) => ({
       matrizAnual,
       catalogos: {
         vendedores: (vendedoresRes.data || []) as ProfileLite[],
-        sucursales: (sucursalesRes.data || []) as SucursalLite[]
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
       }
     });
   },

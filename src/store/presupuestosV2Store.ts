@@ -3,6 +3,7 @@
 import { create } from "zustand";
 
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 /* =========================================================
    NOSSIX / NOSTUR — PRESUPUESTOS V2 STORE
@@ -1460,7 +1461,7 @@ export const usePresupuestosV2Store = create<PresupuestosV2State>((set, get) => 
       return {
         currentProfile,
         vendedores,
-        sucursales: (sucursalesRes.data || []) as SucursalLite[],
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
         filters: shouldApplySellerDefault
           ? {
               ...state.filters,

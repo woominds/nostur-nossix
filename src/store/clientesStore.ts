@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
 import type { MetodoContacto, Profile, Sucursal } from "./configStore";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type Cliente = {
   id: string;
@@ -411,7 +412,7 @@ export const useClientesStore = create<ClientesState>((set, get) => ({
         return;
       }
 
-      sucursales = (sucursalesRes.data || []) as Sucursal[];
+      sucursales = filtrarSucursalesActivas((sucursalesRes.data || []) as Sucursal[]);
       vendedores = (vendedoresRes.data || []) as Profile[];
     } else {
       vendedores = currentProfile ? [currentProfile] : [];

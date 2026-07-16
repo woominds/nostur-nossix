@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -689,12 +690,12 @@ console.log("[CONTROL VENTAS] Diagnóstico previo", {
       controles,
       catalogos: {
         vendedores: (vendedoresRes.data || []) as ProfileLite[],
-        sucursales: (sucursalesRes.data || []) as {
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as {
           id: string;
           nombre: string;
           activo?: boolean;
           activa?: boolean;
-        }[]
+        }[])
       }
     });
   },

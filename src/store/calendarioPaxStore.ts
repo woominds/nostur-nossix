@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -353,7 +354,7 @@ export const useCalendarioPaxStore = create<CalendarioPaxState>((set, get) => ({
       eventos: (eventosRes.data || []) as CalendarioPaxEvento[],
       catalogos: {
         vendedores: (vendedoresRes.data || []) as ProfileLite[],
-        sucursales: (sucursalesRes.data || []) as SucursalLite[]
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
       }
     });
   },

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 /* =========================================================
    TIPOS BASE
@@ -769,7 +770,7 @@ export const useCashflowStore = create<CashflowState>((set, get) => ({
       catalogos: {
         proveedores: (proveedoresRes.data || []) as ProveedorLite[],
         cajas: (cajasRes.data || []) as CajaLite[],
-        sucursales: (sucursalesRes.data || []) as SucursalLite[]
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
       },
       selectedItemId: get().selectedItemId || items[0]?.id || null
     });

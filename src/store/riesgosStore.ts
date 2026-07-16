@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type RiesgoEstado = "EN_PLAZO" | "PROXIMO" | "VENCIDO" | "RESUELTO";
 export type CajaMoneda = "ARS" | "USD";
@@ -460,7 +461,7 @@ if (filters.hasta) {
       catalogos: {
         cajas: (cajasRes.data || []) as CajaLite[],
         vendedores: (vendedoresRes.data || []) as VendedorLite[],
-        sucursales: (sucursalesRes.data || []) as SucursalLite[]
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
       }
     });
   },

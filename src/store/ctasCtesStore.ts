@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type CtaCteOrigen = "CARRITO" | "FILE";
 
@@ -472,7 +473,7 @@ export const useCtasCtesStore = create<CtasCtesState>((set, get) => ({
         items,
         catalogos: {
           vendedores: (vendedoresRes.data || []) as VendedorLite[],
-          sucursales: (sucursalesRes.data || []) as SucursalLite[],
+          sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
           cajas: (cajasRes.data || []) as CajaLite[]
         },
         filters: shouldApplySellerDefault

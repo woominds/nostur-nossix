@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { supabase } from "../lib/supabase";
+import { filtrarSucursalesActivas } from "../lib/sucursales";
 
 export type ProfileLite = {
   id: string;
@@ -732,7 +733,7 @@ let carritosDisponiblesQuery = supabase
       retenciones: (retencionesRes.data || []) as RetencionFactura[],
       carritosDisponibles,
       catalogos: {
-        sucursales: (sucursalesRes.data || []) as SucursalLite[],
+        sucursales: filtrarSucursalesActivas((sucursalesRes.data || []) as SucursalLite[]),
         cajas: (cajasRes.data || []) as CajaLite[]
       }
     });

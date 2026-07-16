@@ -3,7 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type NotificationKind = "nuevo" | "gestion" | "cande_transfer" | "internal";
+type NotificationKind =
+  | "nuevo"
+  | "gestion"
+  | "cande_transfer"
+  | "internal";
 
 type ConversationLite = {
   id: string;
@@ -13,7 +17,9 @@ type ConversationLite = {
   estado_gestion: string | null;
   inbox: string | null;
   assigned_to: string | null;
+  tomada_by: string | null;
   last_message_preview: string | null;
+  deleted_at: string | null;
 };
 
 type OpportunityLite = {
@@ -23,6 +29,14 @@ type OpportunityLite = {
   cande_handoff_requested_at: string | null;
   score: number | null;
   datos: Record<string, unknown> | null;
+};
+
+type NotificationProfileLite = {
+  id: string;
+  rol: string | null;
+  activo: boolean | null;
+  is_support_user?: boolean | null;
+  is_super_admin?: boolean | null;
 };
 
 type IncomingMessagePayload = {
@@ -60,10 +74,22 @@ type VisibleToast = InternalNotificationPayload & {
 };
 
 type NosturBridge = {
-  notify?: (payload: Record<string, unknown>) => Promise<unknown>;
-  notifyNewMessage?: (payload: Record<string, unknown>) => Promise<unknown>;
-  playNotificationSound?: (payload: Record<string, unknown>) => Promise<unknown>;
-  onInternalNotification?: (callback: (payload: InternalNotificationPayload) => void) => () => void;
+  notify?: (
+    payload: Record<string, unknown>
+  ) => Promise<unknown>;
+
+  notifyNewMessage?: (
+    payload: Record<string, unknown>
+  ) => Promise<unknown>;
+
+  playNotificationSound?: (
+    payload: Record<string, unknown>
+  ) => Promise<unknown>;
+
+  onInternalNotification?: (
+    callback: (payload: InternalNotificationPayload) => void
+  ) => () => void;
+
   onOpenConversationFromNotification?: (
     callback: (payload: {
       conversationId?: string;
@@ -87,9 +113,15 @@ function logInfo(message: string, payload?: unknown) {
   }
 
   try {
-    console.log(`[GlobalWhatsappNotifications] ${message}`, JSON.stringify(payload, null, 2));
+    console.log(
+      `[GlobalWhatsappNotifications] ${message}`,
+      JSON.stringify(payload, null, 2)
+    );
   } catch {
-    console.log(`[GlobalWhatsappNotifications] ${message}`, payload);
+    console.log(
+      `[GlobalWhatsappNotifications] ${message}`,
+      payload
+    );
   }
 }
 
@@ -100,9 +132,15 @@ function logWarn(message: string, payload?: unknown) {
   }
 
   try {
-    console.warn(`[GlobalWhatsappNotifications] ${message}`, JSON.stringify(payload, null, 2));
+    console.warn(
+      `[GlobalWhatsappNotifications] ${message}`,
+      JSON.stringify(payload, null, 2)
+    );
   } catch {
-    console.warn(`[GlobalWhatsappNotifications] ${message}`, payload);
+    console.warn(
+      `[GlobalWhatsappNotifications] ${message}`,
+      payload
+    );
   }
 }
 
@@ -118,7 +156,73 @@ function truncateText(value: string, max = 120): string {
   return `${clean.slice(0, max - 1)}…`;
 }
 
-function getConversationName(conversation: ConversationLite | null): string {
+function canProfileReceiveAllNotifications(
+  profile: NotificationProfileLite | null | undefined
+): boolean {
+  if (!profile || profile.activo === false) {
+    return false;
+  }
+
+  const role = cleanText(profile.rol).toLowerCase();
+
+  return (
+    role === "gerencia" ||
+    role === "admin_general" ||
+    profile.is_support_user === true ||
+    profile.is_super_admin === true
+  );
+}
+
+function getConversationOwnerId(
+  conversation: ConversationLite | null
+): string | null {
+  return (
+    cleanText(conversation?.assigned_to) ||
+    cleanText(conversation?.tomada_by) ||
+    null
+  );
+}
+
+function canReceiveConversationNotification(params: {
+  conversation: ConversationLite | null;
+  currentUserId: string | null;
+  currentProfile: NotificationProfileLite | null;
+}): boolean {
+  const {
+    conversation,
+    currentUserId,
+    currentProfile
+  } = params;
+
+  if (!currentUserId) {
+    return false;
+  }
+
+  if (!conversation || conversation.deleted_at) {
+    return false;
+  }
+
+  /*
+   * Gerencia, admin general, soporte y super admin
+   * reciben notificaciones de todas las conversaciones.
+   */
+  if (canProfileReceiveAllNotifications(currentProfile)) {
+    return true;
+  }
+
+  /*
+   * El resto de usuarios solamente recibe notificaciones
+   * de las conversaciones que tiene asignadas o tomadas.
+   *
+   * Una conversación sin asignar no genera notificación
+   * para vendedores.
+   */
+  return getConversationOwnerId(conversation) === currentUserId;
+}
+
+function getConversationName(
+  conversation: ConversationLite | null
+): string {
   return (
     cleanText(conversation?.titulo) ||
     cleanText(conversation?.subject) ||
@@ -127,20 +231,28 @@ function getConversationName(conversation: ConversationLite | null): string {
   );
 }
 
-function isInboundMessage(message: IncomingMessagePayload): boolean {
+function isInboundMessage(
+  message: IncomingMessagePayload
+): boolean {
   const direction = cleanText(message.direction).toLowerCase();
 
   return direction === "in" || direction === "inbound";
 }
 
-function shouldIgnoreMessage(message: IncomingMessagePayload): boolean {
+function shouldIgnoreMessage(
+  message: IncomingMessagePayload
+): boolean {
   if (!message?.id) {
     logWarn("Ignorado: mensaje sin id", message);
     return true;
   }
 
   if (!message.conversacion_id) {
-    logWarn("Ignorado: mensaje sin conversacion_id", message);
+    logWarn(
+      "Ignorado: mensaje sin conversacion_id",
+      message
+    );
+
     return true;
   }
 
@@ -156,9 +268,15 @@ function shouldIgnoreMessage(message: IncomingMessagePayload): boolean {
     return true;
   }
 
-  const senderKind = cleanText(message.sender_kind).toLowerCase();
+  const senderKind = cleanText(
+    message.sender_kind
+  ).toLowerCase();
 
-  if (senderKind === "cande" || senderKind === "nia" || senderKind === "sistema") {
+  if (
+    senderKind === "cande" ||
+    senderKind === "nia" ||
+    senderKind === "sistema"
+  ) {
     logWarn("Ignorado: inbound de sistema/IA", {
       id: message.id,
       direction: message.direction,
@@ -173,10 +291,14 @@ function shouldIgnoreMessage(message: IncomingMessagePayload): boolean {
   return false;
 }
 
-function getMessagePreview(message: IncomingMessagePayload): string {
+function getMessagePreview(
+  message: IncomingMessagePayload
+): string {
   const text = cleanText(message.text);
 
-  if (text) return truncateText(text);
+  if (text) {
+    return truncateText(text);
+  }
 
   const type = cleanText(message.type).toLowerCase();
 
@@ -196,32 +318,70 @@ function classifyNotification(params: {
   const opportunity = params.opportunity;
 
   if (opportunity?.cande_handoff_requested_at) {
-    const handoffTime = new Date(opportunity.cande_handoff_requested_at).getTime();
-    const recently = Number.isFinite(handoffTime) && Date.now() - handoffTime < 90_000;
+    const handoffTime = new Date(
+      opportunity.cande_handoff_requested_at
+    ).getTime();
 
-    if (recently) return "cande_transfer";
+    const recently =
+      Number.isFinite(handoffTime) &&
+      Date.now() - handoffTime < 90_000;
+
+    if (recently) {
+      return "cande_transfer";
+    }
   }
 
-  const estadoGestion = cleanText(conversation?.estado_gestion).toLowerCase();
-  const inbox = cleanText(conversation?.inbox).toLowerCase();
+  const estadoGestion = cleanText(
+    conversation?.estado_gestion
+  ).toLowerCase();
 
-  if (!conversation?.assigned_to || estadoGestion === "sin_atender" || inbox === "sin_atender") {
+  const inbox = cleanText(
+    conversation?.inbox
+  ).toLowerCase();
+
+  const ownerId = getConversationOwnerId(conversation);
+
+  if (
+    !ownerId ||
+    estadoGestion === "sin_atender" ||
+    inbox === "sin_atender"
+  ) {
     return "nuevo";
   }
 
   return "gestion";
 }
 
-function getNotificationTitle(kind: NotificationKind, passengerName: string): string {
-  if (kind === "cande_transfer") return `CANDE derivó a ${passengerName}`;
-  if (kind === "nuevo") return `Nuevo pasajero · ${passengerName}`;
+function getNotificationTitle(
+  kind: NotificationKind,
+  passengerName: string
+): string {
+  if (kind === "cande_transfer") {
+    return `CANDE derivó a ${passengerName}`;
+  }
+
+  if (kind === "nuevo") {
+    return `Nuevo pasajero · ${passengerName}`;
+  }
+
+  if (kind === "internal") {
+    return `Mensaje interno · ${passengerName}`;
+  }
 
   return `Nuevo mensaje · ${passengerName}`;
 }
 
-function getNotificationBody(kind: NotificationKind, preview: string): string {
-  if (kind === "cande_transfer") return `Requiere atención de vendedor. ${preview}`;
-  if (kind === "nuevo") return `Mensaje sin atender. ${preview}`;
+function getNotificationBody(
+  kind: NotificationKind,
+  preview: string
+): string {
+  if (kind === "cande_transfer") {
+    return `Requiere atención de vendedor. ${preview}`;
+  }
+
+  if (kind === "nuevo") {
+    return `Mensaje sin atender. ${preview}`;
+  }
 
   return preview;
 }
@@ -243,9 +403,15 @@ function playTone(params: {
       try {
         const AudioContextClass =
           window.AudioContext ||
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          (
+            window as unknown as {
+              webkitAudioContext?: typeof AudioContext;
+            }
+          ).webkitAudioContext;
 
-        if (!AudioContextClass) return;
+        if (!AudioContextClass) {
+          return;
+        }
 
         const audioContext = new AudioContextClass();
         const oscillator = audioContext.createOscillator();
@@ -254,42 +420,54 @@ function playTone(params: {
         oscillator.type = oscillatorType;
         oscillator.frequency.value = params.frequency;
 
-        /*
-          Volumen fuerte pero con envelope corto para que no distorsione feo.
-          square/sawtooth atraviesan mejor el ruido de oficina que sine.
-        */
-        const safeVolume = Math.min(Math.max(params.volume, 0.01), 0.95);
+        const safeVolume = Math.min(
+          Math.max(params.volume, 0.01),
+          0.95
+        );
 
-        gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-        gain.gain.exponentialRampToValueAtTime(safeVolume, audioContext.currentTime + 0.012);
+        gain.gain.setValueAtTime(
+          0.0001,
+          audioContext.currentTime
+        );
+
+        gain.gain.exponentialRampToValueAtTime(
+          safeVolume,
+          audioContext.currentTime + 0.012
+        );
+
         gain.gain.exponentialRampToValueAtTime(
           0.0001,
-          audioContext.currentTime + params.durationMs / 1000
+          audioContext.currentTime +
+            params.durationMs / 1000
         );
 
         oscillator.connect(gain);
         gain.connect(audioContext.destination);
 
         oscillator.start();
-        oscillator.stop(audioContext.currentTime + params.durationMs / 1000 + 0.04);
+
+        oscillator.stop(
+          audioContext.currentTime +
+            params.durationMs / 1000 +
+            0.04
+        );
 
         oscillator.onended = () => {
           void audioContext.close();
         };
       } catch {
-        // No bloquear la app si el audio del renderer falla.
+        // No bloquear la aplicación si falla el audio.
       }
     }, index * (params.durationMs + gapMs));
   }
 }
 
 function playRendererTone(kind: NotificationKind) {
-  console.log("[GlobalWhatsappNotifications] Intento reproducir sonido renderer", { kind });
+  logInfo("Intento reproducir sonido renderer", {
+    kind
+  });
 
   if (kind === "cande_transfer") {
-    /*
-      CANDE: distinto y claro, pero menos agresivo que la alarma anterior.
-    */
     playTone({
       frequency: 660,
       durationMs: 120,
@@ -324,10 +502,6 @@ function playRendererTone(kind: NotificationKind) {
   }
 
   if (kind === "nuevo") {
-    /*
-      NUEVO / SIN ATENDER: audible y reconocible, pero más amable.
-      Evitamos square/sawtooth fuertes porque cansan mucho el oído.
-    */
     playTone({
       frequency: 720,
       durationMs: 120,
@@ -341,7 +515,7 @@ function playRendererTone(kind: NotificationKind) {
       playTone({
         frequency: 920,
         durationMs: 140,
-        volume: 0.40,
+        volume: 0.4,
         repeat: 1,
         gapMs: 70,
         type: "sine"
@@ -362,9 +536,6 @@ function playRendererTone(kind: NotificationKind) {
   }
 
   if (kind === "internal") {
-    /*
-      MENSAJE INTERNO: corto, suave, distinto de WhatsApp.
-    */
     playTone({
       frequency: 620,
       durationMs: 110,
@@ -378,7 +549,7 @@ function playRendererTone(kind: NotificationKind) {
       playTone({
         frequency: 780,
         durationMs: 130,
-        volume: 0.30,
+        volume: 0.3,
         repeat: 1,
         type: "sine"
       });
@@ -387,13 +558,10 @@ function playRendererTone(kind: NotificationKind) {
     return;
   }
 
-  /*
-    GESTIÓN / ya tomada: aviso suave.
-  */
   playTone({
     frequency: 680,
     durationMs: 110,
-    volume: 0.30,
+    volume: 0.3,
     repeat: 1,
     gapMs: 70,
     type: "triangle"
@@ -410,10 +578,10 @@ function playRendererTone(kind: NotificationKind) {
   }, 170);
 }
 
-async function playNotificationSound(kind: NotificationKind) {
+async function playNotificationSound(
+  kind: NotificationKind
+) {
   const bridge = getNosturBridge();
-
-  let electronPlayed = false;
 
   try {
     if (bridge?.playNotificationSound) {
@@ -421,52 +589,94 @@ async function playNotificationSound(kind: NotificationKind) {
         kind
       });
 
-      electronPlayed = Boolean(played);
-
-      if (electronPlayed) {
-        logInfo("Sonido Electron ejecutado", { kind });
+      if (played) {
+        logInfo("Sonido Electron ejecutado", {
+          kind
+        });
       }
     }
   } catch (error) {
     logWarn("No se pudo ejecutar sonido Electron", {
       kind,
-      error: error instanceof Error ? error.message : String(error)
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error)
     });
   }
 
   /*
-    Dejamos fallback local también.
-    En macOS empaquetado a veces el beep del sistema no se escucha igual
-    cuando la app está enfocada. Este tono interno ayuda en primer plano.
-  */
+   * Se conserva el tono del renderer como respaldo.
+   */
   playRendererTone(kind);
 }
 
-async function loadNotificationContext(conversationId: string) {
-  const [conversationRes, opportunityRes] = await Promise.all([
+async function loadNotificationContext(
+  conversationId: string
+) {
+  const [
+    conversationRes,
+    opportunityRes
+  ] = await Promise.all([
     supabase
       .from("conversaciones")
-      .select("id,wa_phone,titulo,subject,estado_gestion,inbox,assigned_to,last_message_preview")
+      .select(
+        [
+          "id",
+          "wa_phone",
+          "titulo",
+          "subject",
+          "estado_gestion",
+          "inbox",
+          "assigned_to",
+          "tomada_by",
+          "last_message_preview",
+          "deleted_at"
+        ].join(",")
+      )
       .eq("id", conversationId)
       .maybeSingle(),
+
     supabase
       .from("lead_oportunidades")
-      .select("id,conversacion_id,cande_activa,cande_handoff_requested_at,score,datos")
+      .select(
+        [
+          "id",
+          "conversacion_id",
+          "cande_activa",
+          "cande_handoff_requested_at",
+          "score",
+          "datos"
+        ].join(",")
+      )
       .eq("conversacion_id", conversationId)
       .maybeSingle()
   ]);
 
   if (conversationRes.error) {
-    logWarn("Error cargando conversación para notificación", conversationRes.error.message);
+    logWarn(
+      "Error cargando conversación para notificación",
+      conversationRes.error.message
+    );
   }
 
   if (opportunityRes.error) {
-    logWarn("Error cargando oportunidad para notificación", opportunityRes.error.message);
+    logWarn(
+      "Error cargando oportunidad para notificación",
+      opportunityRes.error.message
+    );
   }
 
   return {
-    conversation: (conversationRes.data || null) as ConversationLite | null,
-    opportunity: (opportunityRes.data || null) as OpportunityLite | null
+    conversation:
+      (conversationRes.data || null) as unknown as
+        | ConversationLite
+        | null,
+
+    opportunity:
+      (opportunityRes.data || null) as unknown as
+        | OpportunityLite
+        | null
   };
 }
 
@@ -475,52 +685,86 @@ async function notifySystem(params: {
   conversation: ConversationLite | null;
   message: IncomingMessagePayload;
 }) {
-  const passengerName = getConversationName(params.conversation);
+  const passengerName = getConversationName(
+    params.conversation
+  );
+
   const preview = getMessagePreview(params.message);
 
-  const title = getNotificationTitle(params.kind, passengerName);
-  const body = getNotificationBody(params.kind, preview);
-  const conversationId = params.conversation?.id || params.message.conversacion_id;
-  const messageId = params.message.id;
+  const title = getNotificationTitle(
+    params.kind,
+    passengerName
+  );
 
+  const body = getNotificationBody(
+    params.kind,
+    preview
+  );
+
+  const conversationId =
+    params.conversation?.id ||
+    params.message.conversacion_id;
+
+  const messageId = params.message.id;
   const bridge = getNosturBridge();
 
   try {
     if (bridge?.notify) {
       const result = await bridge.notify({
         title,
+        subtitle: "LiveNos",
         body,
         conversationId,
         messageId
       });
 
-      logInfo("Notificación solicitada a Electron", {
-        result,
-        title,
-        body,
-        kind: params.kind,
-        conversationId,
-        messageId
-      });
+      logInfo(
+        "Notificación solicitada a Electron",
+        {
+          result,
+          title,
+          body,
+          kind: params.kind,
+          conversationId,
+          messageId
+        }
+      );
 
       return;
     }
 
     logWarn("window.nostur.notify no disponible.");
   } catch (error) {
-    logWarn("Error solicitando notificación a Electron", {
-      error: error instanceof Error ? error.message : String(error)
-    });
+    logWarn(
+      "Error solicitando notificación a Electron",
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      }
+    );
   }
 }
 
-function openConversationFromToast(conversationId?: string, messageId?: string) {
-  if (!conversationId || conversationId === "test") return;
+function openConversationFromToast(
+  conversationId?: string,
+  messageId?: string
+) {
+  if (!conversationId || conversationId === "test") {
+    return;
+  }
 
-  window.localStorage.setItem("nostur_open_livenos_conversation_id", conversationId);
+  window.localStorage.setItem(
+    "nostur_open_livenos_conversation_id",
+    conversationId
+  );
 
   if (messageId) {
-    window.localStorage.setItem("nostur_open_livenos_message_id", messageId);
+    window.localStorage.setItem(
+      "nostur_open_livenos_message_id",
+      messageId
+    );
   }
 
   window.dispatchEvent(
@@ -535,12 +779,15 @@ function openConversationFromToast(conversationId?: string, messageId?: string) 
   );
 
   window.dispatchEvent(
-    new CustomEvent("nostur:open-livenos-conversation", {
-      detail: {
-        conversationId,
-        messageId
+    new CustomEvent(
+      "nostur:open-livenos-conversation",
+      {
+        detail: {
+          conversationId,
+          messageId
+        }
       }
-    })
+    )
   );
 }
 
@@ -552,16 +799,22 @@ function InternalNotificationToast({
   onClose: () => void;
 }) {
   useEffect(() => {
-    if (!toast) return;
+    if (!toast) {
+      return;
+    }
 
     const timer = window.setTimeout(() => {
       onClose();
     }, 7000);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [toast, onClose]);
 
-  if (!toast) return null;
+  if (!toast) {
+    return null;
+  }
 
   return (
     <div
@@ -573,9 +826,11 @@ function InternalNotificationToast({
         width: 360,
         maxWidth: "calc(100vw - 44px)",
         borderRadius: 20,
-        border: "1px solid rgba(15, 23, 42, 0.10)",
+        border:
+          "1px solid rgba(15, 23, 42, 0.10)",
         background: "rgba(255,255,255,0.96)",
-        boxShadow: "0 24px 70px rgba(15, 23, 42, 0.22)",
+        boxShadow:
+          "0 24px 70px rgba(15, 23, 42, 0.22)",
         backdropFilter: "blur(14px)",
         overflow: "hidden",
         color: "#172033"
@@ -585,14 +840,28 @@ function InternalNotificationToast({
         role="button"
         tabIndex={0}
         onClick={() => {
-          openConversationFromToast(toast.conversationId, toast.messageId);
+          openConversationFromToast(
+            toast.conversationId,
+            toast.messageId
+          );
+
           onClose();
         }}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
+          if (
+            event.key !== "Enter" &&
+            event.key !== " "
+          ) {
+            return;
+          }
 
           event.preventDefault();
-          openConversationFromToast(toast.conversationId, toast.messageId);
+
+          openConversationFromToast(
+            toast.conversationId,
+            toast.messageId
+          );
+
           onClose();
         }}
         style={{
@@ -619,9 +888,15 @@ function InternalNotificationToast({
               height: 38,
               borderRadius: 14,
               background:
-                toast.title?.toLowerCase().includes("nuevo pasajero") ||
-                toast.title?.toLowerCase().includes("whatsapp") ||
-                toast.title?.toLowerCase().includes("cande")
+                toast.title
+                  ?.toLowerCase()
+                  .includes("nuevo pasajero") ||
+                toast.title
+                  ?.toLowerCase()
+                  .includes("whatsapp") ||
+                toast.title
+                  ?.toLowerCase()
+                  .includes("cande")
                   ? "linear-gradient(135deg, #ef4444, #991b1b)"
                   : "linear-gradient(135deg, #4f7c90, #172033)",
               color: "white",
@@ -636,7 +911,12 @@ function InternalNotificationToast({
             N
           </div>
 
-          <div style={{ minWidth: 0, flex: 1 }}>
+          <div
+            style={{
+              minWidth: 0,
+              flex: 1
+            }}
+          >
             <div
               style={{
                 fontSize: 13,
@@ -658,7 +938,8 @@ function InternalNotificationToast({
                 wordBreak: "break-word"
               }}
             >
-              {toast.body || "Nuevo mensaje recibido"}
+              {toast.body ||
+                "Nuevo mensaje recibido"}
             </div>
 
             <div
@@ -684,7 +965,8 @@ function InternalNotificationToast({
               width: 26,
               height: 26,
               borderRadius: 10,
-              border: "1px solid rgba(15, 23, 42, 0.08)",
+              border:
+                "1px solid rgba(15, 23, 42, 0.08)",
               background: "#f8fafc",
               color: "#64748b",
               cursor: "pointer",
@@ -702,11 +984,148 @@ function InternalNotificationToast({
   );
 }
 
-
 export function GlobalWhatsappNotifications() {
-  const processedMessagesRef = useRef<Set<string>>(new Set());
-  const lastHandoffByOpportunityRef = useRef<Record<string, string>>({});
-  const [internalToast, setInternalToast] = useState<VisibleToast | null>(null);
+  const processedMessagesRef = useRef<Set<string>>(
+    new Set()
+  );
+
+  const lastHandoffByOpportunityRef = useRef<
+    Record<string, string>
+  >({});
+
+  const currentUserIdRef = useRef<string | null>(
+    null
+  );
+
+  const currentProfileRef =
+    useRef<NotificationProfileLite | null>(null);
+
+  const notificationIdentityReadyRef =
+    useRef<Promise<void> | null>(null);
+
+  const [internalToast, setInternalToast] =
+    useState<VisibleToast | null>(null);
+
+  async function loadNotificationIdentity() {
+    if (notificationIdentityReadyRef.current) {
+      await notificationIdentityReadyRef.current;
+      return;
+    }
+
+    notificationIdentityReadyRef.current =
+      (async () => {
+        const {
+          data: authData,
+          error: authError
+        } = await supabase.auth.getUser();
+
+        const userId = authData.user?.id || null;
+
+        if (authError || !userId) {
+          currentUserIdRef.current = null;
+          currentProfileRef.current = null;
+
+          logWarn(
+            "No se pudo identificar usuario para notificaciones",
+            {
+              error: authError?.message || null
+            }
+          );
+
+          return;
+        }
+
+        currentUserIdRef.current = userId;
+
+        const {
+          data: profileData,
+          error: profileError
+        } = await supabase
+          .from("profiles")
+          .select(
+            [
+              "id",
+              "rol",
+              "activo",
+              "is_support_user",
+              "is_super_admin"
+            ].join(",")
+          )
+          .eq("id", userId)
+          .maybeSingle();
+
+        if (profileError) {
+          currentProfileRef.current = null;
+
+          logWarn(
+            "No se pudo cargar perfil para notificaciones",
+            {
+              userId,
+              error: profileError.message
+            }
+          );
+
+          return;
+        }
+
+        currentProfileRef.current =
+          (profileData || null) as unknown as
+            | NotificationProfileLite
+            | null;
+
+        logInfo(
+          "Identidad de notificaciones cargada",
+          {
+            userId,
+            rol:
+              currentProfileRef.current?.rol ||
+              null,
+            canReceiveAll:
+              canProfileReceiveAllNotifications(
+                currentProfileRef.current
+              )
+          }
+        );
+      })();
+
+    await notificationIdentityReadyRef.current;
+  }
+
+  async function userCanReceiveNotification(
+    conversation: ConversationLite | null
+  ): Promise<boolean> {
+    await loadNotificationIdentity();
+
+    const allowed =
+      canReceiveConversationNotification({
+        conversation,
+        currentUserId: currentUserIdRef.current,
+        currentProfile: currentProfileRef.current
+      });
+
+    if (!allowed) {
+      logInfo(
+        "Notificación ignorada por destinatario",
+        {
+          currentUserId:
+            currentUserIdRef.current,
+          currentRole:
+            currentProfileRef.current?.rol ||
+            null,
+          conversationId:
+            conversation?.id || null,
+          assignedTo:
+            conversation?.assigned_to || null,
+          tomadaBy:
+            conversation?.tomada_by || null,
+          deletedAt:
+            conversation?.deleted_at || null
+        }
+      );
+    }
+
+    return allowed;
+  }
 
   function fireVisibleNotification(params: {
     title: string;
@@ -715,46 +1134,86 @@ export function GlobalWhatsappNotifications() {
     messageId?: string;
     createdAt?: string | null;
   }) {
-    console.log("[GlobalWhatsappNotifications] Muestro toast interno", params);
+    logInfo(
+      "Muestro toast interno",
+      params
+    );
 
     setInternalToast({
-      id: params.messageId || `toast:${Date.now()}`,
+      id:
+        params.messageId ||
+        `toast:${Date.now()}`,
       title: params.title,
       subtitle: "LiveNos",
       body: params.body,
       conversationId: params.conversationId,
       messageId: params.messageId,
       appFocused: true,
-      createdAt: params.createdAt || new Date().toISOString()
+      createdAt:
+        params.createdAt ||
+        new Date().toISOString()
     });
   }
 
   useEffect(() => {
-    console.log("[GlobalWhatsappNotifications] Componente montado correctamente");
-  }, []);
+    logInfo(
+      "Componente montado correctamente"
+    );
 
+    void loadNotificationIdentity();
+
+    const { data: authListener } =
+      supabase.auth.onAuthStateChange(() => {
+        currentUserIdRef.current = null;
+        currentProfileRef.current = null;
+        notificationIdentityReadyRef.current =
+          null;
+
+        void loadNotificationIdentity();
+      });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     const bridge = getNosturBridge();
 
-    if (!bridge?.onInternalNotification) return undefined;
+    if (!bridge?.onInternalNotification) {
+      return undefined;
+    }
 
-    const unsubscribe = bridge.onInternalNotification((payload) => {
-      logInfo("Notificación interna recibida desde Electron", payload);
+    const unsubscribe =
+      bridge.onInternalNotification((payload) => {
+        logInfo(
+          "Notificación interna recibida desde Electron",
+          payload
+        );
 
-      if (!payload?.appFocused) return;
+        if (!payload?.appFocused) {
+          return;
+        }
 
-      setInternalToast({
-        id: payload.messageId || `${Date.now()}`,
-        title: payload.title || "Nuevo mensaje",
-        subtitle: payload.subtitle || "NOSTUR",
-        body: payload.body || "Nuevo mensaje recibido",
-        conversationId: payload.conversationId,
-        messageId: payload.messageId,
-        appFocused: payload.appFocused,
-        createdAt: payload.createdAt
+        setInternalToast({
+          id:
+            payload.messageId ||
+            `${Date.now()}`,
+          title:
+            payload.title ||
+            "Nuevo mensaje",
+          subtitle:
+            payload.subtitle || "NOSTUR",
+          body:
+            payload.body ||
+            "Nuevo mensaje recibido",
+          conversationId:
+            payload.conversationId,
+          messageId: payload.messageId,
+          appFocused: payload.appFocused,
+          createdAt: payload.createdAt
+        });
       });
-    });
 
     return unsubscribe;
   }, []);
@@ -762,18 +1221,29 @@ export function GlobalWhatsappNotifications() {
   useEffect(() => {
     const bridge = getNosturBridge();
 
-    if (!bridge?.onOpenConversationFromNotification) return undefined;
+    if (
+      !bridge?.onOpenConversationFromNotification
+    ) {
+      return undefined;
+    }
 
-    const unsubscribe = bridge.onOpenConversationFromNotification((payload) => {
-      const conversationId = cleanText(
-        (payload as { conversationId?: string; conversation_id?: string })?.conversationId ||
-          (payload as { conversationId?: string; conversation_id?: string })?.conversation_id
+    const unsubscribe =
+      bridge.onOpenConversationFromNotification(
+        (payload) => {
+          const conversationId = cleanText(
+            payload?.conversationId ||
+              payload?.conversation_id
+          );
+
+          if (!conversationId) {
+            return;
+          }
+
+          openConversationFromToast(
+            conversationId
+          );
+        }
       );
-
-      if (!conversationId) return;
-
-      openConversationFromToast(conversationId);
-    });
 
     return unsubscribe;
   }, []);
@@ -781,14 +1251,20 @@ export function GlobalWhatsappNotifications() {
   useEffect(() => {
     let mounted = true;
     let pollingTimer: number | null = null;
-    const pollingStartedAt = new Date(Date.now() - 5000).toISOString();
 
-    async function handleIncomingMessage(message: IncomingMessagePayload) {
+    const pollingStartedAt = new Date(
+      Date.now() - 5000
+    ).toISOString();
+
+    async function handleIncomingMessage(
+      message: IncomingMessagePayload
+    ) {
       if (!mounted) return;
 
       logInfo("Evento mensaje", {
         id: message.id,
-        conversacion_id: message.conversacion_id,
+        conversacion_id:
+          message.conversacion_id,
         direction: message.direction,
         sender_kind: message.sender_kind,
         type: message.type,
@@ -809,46 +1285,92 @@ export function GlobalWhatsappNotifications() {
         return;
       }
 
-      if (processedMessagesRef.current.has(message.id)) {
-        logWarn("Ignorado: mensaje ya procesado", {
-          id: message.id
-        });
+      if (
+        processedMessagesRef.current.has(
+          message.id
+        )
+      ) {
+        logWarn(
+          "Ignorado: mensaje ya procesado",
+          {
+            id: message.id
+          }
+        );
 
         return;
       }
 
-      processedMessagesRef.current.add(message.id);
+      processedMessagesRef.current.add(
+        message.id
+      );
 
-      if (processedMessagesRef.current.size > 300) {
-        processedMessagesRef.current = new Set(
-          Array.from(processedMessagesRef.current).slice(-120)
-        );
+      if (
+        processedMessagesRef.current.size >
+        300
+      ) {
+        processedMessagesRef.current =
+          new Set(
+            Array.from(
+              processedMessagesRef.current
+            ).slice(-120)
+          );
       }
 
-      const conversationId = cleanText(message.conversacion_id);
+      const conversationId = cleanText(
+        message.conversacion_id
+      );
 
       if (!conversationId) {
-        logWarn("Ignorado: conversationId vacío", message);
+        logWarn(
+          "Ignorado: conversationId vacío",
+          message
+        );
+
         return;
       }
 
-      const { conversation, opportunity } = await loadNotificationContext(conversationId);
+      const {
+        conversation,
+        opportunity
+      } = await loadNotificationContext(
+        conversationId
+      );
+
+      const canReceive =
+        await userCanReceiveNotification(
+          conversation
+        );
+
+      if (!canReceive) {
+        return;
+      }
 
       const kind = classifyNotification({
         conversation,
         opportunity
       });
 
-      logInfo("Mensaje inbound válido. Disparo sonido y notificación", {
-        kind,
-        messageId: message.id,
-        conversationId,
-        passenger: getConversationName(conversation),
-        preview: getMessagePreview(message),
-        estado_gestion: conversation?.estado_gestion,
-        inbox: conversation?.inbox,
-        assigned_to: conversation?.assigned_to
-      });
+      logInfo(
+        "Mensaje inbound válido. Disparo sonido y notificación",
+        {
+          kind,
+          messageId: message.id,
+          conversationId,
+          passenger:
+            getConversationName(
+              conversation
+            ),
+          preview:
+            getMessagePreview(message),
+          estado_gestion:
+            conversation?.estado_gestion,
+          inbox: conversation?.inbox,
+          assigned_to:
+            conversation?.assigned_to,
+          tomada_by:
+            conversation?.tomada_by
+        }
+      );
 
       await playNotificationSound(kind);
 
@@ -858,288 +1380,552 @@ export function GlobalWhatsappNotifications() {
         message
       });
 
-      const passengerName = getConversationName(conversation);
-      const preview = getMessagePreview(message);
-      const title = getNotificationTitle(kind, passengerName);
-      const body = getNotificationBody(kind, preview);
+      const passengerName =
+        getConversationName(conversation);
+
+      const preview =
+        getMessagePreview(message);
+
+      const title = getNotificationTitle(
+        kind,
+        passengerName
+      );
+
+      const body = getNotificationBody(
+        kind,
+        preview
+      );
 
       fireVisibleNotification({
         title,
         body,
         conversationId,
         messageId: message.id,
-        createdAt: message.created_at || new Date().toISOString()
+        createdAt:
+          message.created_at ||
+          new Date().toISOString()
       });
 
       window.dispatchEvent(
-        new CustomEvent("nostur:global-whatsapp-message", {
-          detail: {
-            kind,
-            conversation_id: conversationId,
-            message_id: message.id
+        new CustomEvent(
+          "nostur:global-whatsapp-message",
+          {
+            detail: {
+              kind,
+              conversation_id:
+                conversationId,
+              message_id: message.id
+            }
           }
-        })
+        )
       );
     }
 
-    async function handleOpportunityChange(opportunity: OpportunityLite) {
+    async function handleOpportunityChange(
+      opportunity: OpportunityLite
+    ) {
       if (!mounted) return;
       if (!opportunity?.id) return;
-      if (!opportunity.cande_handoff_requested_at) return;
 
-      const previous = lastHandoffByOpportunityRef.current[opportunity.id];
+      if (
+        !opportunity.cande_handoff_requested_at
+      ) {
+        return;
+      }
 
-      if (previous === opportunity.cande_handoff_requested_at) return;
+      const previous =
+        lastHandoffByOpportunityRef.current[
+          opportunity.id
+        ];
 
-      lastHandoffByOpportunityRef.current[opportunity.id] = opportunity.cande_handoff_requested_at;
+      if (
+        previous ===
+        opportunity.cande_handoff_requested_at
+      ) {
+        return;
+      }
 
-      const handoffTime = new Date(opportunity.cande_handoff_requested_at).getTime();
+      lastHandoffByOpportunityRef.current[
+        opportunity.id
+      ] =
+        opportunity.cande_handoff_requested_at;
 
-      if (!Number.isFinite(handoffTime)) return;
-      if (Date.now() - handoffTime > 120_000) return;
+      const handoffTime = new Date(
+        opportunity.cande_handoff_requested_at
+      ).getTime();
 
-      const conversationId = cleanText(opportunity.conversacion_id);
+      if (!Number.isFinite(handoffTime)) {
+        return;
+      }
 
-      if (!conversationId) return;
+      if (
+        Date.now() - handoffTime >
+        120_000
+      ) {
+        return;
+      }
 
-      const { conversation } = await loadNotificationContext(conversationId);
+      const conversationId = cleanText(
+        opportunity.conversacion_id
+      );
 
-      logInfo("Handoff de CANDE detectado. Disparo sonido y notificación", {
-        opportunityId: opportunity.id,
-        conversationId,
-        cande_handoff_requested_at: opportunity.cande_handoff_requested_at
-      });
+      if (!conversationId) {
+        return;
+      }
 
-      await playNotificationSound("cande_transfer");
+      const { conversation } =
+        await loadNotificationContext(
+          conversationId
+        );
+
+      const canReceive =
+        await userCanReceiveNotification(
+          conversation
+        );
+
+      if (!canReceive) {
+        return;
+      }
+
+      logInfo(
+        "Handoff de CANDE detectado. Disparo sonido y notificación",
+        {
+          opportunityId:
+            opportunity.id,
+          conversationId,
+          cande_handoff_requested_at:
+            opportunity.cande_handoff_requested_at
+        }
+      );
+
+      await playNotificationSound(
+        "cande_transfer"
+      );
 
       await notifySystem({
         kind: "cande_transfer",
         conversation,
         message: {
           id: `handoff:${opportunity.id}:${opportunity.cande_handoff_requested_at}`,
-          conversacion_id: conversationId,
+          conversacion_id:
+            conversationId,
           direction: "in",
           sender_kind: "sistema",
           type: "system",
-          text: "CANDE derivó esta conversación al equipo.",
-          created_at: opportunity.cande_handoff_requested_at,
-          wa_timestamp: opportunity.cande_handoff_requested_at
+          text:
+            "CANDE derivó esta conversación al equipo.",
+          created_at:
+            opportunity.cande_handoff_requested_at,
+          wa_timestamp:
+            opportunity.cande_handoff_requested_at
         }
       });
 
       window.dispatchEvent(
-        new CustomEvent("nostur:cande-handoff", {
-          detail: {
-            conversation_id: conversationId,
-            oportunidad_id: opportunity.id
+        new CustomEvent(
+          "nostur:cande-handoff",
+          {
+            detail: {
+              conversation_id:
+                conversationId,
+              oportunidad_id:
+                opportunity.id
+            }
           }
-        })
+        )
       );
     }
 
+    async function handleInternalNote(
+      note: InternalNotePayload
+    ) {
+      if (!mounted) return;
 
-    async function handleInternalNote(note: InternalNotePayload) {
-  if (!mounted) return;
+      const tipo = cleanText(
+        note.tipo
+      ).toLowerCase();
 
-  const tipo = cleanText(note.tipo).toLowerCase();
+      if (tipo !== "mensaje_interno") {
+        return;
+      }
 
-  if (tipo !== "mensaje_interno") return;
+      if (
+        !note?.id ||
+        !note.conversacion_id
+      ) {
+        logWarn(
+          "Nota interna ignorada: faltan datos",
+          note
+        );
 
-  if (!note?.id || !note.conversacion_id) {
-    logWarn("Nota interna ignorada: faltan datos", note);
-    return;
-  }
+        return;
+      }
 
-  if (processedMessagesRef.current.has(`internal:${note.id}`)) {
-    logWarn("Ignorado: mensaje interno ya procesado", {
-      id: note.id
-    });
+      const processedKey =
+        `internal:${note.id}`;
 
-    return;
-  }
+      if (
+        processedMessagesRef.current.has(
+          processedKey
+        )
+      ) {
+        logWarn(
+          "Ignorado: mensaje interno ya procesado",
+          {
+            id: note.id
+          }
+        );
 
-  processedMessagesRef.current.add(`internal:${note.id}`);
+        return;
+      }
 
-  if (processedMessagesRef.current.size > 300) {
-    processedMessagesRef.current = new Set(
-      Array.from(processedMessagesRef.current).slice(-120)
-    );
-  }
+      processedMessagesRef.current.add(
+        processedKey
+      );
 
-  const { data: authData } = await supabase.auth.getUser();
-  const currentUserId = authData.user?.id || null;
+      if (
+        processedMessagesRef.current.size >
+        300
+      ) {
+        processedMessagesRef.current =
+          new Set(
+            Array.from(
+              processedMessagesRef.current
+            ).slice(-120)
+          );
+      }
 
-  if (currentUserId && note.autor_id === currentUserId) {
-    logInfo("Mensaje interno propio ignorado", {
-      id: note.id,
-      autor_id: note.autor_id
-    });
+      await loadNotificationIdentity();
 
-    return;
-  }
+      const currentUserId =
+        currentUserIdRef.current;
 
-  const conversationId = cleanText(note.conversacion_id);
+      if (
+        currentUserId &&
+        note.autor_id === currentUserId
+      ) {
+        logInfo(
+          "Mensaje interno propio ignorado",
+          {
+            id: note.id,
+            autor_id: note.autor_id
+          }
+        );
 
-  const { conversation } = await loadNotificationContext(conversationId);
+        return;
+      }
 
-  let authorName = "Un usuario";
+      const conversationId = cleanText(
+        note.conversacion_id
+      );
 
-  if (note.autor_id) {
-    const { data: authorProfile } = await supabase
-      .from("profiles")
-      .select("nombre,apellido,email")
-      .eq("id", note.autor_id)
-      .maybeSingle();
+      const { conversation } =
+        await loadNotificationContext(
+          conversationId
+        );
 
-    if (authorProfile) {
-      authorName =
-        `${authorProfile.nombre || ""} ${authorProfile.apellido || ""}`.trim() ||
-        authorProfile.email ||
-        "Un usuario";
-    }
-  }
+      const canReceive =
+        await userCanReceiveNotification(
+          conversation
+        );
 
-  const passengerName = getConversationName(conversation);
-  const preview = truncateText(cleanText(note.contenido) || "Nuevo mensaje interno");
+      if (!canReceive) {
+        return;
+      }
 
-  const title = `Mensaje interno · ${passengerName}`;
-  const body = `${authorName}: ${preview}`;
+      let authorName = "Un usuario";
 
-  logInfo("Mensaje interno válido. Disparo sonido y notificación", {
-    noteId: note.id,
-    conversationId,
-    passengerName,
-    authorName,
-    preview
-  });
+      if (note.autor_id) {
+        const {
+          data: authorProfile,
+          error: authorError
+        } = await supabase
+          .from("profiles")
+          .select(
+            "nombre,apellido,email"
+          )
+          .eq("id", note.autor_id)
+          .maybeSingle();
 
-  await playNotificationSound("internal");
+        if (authorError) {
+          logWarn(
+            "No se pudo cargar autor del mensaje interno",
+            {
+              authorId: note.autor_id,
+              error: authorError.message
+            }
+          );
+        }
 
-  const bridge = getNosturBridge();
+        if (authorProfile) {
+          authorName =
+            `${authorProfile.nombre || ""} ${
+              authorProfile.apellido || ""
+            }`.trim() ||
+            authorProfile.email ||
+            "Un usuario";
+        }
+      }
 
-  try {
-    if (bridge?.notify) {
-      await bridge.notify({
+      const passengerName =
+        getConversationName(conversation);
+
+      const preview = truncateText(
+        cleanText(note.contenido) ||
+          "Nuevo mensaje interno"
+      );
+
+      const title =
+        `Mensaje interno · ${passengerName}`;
+
+      const body =
+        `${authorName}: ${preview}`;
+
+      logInfo(
+        "Mensaje interno válido. Disparo sonido y notificación",
+        {
+          noteId: note.id,
+          conversationId,
+          passengerName,
+          authorName,
+          preview
+        }
+      );
+
+      await playNotificationSound(
+        "internal"
+      );
+
+      const bridge =
+        getNosturBridge();
+
+      try {
+        if (bridge?.notify) {
+          await bridge.notify({
+            title,
+            subtitle: "LiveNos",
+            body,
+            conversationId,
+            messageId: note.id
+          });
+        }
+      } catch (error) {
+        logWarn(
+          "Error solicitando notificación interna a Electron",
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : String(error)
+          }
+        );
+      }
+
+      fireVisibleNotification({
         title,
         body,
         conversationId,
-        messageId: note.id
+        messageId: note.id,
+        createdAt:
+          note.created_at ||
+          new Date().toISOString()
       });
+
+      window.dispatchEvent(
+        new CustomEvent(
+          "nostur:global-internal-message",
+          {
+            detail: {
+              kind: "internal",
+              conversation_id:
+                conversationId,
+              note_id: note.id
+            }
+          }
+        )
+      );
     }
-  } catch (error) {
-    logWarn("Error solicitando notificación interna a Electron", {
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
-
-  fireVisibleNotification({
-    title,
-    body,
-    conversationId,
-    messageId: note.id,
-    createdAt: note.created_at || new Date().toISOString()
-  });
-
-  window.dispatchEvent(
-    new CustomEvent("nostur:global-internal-message", {
-      detail: {
-        kind: "internal",
-        conversation_id: conversationId,
-        note_id: note.id
-      }
-    })
-  );
-}
-
 
     async function pollRecentInboundMessages() {
       if (!mounted) return;
 
       try {
-        const { data, error } = await supabase
+        const {
+          data,
+          error
+        } = await supabase
           .from("mensajes")
-          .select("id,conversacion_id,direction,sender_kind,type,text,created_at,wa_timestamp")
+          .select(
+            [
+              "id",
+              "conversacion_id",
+              "direction",
+              "sender_kind",
+              "type",
+              "text",
+              "created_at",
+              "wa_timestamp"
+            ].join(",")
+          )
           .eq("direction", "in")
-          .gte("created_at", pollingStartedAt)
-          .order("created_at", { ascending: true })
+          .gte(
+            "created_at",
+            pollingStartedAt
+          )
+          .order("created_at", {
+            ascending: true
+          })
           .limit(25);
 
         if (error) {
-          logWarn("Polling mensajes falló", error.message);
+          logWarn(
+            "Polling mensajes falló",
+            error.message
+          );
+
           return;
         }
 
-        const messages = (data || []) as IncomingMessagePayload[];
+        const messages =
+          (data || []) as unknown as IncomingMessagePayload[];
 
         if (messages.length > 0) {
-          logInfo("Polling detectó mensajes inbound recientes", {
-            count: messages.length,
-            ids: messages.map((message) => message.id)
-          });
+          logInfo(
+            "Polling detectó mensajes inbound recientes",
+            {
+              count: messages.length,
+              ids: messages.map(
+                (message) => message.id
+              )
+            }
+          );
         }
 
         for (const message of messages) {
           if (!mounted) return;
-          if (processedMessagesRef.current.has(message.id)) continue;
 
-          await handleIncomingMessage(message);
+          if (
+            processedMessagesRef.current.has(
+              message.id
+            )
+          ) {
+            continue;
+          }
+
+          await handleIncomingMessage(
+            message
+          );
         }
       } catch (error) {
-        logWarn("Polling mensajes lanzó excepción", {
-          error: error instanceof Error ? error.message : String(error)
-        });
+        logWarn(
+          "Polling mensajes lanzó excepción",
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : String(error)
+          }
+        );
       }
     }
 
-     async function pollRecentInternalNotes() {
+    async function pollRecentInternalNotes() {
       if (!mounted) return;
 
       try {
-        const { data, error } = await supabase
+        const {
+          data,
+          error
+        } = await supabase
           .from("notas_conversacion")
-          .select("id,conversacion_id,autor_id,contenido,tipo,created_at")
-          .eq("tipo", "mensaje_interno")
-          .gte("created_at", pollingStartedAt)
-          .order("created_at", { ascending: true })
+          .select(
+            [
+              "id",
+              "conversacion_id",
+              "autor_id",
+              "contenido",
+              "tipo",
+              "created_at"
+            ].join(",")
+          )
+          .eq(
+            "tipo",
+            "mensaje_interno"
+          )
+          .gte(
+            "created_at",
+            pollingStartedAt
+          )
+          .order("created_at", {
+            ascending: true
+          })
           .limit(25);
 
         if (error) {
-          logWarn("Polling mensajes internos falló", error.message);
+          logWarn(
+            "Polling mensajes internos falló",
+            error.message
+          );
+
           return;
         }
 
-        const notes = (data || []) as InternalNotePayload[];
+        const notes =
+          (data || []) as unknown as InternalNotePayload[];
 
         if (notes.length > 0) {
-          logInfo("Polling detectó mensajes internos recientes", {
-            count: notes.length,
-            ids: notes.map((note) => note.id)
-          });
+          logInfo(
+            "Polling detectó mensajes internos recientes",
+            {
+              count: notes.length,
+              ids: notes.map(
+                (note) => note.id
+              )
+            }
+          );
         }
 
         for (const note of notes) {
           if (!mounted) return;
-          if (processedMessagesRef.current.has(`internal:${note.id}`)) continue;
+
+          if (
+            processedMessagesRef.current.has(
+              `internal:${note.id}`
+            )
+          ) {
+            continue;
+          }
 
           await handleInternalNote(note);
         }
       } catch (error) {
-        logWarn("Polling mensajes internos lanzó excepción", {
-          error: error instanceof Error ? error.message : String(error)
-        });
+        logWarn(
+          "Polling mensajes internos lanzó excepción",
+          {
+            error:
+              error instanceof Error
+                ? error.message
+                : String(error)
+          }
+        );
       }
     }
 
-    pollingTimer = window.setInterval(() => {
-      void pollRecentInboundMessages();
-      void pollRecentInternalNotes();
-    }, 6000);
+    pollingTimer = window.setInterval(
+      () => {
+        void pollRecentInboundMessages();
+        void pollRecentInternalNotes();
+      },
+      6000
+    );
 
     void pollRecentInboundMessages();
     void pollRecentInternalNotes();
 
-      const channel = supabase
-      .channel(`global-whatsapp-notifications-${Date.now()}`)
+    const channel = supabase
+      .channel(
+        `global-whatsapp-notifications-${Date.now()}`
+      )
       .on(
         "postgres_changes",
         {
@@ -1148,7 +1934,9 @@ export function GlobalWhatsappNotifications() {
           table: "mensajes"
         },
         (payload) => {
-          void handleIncomingMessage(payload.new as IncomingMessagePayload);
+          void handleIncomingMessage(
+            payload.new as IncomingMessagePayload
+          );
         }
       )
       .on(
@@ -1159,7 +1947,9 @@ export function GlobalWhatsappNotifications() {
           table: "notas_conversacion"
         },
         (payload) => {
-          void handleInternalNote(payload.new as InternalNotePayload);
+          void handleInternalNote(
+            payload.new as InternalNotePayload
+          );
         }
       )
       .on(
@@ -1170,32 +1960,39 @@ export function GlobalWhatsappNotifications() {
           table: "lead_oportunidades"
         },
         (payload) => {
-          void handleOpportunityChange(payload.new as OpportunityLite);
+          void handleOpportunityChange(
+            payload.new as OpportunityLite
+          );
         }
       )
       .subscribe((status) => {
-        logInfo(`Realtime status: ${status}`);
+        logInfo(
+          `Realtime status: ${status}`
+        );
       });
 
     return () => {
       mounted = false;
 
       if (pollingTimer) {
-        window.clearInterval(pollingTimer);
+        window.clearInterval(
+          pollingTimer
+        );
       }
 
-      supabase.removeChannel(channel);
+      void supabase.removeChannel(
+        channel
+      );
     };
   }, []);
 
-
   return (
-    <>
-      <InternalNotificationToast
-        toast={internalToast}
-        onClose={() => setInternalToast(null)}
-      />
-    </>
+    <InternalNotificationToast
+      toast={internalToast}
+      onClose={() =>
+        setInternalToast(null)
+      }
+    />
   );
 }
 
